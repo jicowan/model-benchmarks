@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: loadgen
+    accelbench/role: loadgen
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: loadgen
+        accelbench/role: loadgen
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: accelbench/node-type
+                    operator: In
+                    values:
+                      - system
+      containers:
+        - name: loadgen
+          image: ghcr.io/accelbench/loadgen:latest
+          env:
+            - name: TARGET_URL
+              value: "http://{{ .TargetHost }}:{{ .TargetPort }}/v1/completions"
+            - name: MODEL_ID
+              value: "{{ .ModelHfID }}"
+            - name: CONCURRENCY
+              value: "{{ .Concurrency }}"
+            - name: INPUT_SEQ_LEN
+              value: "{{ .InputSequenceLength }}"
+            - name: OUTPUT_SEQ_LEN
+              value: "{{ .OutputSequenceLength }}"
+            - name: DATASET
+              value: "{{ .DatasetName }}"
+            - name: NUM_REQUESTS
+              value: "{{ .NumRequests }}"
+            - name: WARMUP_REQUESTS
+              value: "{{ .WarmupRequests }}"
+            - name: METRICS_ENDPOINT
+              value: "http://{{ .TargetHost }}:9400/metrics"
+            - name: OUTPUT_FORMAT
+              value: "json"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"

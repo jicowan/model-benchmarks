@@ -1,0 +1,37 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "accelbench.fullname" . }}-migrate
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.migration.repository }}:{{ .Values.image.migration.tag }}"
+          imagePullPolicy: {{ .Values.image.migration.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "accelbench.dbSecretName" . }}
+                  key: {{ .Values.database.existingSecretKey | default "DATABASE_URL" }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+      nodeSelector:
+        accelbench/node-type: system
+{{- end }}

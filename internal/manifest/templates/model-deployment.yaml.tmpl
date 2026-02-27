@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+    accelbench/role: model
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: model-server
+        accelbench/role: model
+    spec:
+      terminationGracePeriodSeconds: 30
+      tolerations:
+{{- if eq .AcceleratorType "gpu" }}
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+{{- else }}
+        - key: aws.amazon.com/neuron
+          operator: Exists
+          effect: NoSchedule
+{{- end }}
+      nodeSelector:
+        karpenter.k8s.aws/instance-family: {{ .InstanceFamily }}
+      containers:
+        - name: vllm
+{{- if eq .AcceleratorType "gpu" }}
+          image: vllm/vllm-openai:{{ .FrameworkVersion }}
+{{- else }}
+          image: vllm/vllm-neuron:{{ .FrameworkVersion }}
+{{- end }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: HF_TOKEN
+              value: "{{ .HfToken }}"
+          args:
+            - "--model"
+            - "{{ .ModelHfID }}"
+            - "--port"
+            - "8000"
+            - "--tensor-parallel-size"
+            - "{{ .TensorParallelDegree }}"
+{{- if .Quantization }}
+            - "--dtype"
+            - "{{ .Quantization }}"
+{{- end }}
+            - "--max-model-len"
+            - "4096"
+          resources:
+            requests:
+              cpu: {{ .CPURequest }}
+              memory: {{ .MemoryRequest }}
+{{- if eq .AcceleratorType "gpu" }}
+              nvidia.com/gpu: "{{ .AcceleratorCount }}"
+            limits:
+              nvidia.com/gpu: "{{ .AcceleratorCount }}"
+{{- else }}
+              aws.amazon.com/neuron: "{{ .AcceleratorCount }}"
+            limits:
+              aws.amazon.com/neuron: "{{ .AcceleratorCount }}"
+{{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+{{- if eq .AcceleratorType "gpu" }}
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.8-3.6.0-ubuntu22.04
+          ports:
+            - name: metrics
+              containerPort: 9400
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+{{- else }}
+        - name: neuron-monitor
+          image: public.ecr.aws/neuron/neuron-monitor:latest
+          ports:
+            - name: metrics
+              containerPort: 8000
+              protocol: TCP
+          command: ["neuron_monitor"]
+          args: ["-p", "8000"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: 9400
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ .Name }}

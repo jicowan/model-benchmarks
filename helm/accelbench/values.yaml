@@ -1,0 +1,131 @@
+# -- Global settings
+namespace: accelbench
+
+# -- Container images
+image:
+  api:
+    repository: ghcr.io/accelbench/api
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  web:
+    repository: ghcr.io/accelbench/web
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  tools:
+    repository: ghcr.io/accelbench/tools
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  migration:
+    repository: ghcr.io/accelbench/migration
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -- API server
+api:
+  replicaCount: 2
+  port: 8080
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector:
+    accelbench/node-type: system
+  tolerations: []
+  # -- Service account for API (IRSA)
+  serviceAccount:
+    create: true
+    name: accelbench-api
+    annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/accelbench-api
+
+# -- RBAC: the API server needs permissions to manage benchmark workloads
+rbac:
+  create: true
+
+# -- Web frontend (nginx)
+web:
+  replicaCount: 2
+  port: 80
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  nodeSelector:
+    accelbench/node-type: system
+  tolerations: []
+
+# -- Ingress
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+  host: ""  # Set to your domain, e.g. accelbench.example.com
+  tls: []
+
+# -- Database (Aurora PostgreSQL)
+database:
+  # -- Connection string. Typically constructed from Terraform outputs.
+  # Format: postgres://user:password@host:port/dbname?sslmode=require
+  url: ""
+  # -- Alternatively reference an existing Kubernetes secret
+  existingSecret: ""
+  existingSecretKey: "DATABASE_URL"
+  # -- Aurora cluster endpoint from Terraform output
+  host: ""
+  port: 5432
+  name: accelbench
+  username: accelbench
+  sslmode: require
+
+# -- Database migration job
+migration:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# -- Pricing refresh CronJob
+pricingRefresh:
+  enabled: true
+  schedule: "0 3 * * *"  # Daily at 03:00 UTC
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# -- Catalog refresh CronJob
+catalogRefresh:
+  enabled: true
+  schedule: "0 2 * * 0"  # Weekly, Sunday at 02:00 UTC
+  resources:
+    requests:
+      cpu: 500m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# -- HuggingFace token (optional, for gated model access)
+huggingface:
+  token: ""
+  existingSecret: ""
+  existingSecretKey: "HF_TOKEN"

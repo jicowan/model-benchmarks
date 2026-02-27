@@ -1,0 +1,7 @@
+FROM alpine:3.20
+RUN apk add --no-cache postgresql16-client
+WORKDIR /migrations
+COPY db/migrations/ .
+COPY docker/migrate.sh /migrate.sh
+RUN chmod +x /migrate.sh
+ENTRYPOINT ["/migrate.sh"]
