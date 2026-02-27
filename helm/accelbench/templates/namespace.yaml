@@ -4,3 +4,6 @@ metadata:
   name: {{ .Values.namespace }}
   labels:
     {{- include "accelbench.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-20"

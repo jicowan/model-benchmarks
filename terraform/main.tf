@@ -84,3 +84,25 @@ module "aurora" {
 
   tags = local.tags
 }
+
+# ---------- ECR Repositories ----------
+resource "aws_ecr_repository" "api" {
+  name                 = "${var.project_name}-api"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  tags                 = local.tags
+}
+
+resource "aws_ecr_repository" "web" {
+  name                 = "${var.project_name}-web"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  tags                 = local.tags
+}
+
+resource "aws_ecr_repository" "migration" {
+  name                 = "${var.project_name}-migration"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  tags                 = local.tags
+}

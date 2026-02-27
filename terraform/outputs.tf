@@ -27,3 +27,18 @@ output "aurora_master_user_secret" {
   description = "The Secrets Manager secret containing Aurora master credentials"
   value       = module.aurora.cluster_master_user_secret
 }
+
+output "ecr_api_url" {
+  description = "ECR repository URL for the API image"
+  value       = aws_ecr_repository.api.repository_url
+}
+
+output "ecr_web_url" {
+  description = "ECR repository URL for the web image"
+  value       = aws_ecr_repository.web.repository_url
+}
+
+output "ecr_migration_url" {
+  description = "ECR repository URL for the migration image"
+  value       = aws_ecr_repository.migration.repository_url
+}
