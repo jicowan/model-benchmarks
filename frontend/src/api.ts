@@ -7,6 +7,7 @@ import type {
   RunListItem,
   RunListFilter,
   PricingRow,
+  RecommendResponse,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -15,7 +16,14 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    let message = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.error) message = parsed.error;
+    } catch {
+      // body is not JSON, use as-is
+    }
+    throw new Error(message);
   }
   return res.json();
 }
@@ -75,6 +83,17 @@ export async function listPricing(region?: string): Promise<PricingRow[]> {
   if (region) params.set("region", region);
   const qs = params.toString();
   return fetchJSON<PricingRow[]>(`${BASE}/pricing${qs ? `?${qs}` : ""}`);
+}
+
+export async function getRecommendation(
+  model: string,
+  instanceType: string,
+  hfToken?: string
+): Promise<RecommendResponse> {
+  const params = new URLSearchParams({ model, instance_type: instanceType });
+  const headers: Record<string, string> = {};
+  if (hfToken) headers["X-HF-Token"] = hfToken;
+  return fetchJSON<RecommendResponse>(`${BASE}/recommend?${params}`, { headers });
 }
 
 export async function cancelRun(id: string): Promise<void> {

@@ -121,6 +121,52 @@ export interface PricingRow {
   effective_date: string;
 }
 
+export interface RecommendExplanation {
+  tensor_parallel_degree: string;
+  quantization: string;
+  max_model_len: string;
+  concurrency: string;
+  feasible: boolean;
+  reason?: string;
+  suggested_instance?: string;
+}
+
+export interface RecommendModelInfo {
+  parameter_count: number;
+  native_dtype: string;
+  max_position_embeddings: number;
+  architecture: string;
+}
+
+export interface RecommendInstanceInfo {
+  accelerator_count: number;
+  accelerator_memory_gib: number;
+  accelerator_name: string;
+}
+
+export interface QuantizationOption {
+  quantization: string;
+  estimated_mem_gib: number;
+}
+
+export interface RecommendAlternatives {
+  quantization_option?: QuantizationOption;
+  larger_instance?: string;
+}
+
+export interface RecommendResponse {
+  tensor_parallel_degree: number;
+  quantization?: string | null;
+  max_model_len: number;
+  concurrency: number;
+  input_sequence_length: number;
+  output_sequence_length: number;
+  explanation: RecommendExplanation;
+  model_info: RecommendModelInfo;
+  instance_info: RecommendInstanceInfo;
+  alternatives?: RecommendAlternatives;
+}
+
 export interface CatalogFilter {
   model?: string;
   model_family?: string;

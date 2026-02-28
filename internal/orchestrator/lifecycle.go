@@ -126,9 +126,16 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	}
 
 	// Phase 6: Parse metrics and persist.
-	log.Printf("[%s] parsing metrics and persisting", cfg.RunID[:8])
+	log.Printf("[%s] collected %d bytes of loadgen output", cfg.RunID[:8], len(logData))
 	output, err := metrics.ParseLoadgenOutput(logData)
 	if err != nil {
+		// Log a snippet of the raw data for debugging.
+		snippet := logData
+		if len(snippet) > 500 {
+			snippet = append(logData[:250], []byte("\n...[truncated]...\n")...)
+			snippet = append(snippet, logData[len(logData)-250:]...)
+		}
+		log.Printf("[%s] parse failed: %v\nlog snippet:\n%s", cfg.RunID[:8], err, snippet)
 		o.markFailed(ctx, cfg.RunID)
 		return fmt.Errorf("parse loadgen output: %w", err)
 	}
@@ -138,6 +145,10 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {
 		o.markFailed(ctx, cfg.RunID)
 		return fmt.Errorf("persist metrics: %w", err)
+	}
+
+	if err := o.repo.UpdateRunStatus(ctx, cfg.RunID, "completed"); err != nil {
+		return fmt.Errorf("update status to completed: %w", err)
 	}
 
 	log.Printf("[%s] benchmark completed successfully", cfg.RunID[:8])
@@ -164,6 +175,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		AcceleratorType:      cfg.InstanceType.AcceleratorType,
 		AcceleratorCount:     cfg.InstanceType.AcceleratorCount,
 		AcceleratorMemoryGiB: cfg.InstanceType.AcceleratorMemoryGiB,
+		InstanceTypeName:     cfg.InstanceType.Name,
 		InstanceFamily:       cfg.InstanceType.Family,
 		MaxModelLen:          cfg.Request.MaxModelLen,
 		CPURequest:           cpuReq,

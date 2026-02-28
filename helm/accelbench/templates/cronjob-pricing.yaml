@@ -34,6 +34,8 @@ spec:
                     secretKeyRef:
                       name: {{ include "accelbench.dbSecretName" . }}
                       key: {{ .Values.database.existingSecretKey | default "DATABASE_URL" }}
+                - name: PRICING_REGIONS
+                  value: {{ .Values.pricingRefresh.regions | default "us-east-2" | quote }}
               resources:
                 {{- toYaml .Values.pricingRefresh.resources | nindent 16 }}
           nodeSelector:

@@ -31,7 +31,7 @@ spec:
           effect: NoSchedule
 {{- end }}
       nodeSelector:
-        karpenter.k8s.aws/instance-family: {{ .InstanceFamily }}
+        node.kubernetes.io/instance-type: {{ .InstanceTypeName }}
       containers:
         - name: vllm
 {{- if eq .AcceleratorType "gpu" }}
@@ -53,12 +53,22 @@ spec:
             - "8000"
             - "--tensor-parallel-size"
             - "{{ .TensorParallelDegree }}"
-{{- if .Quantization }}
+{{- if eq .Quantization "fp16" }}
             - "--dtype"
-            - "{{ .Quantization }}"
+            - "float16"
+{{- else if eq .Quantization "int8" }}
+            - "--quantization"
+            - "bitsandbytes"
+            - "--load-format"
+            - "bitsandbytes"
+{{- else if eq .Quantization "int4" }}
+            - "--quantization"
+            - "gptq"
 {{- end }}
+{{- if gt .MaxModelLen 0 }}
             - "--max-model-len"
-            - "4096"
+            - "{{ .MaxModelLen }}"
+{{- end }}
           resources:
             requests:
               cpu: {{ .CPURequest }}
@@ -88,37 +98,6 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 5
-{{- if eq .AcceleratorType "gpu" }}
-        - name: dcgm-exporter
-          image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.8-3.6.0-ubuntu22.04
-          ports:
-            - name: metrics
-              containerPort: 9400
-              protocol: TCP
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "200m"
-              memory: "256Mi"
-{{- else }}
-        - name: neuron-monitor
-          image: public.ecr.aws/neuron/neuron-monitor:latest
-          ports:
-            - name: metrics
-              containerPort: 8000
-              protocol: TCP
-          command: ["neuron_monitor"]
-          args: ["-p", "8000"]
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "200m"
-              memory: "256Mi"
-{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -134,10 +113,6 @@ spec:
     - name: http
       port: 8000
       targetPort: http
-      protocol: TCP
-    - name: metrics
-      port: 9400
-      targetPort: metrics
       protocol: TCP
   selector:
     app.kubernetes.io/name: {{ .Name }}

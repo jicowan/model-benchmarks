@@ -48,7 +48,7 @@ func seedCatalogRepo() *MockRepo {
 		repo.PersistMetrics(ctx, id, &BenchmarkMetrics{TTFTP50Ms: &ttft})
 	}
 
-	// Also add an on_demand run (should NOT appear in catalog).
+	// Also add an on_demand run (now included in catalog).
 	odRun := &BenchmarkRun{
 		ModelID: "m1", InstanceTypeID: "i1",
 		Framework: "vllm", FrameworkVersion: "v0.6.0",
@@ -68,9 +68,9 @@ func TestListCatalog_AllEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}
-	// 4 catalog runs, not 5 (on_demand excluded).
-	if len(entries) != 4 {
-		t.Errorf("got %d entries, want 4", len(entries))
+	// 5 completed runs (4 catalog + 1 on_demand).
+	if len(entries) != 5 {
+		t.Errorf("got %d entries, want 5", len(entries))
 	}
 }
 
@@ -82,8 +82,9 @@ func TestListCatalog_FilterByModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}
-	if len(entries) != 2 {
-		t.Errorf("got %d entries, want 2 (g5 + inf2)", len(entries))
+	// 8B on g5 (catalog) + 8B on inf2 (catalog) + 8B on g5 (on_demand) = 3
+	if len(entries) != 3 {
+		t.Errorf("got %d entries, want 3 (g5 catalog + inf2 + g5 on_demand)", len(entries))
 	}
 	for _, e := range entries {
 		if e.ModelHfID != "meta-llama/Llama-3.1-8B" {
@@ -146,9 +147,9 @@ func TestListCatalog_CombinedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}
-	// llama models on GPU: 8B on g5 + 70B on p5 = 2
-	if len(entries) != 2 {
-		t.Errorf("got %d entries, want 2", len(entries))
+	// llama models on GPU: 8B on g5 (catalog) + 70B on p5 + 8B on g5 (on_demand) = 3
+	if len(entries) != 3 {
+		t.Errorf("got %d entries, want 3", len(entries))
 	}
 }
 

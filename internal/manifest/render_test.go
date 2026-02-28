@@ -18,6 +18,7 @@ func TestRenderModelDeployment_GPU(t *testing.T) {
 		AcceleratorType:      "gpu",
 		AcceleratorCount:     8,
 		AcceleratorMemoryGiB: 640,
+		InstanceTypeName:     "p5.48xlarge",
 		InstanceFamily:       "p5",
 		CPURequest:           "8",
 		MemoryRequest:        "32Gi",
@@ -39,8 +40,8 @@ func TestRenderModelDeployment_GPU(t *testing.T) {
 		{"gpu toleration", "nvidia.com/gpu"},
 		{"gpu resource request", `nvidia.com/gpu: "8"`},
 		{"tensor parallel", `"8"`},
-		{"quantization dtype", `"fp16"`},
-		{"node selector family", "karpenter.k8s.aws/instance-family: p5"},
+		{"quantization dtype", `"float16"`},
+		{"node selector instance type", "node.kubernetes.io/instance-type: p5.48xlarge"},
 		{"dcgm sidecar", "dcgm-exporter"},
 		{"hf token", "hf_test_token"},
 		{"Service kind", "kind: Service"},
@@ -74,6 +75,7 @@ func TestRenderModelDeployment_Neuron(t *testing.T) {
 		AcceleratorType:      "neuron",
 		AcceleratorCount:     2,
 		AcceleratorMemoryGiB: 32,
+		InstanceTypeName:     "inf2.xlarge",
 		InstanceFamily:       "inf2",
 		CPURequest:           "4",
 		MemoryRequest:        "16Gi",
@@ -92,7 +94,7 @@ func TestRenderModelDeployment_Neuron(t *testing.T) {
 		{"neuron toleration", "aws.amazon.com/neuron"},
 		{"neuron resource", `aws.amazon.com/neuron: "2"`},
 		{"neuron monitor sidecar", "neuron-monitor"},
-		{"instance family", "karpenter.k8s.aws/instance-family: inf2"},
+		{"instance type", "node.kubernetes.io/instance-type: inf2.xlarge"},
 	}
 
 	for _, c := range checks {
@@ -121,6 +123,7 @@ func TestRenderModelDeployment_NoQuantization(t *testing.T) {
 		Quantization:         "",
 		AcceleratorType:      "gpu",
 		AcceleratorCount:     1,
+		InstanceTypeName:     "g5.xlarge",
 		InstanceFamily:       "g5",
 		CPURequest:           "4",
 		MemoryRequest:        "16Gi",
@@ -133,6 +136,9 @@ func TestRenderModelDeployment_NoQuantization(t *testing.T) {
 
 	if strings.Contains(out, "--dtype") {
 		t.Error("output should not contain --dtype when quantization is empty")
+	}
+	if strings.Contains(out, "--quantization") {
+		t.Error("output should not contain --quantization when quantization is empty")
 	}
 }
 
@@ -193,6 +199,7 @@ func TestRenderModelDeployment_MultiDocument(t *testing.T) {
 		TensorParallelDegree: 1,
 		AcceleratorType:      "gpu",
 		AcceleratorCount:     1,
+		InstanceTypeName:     "g5.xlarge",
 		InstanceFamily:       "g5",
 		CPURequest:           "4",
 		MemoryRequest:        "16Gi",

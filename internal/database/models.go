@@ -96,5 +96,6 @@ type RunRequest struct {
 	OutputSequenceLength int     `json:"output_sequence_length"`
 	DatasetName          string  `json:"dataset_name"`
 	RunType              string  `json:"run_type"`
+	MaxModelLen          int     `json:"max_model_len,omitempty"`
 	HfToken              string  `json:"hf_token,omitempty"`
 }

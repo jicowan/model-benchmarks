@@ -35,7 +35,9 @@ type ModelDeploymentParams struct {
 	AcceleratorType      string // "gpu" or "neuron"
 	AcceleratorCount     int
 	AcceleratorMemoryGiB int
+	InstanceTypeName     string // e.g. "g5.48xlarge", "inf2.xlarge"
 	InstanceFamily       string // e.g. "p5", "inf2"
+	MaxModelLen          int    // 0 = auto-detect from model config
 	CPURequest           string
 	MemoryRequest        string
 }
@@ -44,6 +46,7 @@ type ModelDeploymentParams struct {
 type LoadgenJobParams struct {
 	Name                 string
 	Namespace            string
+	LoadgenImage         string // full image URI
 	TargetHost           string // model service name
 	TargetPort           int
 	ModelHfID            string

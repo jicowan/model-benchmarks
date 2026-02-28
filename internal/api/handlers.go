@@ -6,27 +6,32 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
+	"github.com/accelbench/accelbench/internal/recommend"
 
 	"k8s.io/client-go/kubernetes"
 )
 
 // Server holds dependencies for API handlers.
 type Server struct {
-	repo   database.Repo
-	orch   *orchestrator.Orchestrator
-	client kubernetes.Interface
+	repo     database.Repo
+	orch     *orchestrator.Orchestrator
+	client   kubernetes.Interface
+	hfClient *recommend.HFClient
 }
 
 // NewServer creates a new API server.
 func NewServer(repo database.Repo, client kubernetes.Interface) *Server {
 	return &Server{
-		repo:   repo,
-		orch:   orchestrator.New(client, repo),
-		client: client,
+		repo:     repo,
+		orch:     orchestrator.New(client, repo),
+		client:   client,
+		hfClient: recommend.NewHFClient(),
 	}
 }
 
@@ -40,6 +45,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
 	mux.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
 	mux.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
+	mux.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -251,6 +257,79 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
+	modelID := r.URL.Query().Get("model")
+	instanceName := r.URL.Query().Get("instance_type")
+	if modelID == "" || instanceName == "" {
+		writeError(w, http.StatusBadRequest, "model and instance_type query parameters are required")
+		return
+	}
+
+	hfToken := r.Header.Get("X-HF-Token")
+
+	// Look up instance type from DB.
+	instType, err := s.repo.GetInstanceTypeByName(r.Context(), instanceName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "instance type lookup failed")
+		return
+	}
+	if instType == nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("instance type %s not found", instanceName))
+		return
+	}
+
+	// Check if Neuron instance.
+	if !strings.EqualFold(instType.AcceleratorType, "gpu") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"explanation": map[string]any{
+				"feasible": false,
+				"reason":   "Configuration suggestions are not yet available for Neuron instances.",
+			},
+		})
+		return
+	}
+
+	// Fetch model config from HuggingFace.
+	modelCfg, err := s.hfClient.FetchModelConfig(modelID, hfToken)
+	if err != nil {
+		var hfErr *recommend.HFError
+		if errors.As(err, &hfErr) {
+			writeError(w, hfErr.StatusCode, hfErr.Message)
+			return
+		}
+		writeError(w, http.StatusBadGateway, "failed to fetch model metadata from HuggingFace")
+		return
+	}
+
+	// Get all GPU instances for suggesting alternatives.
+	allInstTypes, err := s.repo.ListInstanceTypes(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list instance types failed")
+		return
+	}
+	var allSpecs []recommend.InstanceSpec
+	for _, it := range allInstTypes {
+		allSpecs = append(allSpecs, recommend.InstanceSpec{
+			Name:                 it.Name,
+			AcceleratorType:      it.AcceleratorType,
+			AcceleratorName:      it.AcceleratorName,
+			AcceleratorCount:     it.AcceleratorCount,
+			AcceleratorMemoryGiB: it.AcceleratorMemoryGiB,
+		})
+	}
+
+	inst := recommend.InstanceSpec{
+		Name:                 instType.Name,
+		AcceleratorType:      instType.AcceleratorType,
+		AcceleratorName:      instType.AcceleratorName,
+		AcceleratorCount:     instType.AcceleratorCount,
+		AcceleratorMemoryGiB: instType.AcceleratorMemoryGiB,
+	}
+
+	rec := recommend.Recommend(*modelCfg, inst, allSpecs)
+	writeJSON(w, http.StatusOK, rec)
 }
 
 func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {

@@ -81,10 +81,9 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 		argIdx     int
 	)
 
-	// Always filter to completed, non-superseded catalog runs.
+	// Always filter to completed, non-superseded runs.
 	conditions = append(conditions, "br.status = 'completed'")
 	conditions = append(conditions, "br.superseded = FALSE")
-	conditions = append(conditions, "br.run_type = 'catalog'")
 
 	if f.ModelHfID != "" {
 		argIdx++

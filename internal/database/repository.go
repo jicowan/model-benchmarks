@@ -48,6 +48,29 @@ func (r *Repository) GetModelByHfID(ctx context.Context, hfID, hfRevision string
 	return &m, nil
 }
 
+// EnsureModel returns an existing model or creates one if it doesn't exist.
+func (r *Repository) EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error) {
+	m, err := r.GetModelByHfID(ctx, hfID, hfRevision)
+	if err != nil {
+		return nil, err
+	}
+	if m != nil {
+		return m, nil
+	}
+	var created Model
+	err = r.pool.QueryRow(ctx,
+		`INSERT INTO models (hf_id, hf_revision)
+		 VALUES ($1, $2)
+		 ON CONFLICT (hf_id, hf_revision) DO UPDATE SET hf_id = EXCLUDED.hf_id
+		 RETURNING id, hf_id, hf_revision, model_family, parameter_count, created_at`,
+		hfID, hfRevision,
+	).Scan(&created.ID, &created.HfID, &created.HfRevision, &created.ModelFamily, &created.ParameterCount, &created.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("upsert model: %w", err)
+	}
+	return &created, nil
+}
+
 // GetInstanceTypeByName returns an instance type by name, or nil if not found.
 func (r *Repository) GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error) {
 	var it InstanceType

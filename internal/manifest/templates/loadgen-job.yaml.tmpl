@@ -29,8 +29,10 @@ spec:
                       - system
       containers:
         - name: loadgen
-          image: ghcr.io/accelbench/loadgen:latest
+          image: {{ .LoadgenImage }}
           env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: TARGET_URL
               value: "http://{{ .TargetHost }}:{{ .TargetPort }}/v1/completions"
             - name: MODEL_ID
@@ -47,14 +49,12 @@ spec:
               value: "{{ .NumRequests }}"
             - name: WARMUP_REQUESTS
               value: "{{ .WarmupRequests }}"
-            - name: METRICS_ENDPOINT
-              value: "http://{{ .TargetHost }}:9400/metrics"
             - name: OUTPUT_FORMAT
               value: "json"
           resources:
             requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
               cpu: "2"
               memory: "4Gi"
-            limits:
-              cpu: "4"
-              memory: "8Gi"

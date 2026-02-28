@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -39,12 +40,41 @@ type Summary struct {
 }
 
 // ParseLoadgenOutput parses the JSON output from a load generator pod.
+// Pod logs may contain non-JSON progress lines on stderr; this function
+// first looks for content between ACCELBENCH_JSON_BEGIN/END markers,
+// then falls back to scanning for JSON lines.
 func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 	var out LoadgenOutput
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("parse loadgen output: %w", err)
+
+	// Strategy 1: Look for marker-delimited JSON.
+	beginMarker := []byte("ACCELBENCH_JSON_BEGIN")
+	endMarker := []byte("ACCELBENCH_JSON_END")
+	if beginIdx := bytes.Index(data, beginMarker); beginIdx >= 0 {
+		rest := data[beginIdx+len(beginMarker):]
+		if endIdx := bytes.Index(rest, endMarker); endIdx >= 0 {
+			jsonData := bytes.TrimSpace(rest[:endIdx])
+			if err := json.Unmarshal(jsonData, &out); err == nil && len(out.Requests) > 0 {
+				return &out, nil
+			}
+		}
 	}
-	return &out, nil
+
+	// Strategy 2: Try the whole blob (fast path for clean output).
+	if err := json.Unmarshal(data, &out); err == nil {
+		return &out, nil
+	}
+
+	// Strategy 3: Scan line-by-line for a JSON payload.
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		if err := json.Unmarshal(line, &out); err == nil && len(out.Requests) > 0 {
+			return &out, nil
+		}
+	}
+	return nil, fmt.Errorf("parse loadgen output: no valid JSON payload found in %d bytes of log output", len(data))
 }
 
 // ComputeMetrics takes parsed loadgen output and computes the full set of

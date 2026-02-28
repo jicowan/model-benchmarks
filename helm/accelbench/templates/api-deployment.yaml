@@ -37,6 +37,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "accelbench.dbSecretName" . }}
                   key: {{ .Values.database.existingSecretKey | default "DATABASE_URL" }}
+            {{- if .Values.image.loadgen }}
+            - name: LOADGEN_IMAGE
+              value: "{{ .Values.image.loadgen.repository }}:{{ .Values.image.loadgen.tag | default "latest" }}"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

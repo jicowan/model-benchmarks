@@ -42,3 +42,8 @@ output "ecr_migration_url" {
   description = "ECR repository URL for the migration image"
   value       = aws_ecr_repository.migration.repository_url
 }
+
+output "ecr_loadgen_url" {
+  description = "ECR repository URL for the loadgen image"
+  value       = aws_ecr_repository.loadgen.repository_url
+}
