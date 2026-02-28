@@ -44,6 +44,16 @@ type hfConfigJSON struct {
 	MaxPositionEmbeddings int    `json:"max_position_embeddings"`
 	TorchDtype            string `json:"torch_dtype"`
 	ModelType             string `json:"model_type"`
+	VocabSize             int    `json:"vocab_size"`
+	IntermediateSize      int    `json:"intermediate_size"`
+
+	// MoE fields (DeepSeek, Mixtral, etc.)
+	NRoutedExperts      int `json:"n_routed_experts"`
+	NSharedExperts      int `json:"n_shared_experts"`
+	MoeIntermediateSize int `json:"moe_intermediate_size"`
+	FirstKDenseReplace  int `json:"first_k_dense_replace"`
+	// Mixtral-style MoE
+	NumLocalExperts int `json:"num_local_experts"`
 }
 
 // FetchModelConfig fetches model metadata from HuggingFace and returns a
@@ -108,8 +118,13 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 		ModelType:             cr.config.ModelType,
 	}
 
-	if mr.model.Safetensors != nil {
+	if mr.model.Safetensors != nil && mr.model.Safetensors.Total > 0 {
 		cfg.ParameterCount = mr.model.Safetensors.Total
+	}
+	if cfg.ParameterCount == 0 {
+		// Safetensors metadata unavailable (common for MoE models like
+		// DeepSeek-V3). Estimate from architecture config.
+		cfg.ParameterCount = estimateParameterCount(cr.config)
 	}
 	if mr.model.Config != nil && cfg.ModelType == "" {
 		cfg.ModelType = mr.model.Config.ModelType
@@ -154,6 +169,72 @@ func (c *HFClient) doGet(url, hfToken string, out any) error {
 	}
 
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// estimateParameterCount estimates total parameters from architecture fields
+// in config.json. This is used as a fallback when HuggingFace safetensors
+// metadata is missing (common for MoE models like DeepSeek-V3).
+func estimateParameterCount(cfg *hfConfigJSON) int64 {
+	if cfg.HiddenSize == 0 || cfg.NumHiddenLayers == 0 {
+		return 0
+	}
+
+	h := int64(cfg.HiddenSize)
+	layers := int64(cfg.NumHiddenLayers)
+	vocab := int64(cfg.VocabSize)
+	interSize := int64(cfg.IntermediateSize)
+
+	// Embeddings + LM head.
+	var total int64
+	if vocab > 0 {
+		total += 2 * vocab * h
+	}
+
+	// Per-layer attention: Q, K, V, O projections ≈ 4 × hidden_size².
+	attnPerLayer := 4 * h * h
+
+	// Per-layer layer norms (small).
+	normPerLayer := 2 * h
+
+	// Determine number of MoE experts (support both DeepSeek and Mixtral field names).
+	numExperts := cfg.NRoutedExperts
+	if numExperts == 0 {
+		numExperts = cfg.NumLocalExperts
+	}
+
+	moeInterSize := int64(cfg.MoeIntermediateSize)
+	if moeInterSize == 0 {
+		moeInterSize = interSize // Mixtral uses intermediate_size for experts
+	}
+
+	if numExperts > 0 && moeInterSize > 0 {
+		// MoE model. Some layers may be dense (first_k_dense_replace).
+		denseLayers := int64(cfg.FirstKDenseReplace)
+		moeLayers := layers - denseLayers
+		if moeLayers < 0 {
+			moeLayers = layers
+		}
+
+		// Dense FFN: gate + up + down = 3 × h × intermediate_size
+		denseFFN := int64(3) * h * interSize
+
+		// MoE FFN: routed experts + shared experts
+		routedFFN := int64(numExperts) * 3 * h * moeInterSize
+		sharedFFN := int64(cfg.NSharedExperts) * 3 * h * interSize
+		moeFFN := routedFFN + sharedFFN
+
+		total += denseLayers * (attnPerLayer + denseFFN + normPerLayer)
+		total += moeLayers * (attnPerLayer + moeFFN + normPerLayer)
+	} else if interSize > 0 {
+		// Dense model: gate + up + down = 3 × h × intermediate_size
+		ffnPerLayer := int64(3) * h * interSize
+		total += layers * (attnPerLayer + ffnPerLayer + normPerLayer)
+	} else {
+		// No intermediate_size — rough estimate: ~12 × h² per layer.
+		total += layers * 12 * h * h
+	}
+
+	return total
 }
 
 // isGated returns true if the HuggingFace gated field indicates the model is gated.
