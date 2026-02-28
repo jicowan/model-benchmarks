@@ -53,6 +53,7 @@ spec:
             - "8000"
             - "--tensor-parallel-size"
             - "{{ .TensorParallelDegree }}"
+            - "--trust-remote-code"
 {{- if eq .Quantization "fp16" }}
             - "--dtype"
             - "float16"
