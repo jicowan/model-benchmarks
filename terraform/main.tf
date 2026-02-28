@@ -85,6 +85,47 @@ module "aurora" {
   tags = local.tags
 }
 
+# ---------- API Pod Identity (pricing:GetProducts for CronJob) ----------
+resource "aws_iam_role" "api_pod" {
+  name = "${var.project_name}-api"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "pods.eks.amazonaws.com"
+      }
+      Action = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "api_pricing" {
+  name = "PricingReadOnly"
+  role = aws_iam_role.api_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "pricing:GetProducts"
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "api" {
+  cluster_name    = module.eks.cluster_name
+  namespace       = "accelbench"
+  service_account = "accelbench-api"
+  role_arn        = aws_iam_role.api_pod.arn
+
+  tags = local.tags
+}
+
 # ---------- ECR Repositories ----------
 resource "aws_ecr_repository" "api" {
   name                 = "${var.project_name}-api"
@@ -102,6 +143,13 @@ resource "aws_ecr_repository" "web" {
 
 resource "aws_ecr_repository" "migration" {
   name                 = "${var.project_name}-migration"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  tags                 = local.tags
+}
+
+resource "aws_ecr_repository" "loadgen" {
+  name                 = "${var.project_name}-loadgen"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
   tags                 = local.tags
