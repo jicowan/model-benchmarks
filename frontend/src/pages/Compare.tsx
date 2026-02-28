@@ -15,45 +15,49 @@ import {
   PolarRadiusAxis,
   Radar,
 } from "recharts";
-import { listCatalog } from "../api";
-import type { CatalogEntry, PricingTier } from "../types";
+import { listCatalog, listPricing } from "../api";
+import type { CatalogEntry, PricingTier, PricingRow } from "../types";
 import PricingToggle from "../components/PricingToggle";
 
 const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706"];
 
-// Placeholder hourly pricing (to be replaced with real pricing API data).
-const PLACEHOLDER_PRICING: Record<string, Record<PricingTier, number>> = {
-  "g5.xlarge": { on_demand: 1.006, reserved_1yr: 0.64, reserved_3yr: 0.43 },
-  "g5.48xlarge": {
-    on_demand: 16.288,
-    reserved_1yr: 10.35,
-    reserved_3yr: 6.97,
-  },
-  "p5.48xlarge": {
-    on_demand: 98.32,
-    reserved_1yr: 62.48,
-    reserved_3yr: 42.08,
-  },
-  "p5e.48xlarge": {
-    on_demand: 120.0,
-    reserved_1yr: 76.27,
-    reserved_3yr: 51.37,
-  },
-  "inf2.xlarge": {
-    on_demand: 0.7582,
-    reserved_1yr: 0.48,
-    reserved_3yr: 0.33,
-  },
-};
+const AWS_REGIONS = [
+  "us-east-1",
+  "us-east-2",
+  "us-west-1",
+  "us-west-2",
+  "eu-west-1",
+  "eu-west-2",
+  "eu-central-1",
+  "ap-southeast-1",
+  "ap-northeast-1",
+];
 
-function getPrice(instance: string, tier: PricingTier): number | null {
-  return PLACEHOLDER_PRICING[instance]?.[tier] ?? null;
+function getPrice(
+  pricingMap: Map<string, PricingRow>,
+  instance: string,
+  tier: PricingTier
+): number | null {
+  const row = pricingMap.get(instance);
+  if (!row) return null;
+  switch (tier) {
+    case "on_demand":
+      return row.on_demand_hourly_usd;
+    case "reserved_1yr":
+      return row.reserved_1yr_hourly_usd ?? null;
+    case "reserved_3yr":
+      return row.reserved_3yr_hourly_usd ?? null;
+  }
 }
 
 export default function Compare() {
   const [searchParams] = useSearchParams();
   const [entries, setEntries] = useState<CatalogEntry[]>([]);
   const [pricingTier, setPricingTier] = useState<PricingTier>("on_demand");
+  const [region, setRegion] = useState("us-east-2");
+  const [pricingMap, setPricingMap] = useState<Map<string, PricingRow>>(
+    new Map()
+  );
 
   useEffect(() => {
     const ids = searchParams.get("ids")?.split(",") ?? [];
@@ -64,6 +68,16 @@ export default function Compare() {
       setEntries(all.filter((e) => ids.includes(e.run_id)));
     });
   }, [searchParams]);
+
+  useEffect(() => {
+    listPricing(region).then((rows) => {
+      const m = new Map<string, PricingRow>();
+      for (const r of rows) {
+        m.set(r.instance_type_name, r);
+      }
+      setPricingMap(m);
+    });
+  }, [region]);
 
   if (entries.length === 0) {
     return (
@@ -123,7 +137,7 @@ export default function Compare() {
 
   // Cost table.
   const costRows = entries.map((e) => {
-    const hourly = getPrice(e.instance_type_name, pricingTier);
+    const hourly = getPrice(pricingMap, e.instance_type_name, pricingTier);
     const rps = e.requests_per_second;
     const tps = e.throughput_aggregate_tps;
     return {
@@ -142,7 +156,20 @@ export default function Compare() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Compare ({entries.length})</h1>
-        <PricingToggle value={pricingTier} onChange={setPricingTier} />
+        <div className="flex items-center gap-4">
+          <select
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+          >
+            {AWS_REGIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          <PricingToggle value={pricingTier} onChange={setPricingTier} />
+        </div>
       </div>
 
       {/* Comparison table */}

@@ -113,6 +113,14 @@ export interface RunListFilter {
 
 export type PricingTier = "on_demand" | "reserved_1yr" | "reserved_3yr";
 
+export interface PricingRow {
+  instance_type_name: string;
+  on_demand_hourly_usd: number;
+  reserved_1yr_hourly_usd?: number;
+  reserved_3yr_hourly_usd?: number;
+  effective_date: string;
+}
+
 export interface CatalogFilter {
   model?: string;
   model_family?: string;

@@ -39,6 +39,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
 	mux.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
+	mux.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +251,23 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
+	region := r.URL.Query().Get("region")
+	if region == "" {
+		region = "us-east-2"
+	}
+
+	rows, err := s.repo.ListPricing(r.Context(), region)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "pricing query failed")
+		return
+	}
+	if rows == nil {
+		rows = []database.PricingRow{}
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

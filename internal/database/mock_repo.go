@@ -10,12 +10,13 @@ import (
 
 // MockRepo is an in-memory implementation of Repo for testing.
 type MockRepo struct {
-	mu      sync.Mutex
-	models  map[string]*Model         // keyed by "hfID|revision"
-	instTypes map[string]*InstanceType // keyed by name
-	runs    map[string]*BenchmarkRun  // keyed by run ID
-	metrics map[string]*BenchmarkMetrics // keyed by run ID
-	nextID  int
+	mu        sync.Mutex
+	models    map[string]*Model            // keyed by "hfID|revision"
+	instTypes map[string]*InstanceType     // keyed by name
+	runs      map[string]*BenchmarkRun     // keyed by run ID
+	metrics   map[string]*BenchmarkMetrics // keyed by run ID
+	pricing   map[string]*Pricing          // keyed by "instanceTypeID|region|date"
+	nextID    int
 }
 
 // NewMockRepo creates a new MockRepo.
@@ -25,6 +26,7 @@ func NewMockRepo() *MockRepo {
 		instTypes: make(map[string]*InstanceType),
 		runs:      make(map[string]*BenchmarkRun),
 		metrics:   make(map[string]*BenchmarkMetrics),
+		pricing:   make(map[string]*Pricing),
 	}
 }
 
@@ -216,6 +218,50 @@ func (m *MockRepo) DeleteRun(_ context.Context, runID string) error {
 	return nil
 }
 
+func (m *MockRepo) UpsertPricing(_ context.Context, p *Pricing) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := p.InstanceTypeID + "|" + p.Region + "|" + p.EffectiveDate
+	m.pricing[key] = p
+	return nil
+}
+
+func (m *MockRepo) ListPricing(_ context.Context, region string) ([]PricingRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var rows []PricingRow
+	for _, p := range m.pricing {
+		if p.Region != region {
+			continue
+		}
+		name := p.InstanceTypeID
+		for _, it := range m.instTypes {
+			if it.ID == p.InstanceTypeID {
+				name = it.Name
+				break
+			}
+		}
+		rows = append(rows, PricingRow{
+			InstanceTypeName:     name,
+			OnDemandHourlyUSD:    p.OnDemandHourlyUSD,
+			Reserved1YrHourlyUSD: p.Reserved1YrHourlyUSD,
+			Reserved3YrHourlyUSD: p.Reserved3YrHourlyUSD,
+			EffectiveDate:        p.EffectiveDate,
+		})
+	}
+	return rows, nil
+}
+
+func (m *MockRepo) ListInstanceTypes(_ context.Context) ([]InstanceType, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []InstanceType
+	for _, it := range m.instTypes {
+		result = append(result, *it)
+	}
+	return result, nil
+}
+
 // ListCatalog returns catalog entries matching the given filter.
 // This is a simplified in-memory implementation for testing.
 func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEntry, error) {
@@ -224,7 +270,7 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 
 	var entries []CatalogEntry
 	for runID, run := range m.runs {
-		if run.Status != "completed" || run.Superseded || run.RunType != "catalog" {
+		if run.Status != "completed" || run.Superseded {
 			continue
 		}
 		met := m.metrics[runID]

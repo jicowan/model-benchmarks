@@ -6,6 +6,7 @@ import type {
   RunRequest,
   RunListItem,
   RunListFilter,
+  PricingRow,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -67,6 +68,13 @@ export async function listRuns(
 
   const qs = params.toString();
   return fetchJSON<RunListItem[]>(`${BASE}/jobs${qs ? `?${qs}` : ""}`);
+}
+
+export async function listPricing(region?: string): Promise<PricingRow[]> {
+  const params = new URLSearchParams();
+  if (region) params.set("region", region);
+  const qs = params.toString();
+  return fetchJSON<PricingRow[]>(`${BASE}/pricing${qs ? `?${qs}` : ""}`);
 }
 
 export async function cancelRun(id: string): Promise<void> {
