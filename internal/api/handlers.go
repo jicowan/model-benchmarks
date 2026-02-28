@@ -116,6 +116,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		OutputSequenceLength: req.OutputSequenceLength,
 		DatasetName:          req.DatasetName,
 		RunType:              req.RunType,
+		MinDurationSeconds:   req.MinDurationSeconds,
 		Status:               "pending",
 	}
 

@@ -31,6 +31,7 @@ export default function Run() {
     output_sequence_length: 256,
     dataset_name: "sharegpt",
     max_model_len: 0,
+    min_duration_seconds: 180,
     hf_token: "",
   });
 
@@ -110,6 +111,7 @@ export default function Run() {
         ...form,
         quantization: form.quantization || undefined,
         max_model_len: form.max_model_len || undefined,
+        min_duration_seconds: form.min_duration_seconds || undefined,
         hf_token: form.hf_token || undefined,
         run_type: "on_demand",
       });
@@ -444,6 +446,23 @@ export default function Run() {
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
             />
           </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Min Duration (s)
+          </label>
+          <input
+            type="number"
+            min={0}
+            value={form.min_duration_seconds}
+            onChange={(e) => set("min_duration_seconds", Number(e.target.value))}
+            placeholder="0 = no minimum"
+            className="w-48 rounded-md border border-gray-300 px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            Minimum benchmark duration to ensure enough GPU samples. 0 disables.
+          </p>
         </div>
 
         <div className="grid grid-cols-3 gap-4">

@@ -69,7 +69,9 @@ export interface BenchmarkMetrics {
   throughput_aggregate_tps?: number;
   requests_per_second?: number;
   accelerator_utilization_pct?: number;
+  accelerator_utilization_avg_pct?: number;
   accelerator_memory_peak_gib?: number;
+  waiting_requests_max?: number;
   successful_requests?: number;
   failed_requests?: number;
   total_duration_seconds?: number;
@@ -89,6 +91,7 @@ export interface RunRequest {
   dataset_name: string;
   run_type: string;
   max_model_len?: number;
+  min_duration_seconds?: number;
   hf_token?: string;
 }
 

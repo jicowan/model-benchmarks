@@ -38,6 +38,7 @@ type BenchmarkRun struct {
 	OutputSequenceLength  int        `json:"output_sequence_length"`
 	DatasetName           string     `json:"dataset_name"`
 	RunType               string     `json:"run_type"`
+	MinDurationSeconds    int        `json:"min_duration_seconds"`
 	Status                string     `json:"status"`
 	Superseded            bool       `json:"superseded"`
 	StartedAt             *time.Time `json:"started_at,omitempty"`
@@ -63,9 +64,11 @@ type BenchmarkMetrics struct {
 	ThroughputPerRequestTPS  *float64 `json:"throughput_per_request_tps,omitempty"`
 	ThroughputAggregateTPS   *float64 `json:"throughput_aggregate_tps,omitempty"`
 	RequestsPerSecond        *float64 `json:"requests_per_second,omitempty"`
-	AcceleratorUtilizationPct *float64 `json:"accelerator_utilization_pct,omitempty"`
-	AcceleratorMemoryPeakGiB *float64 `json:"accelerator_memory_peak_gib,omitempty"`
-	SuccessfulRequests       *int     `json:"successful_requests,omitempty"`
+	AcceleratorUtilizationPct    *float64 `json:"accelerator_utilization_pct,omitempty"`
+	AcceleratorUtilizationAvgPct *float64 `json:"accelerator_utilization_avg_pct,omitempty"`
+	AcceleratorMemoryPeakGiB    *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+	WaitingRequestsMax          *int     `json:"waiting_requests_max,omitempty"`
+	SuccessfulRequests          *int     `json:"successful_requests,omitempty"`
 	FailedRequests           *int     `json:"failed_requests,omitempty"`
 	TotalDurationSeconds     *float64 `json:"total_duration_seconds,omitempty"`
 	CreatedAt                time.Time `json:"created_at"`
@@ -97,5 +100,6 @@ type RunRequest struct {
 	DatasetName          string  `json:"dataset_name"`
 	RunType              string  `json:"run_type"`
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
+	MinDurationSeconds   int     `json:"min_duration_seconds,omitempty"`
 	HfToken              string  `json:"hf_token,omitempty"`
 }

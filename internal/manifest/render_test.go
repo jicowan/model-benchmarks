@@ -42,7 +42,6 @@ func TestRenderModelDeployment_GPU(t *testing.T) {
 		{"tensor parallel", `"8"`},
 		{"quantization dtype", `"float16"`},
 		{"node selector instance type", "node.kubernetes.io/instance-type: p5.48xlarge"},
-		{"dcgm sidecar", "dcgm-exporter"},
 		{"hf token", "hf_test_token"},
 		{"Service kind", "kind: Service"},
 		{"service port 8000", "port: 8000"},
@@ -93,7 +92,6 @@ func TestRenderModelDeployment_Neuron(t *testing.T) {
 		{"neuron image", "vllm/vllm-neuron:v0.6.0"},
 		{"neuron toleration", "aws.amazon.com/neuron"},
 		{"neuron resource", `aws.amazon.com/neuron: "2"`},
-		{"neuron monitor sidecar", "neuron-monitor"},
 		{"instance type", "node.kubernetes.io/instance-type: inf2.xlarge"},
 	}
 
@@ -178,7 +176,7 @@ func TestRenderLoadgenJob(t *testing.T) {
 		{"warmup requests", `value: "10"`},
 		{"system node affinity", "accelbench/node-type"},
 		{"json output", `value: "json"`},
-		{"metrics endpoint", "http://bench-test123:9400/metrics"},
+		{"min duration env", "MIN_DURATION_SECONDS"},
 		{"backoff limit", "backoffLimit: 0"},
 	}
 

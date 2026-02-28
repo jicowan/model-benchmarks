@@ -49,6 +49,8 @@ spec:
               value: "{{ .NumRequests }}"
             - name: WARMUP_REQUESTS
               value: "{{ .WarmupRequests }}"
+            - name: MIN_DURATION_SECONDS
+              value: "{{ .MinDurationSeconds }}"
             - name: OUTPUT_FORMAT
               value: "json"
           resources:

@@ -110,9 +110,21 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("wait for readiness: %w", err)
 	}
 
+	// Start GPU scraper for GPU instances (non-fatal if it fails).
+	var gpuScraper *GPUScraper
+	if strings.EqualFold(cfg.InstanceType.AcceleratorType, "gpu") {
+		totalMemGiB := float64(cfg.InstanceType.AcceleratorMemoryGiB)
+		gpuScraper = NewGPUScraper(modelName, 8000, totalMemGiB)
+		gpuScraper.Start(ctx)
+		log.Printf("[%s] started GPU metrics scraper", cfg.RunID[:8])
+	}
+
 	// Phase 4: Launch load generator Job.
 	log.Printf("[%s] launching load generator", cfg.RunID[:8])
 	if err := o.launchLoadgen(ctx, ns, loadgenName, modelName, cfg); err != nil {
+		if gpuScraper != nil {
+			gpuScraper.Stop()
+		}
 		o.markFailed(ctx, cfg.RunID)
 		return fmt.Errorf("launch loadgen: %w", err)
 	}
@@ -120,6 +132,20 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	// Phase 5: Wait for Job completion and collect results.
 	log.Printf("[%s] waiting for load generator completion", cfg.RunID[:8])
 	logData, err := o.waitAndCollect(ctx, ns, loadgenName)
+
+	// Stop GPU scraper and collect metrics (before checking loadgen error).
+	var gpuMetrics *GPUMetrics
+	if gpuScraper != nil {
+		gpuMetrics = gpuScraper.Stop()
+		if gpuMetrics != nil {
+			log.Printf("[%s] GPU metrics: utilization_peak=%.1f%% avg=%.1f%% mem_peak=%.1fGiB waiting_max=%d",
+				cfg.RunID[:8], gpuMetrics.UtilizationPeakPct, gpuMetrics.UtilizationAvgPct,
+				gpuMetrics.MemoryPeakGiB, gpuMetrics.WaitingRequestsMax)
+		} else {
+			log.Printf("[%s] GPU scraper collected no samples", cfg.RunID[:8])
+		}
+	}
+
 	if err != nil {
 		o.markFailed(ctx, cfg.RunID)
 		return fmt.Errorf("collect results: %w", err)
@@ -142,6 +168,15 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 
 	computed := metrics.ComputeMetrics(output)
 	computed.RunID = cfg.RunID
+
+	// Merge GPU scraper metrics into computed metrics.
+	if gpuMetrics != nil {
+		computed.AcceleratorUtilizationPct = &gpuMetrics.UtilizationPeakPct
+		computed.AcceleratorUtilizationAvgPct = &gpuMetrics.UtilizationAvgPct
+		computed.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
+		computed.WaitingRequestsMax = &gpuMetrics.WaitingRequestsMax
+	}
+
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {
 		o.markFailed(ctx, cfg.RunID)
 		return fmt.Errorf("persist metrics: %w", err)
@@ -231,6 +266,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		DatasetName:          cfg.Request.DatasetName,
 		NumRequests:          numRequests,
 		WarmupRequests:       10,
+		MinDurationSeconds:   cfg.Request.MinDurationSeconds,
 	})
 	if err != nil {
 		return err

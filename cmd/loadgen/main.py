@@ -32,6 +32,7 @@ INPUT_SEQ_LEN = int(os.environ.get("INPUT_SEQ_LEN", "512"))
 OUTPUT_SEQ_LEN = int(os.environ.get("OUTPUT_SEQ_LEN", "256"))
 NUM_REQUESTS = int(os.environ.get("NUM_REQUESTS", "200"))
 WARMUP_REQUESTS = int(os.environ.get("WARMUP_REQUESTS", "10"))
+MIN_DURATION_SECONDS = int(os.environ.get("MIN_DURATION_SECONDS", "0"))
 DATASET = os.environ.get("DATASET", "sharegpt")
 
 SHAREGPT_URL = (
@@ -80,7 +81,7 @@ def _load_sharegpt_prompts(data: list[dict], target_tokens: int) -> list[str]:
 def download_sharegpt() -> list[str]:
     """Download ShareGPT dataset and return filtered prompts."""
     print(f"Downloading ShareGPT dataset...", file=sys.stderr)
-    with urllib.request.urlopen(SHAREGPT_URL, timeout=120) as resp:
+    with urllib.request.urlopen(SHAREGPT_URL, timeout=300) as resp:
         raw = resp.read()
 
     print(f"Downloaded {len(raw) / 1024 / 1024:.1f} MB, parsing...", file=sys.stderr)
@@ -235,10 +236,33 @@ async def main():
             await run_batch(session, WARMUP_REQUESTS, "warmup")
             print("Warmup complete.", file=sys.stderr)
 
-        # Benchmark
-        print(f"Running {NUM_REQUESTS} benchmark requests (concurrency={CONCURRENCY})...", file=sys.stderr)
+        # Benchmark: send at least NUM_REQUESTS and run for at least MIN_DURATION_SECONDS.
+        print(f"Running benchmark (min_requests={NUM_REQUESTS}, min_duration={MIN_DURATION_SECONDS}s, concurrency={CONCURRENCY})...", file=sys.stderr)
         overall_start = time.perf_counter()
-        results = await run_batch(session, NUM_REQUESTS, "bench")
+        results: list[RequestResult] = []
+        batch_num = 0
+
+        while True:
+            remaining = NUM_REQUESTS - len(results)
+            elapsed = time.perf_counter() - overall_start
+            duration_met = MIN_DURATION_SECONDS <= 0 or elapsed >= MIN_DURATION_SECONDS
+            requests_met = len(results) >= NUM_REQUESTS
+
+            if requests_met and duration_met:
+                break
+
+            # Determine batch size: full remaining if first batch, else
+            # smaller continuation batches to check elapsed time frequently.
+            if remaining > 0:
+                batch_size = remaining
+            else:
+                batch_size = max(CONCURRENCY, 16)
+
+            batch_num += 1
+            label = f"bench-{batch_num}"
+            batch_results = await run_batch(session, batch_size, label)
+            results.extend(batch_results)
+
         overall_end = time.perf_counter()
 
     total_duration = overall_end - overall_start

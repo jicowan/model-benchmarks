@@ -96,7 +96,7 @@ func TestHandleCreateRun_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleCreateRun_ModelNotFound(t *testing.T) {
+func TestHandleCreateRun_UnknownModelAutoRegisters(t *testing.T) {
 	_, mux := setupServer()
 
 	body := database.RunRequest{
@@ -118,8 +118,9 @@ func TestHandleCreateRun_ModelNotFound(t *testing.T) {
 
 	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	// EnsureModel auto-registers unknown models, so this should succeed.
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusAccepted)
 	}
 }
 

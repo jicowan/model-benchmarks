@@ -97,13 +97,13 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		    (model_id, instance_type_id, framework, framework_version,
 		     tensor_parallel_degree, quantization, concurrency,
 		     input_sequence_length, output_sequence_length, dataset_name,
-		     run_type, status)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		     run_type, status, min_duration_seconds)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
 		run.InputSequenceLength, run.OutputSequenceLength, run.DatasetName,
-		run.RunType, run.Status,
+		run.RunType, run.Status, run.MinDurationSeconds,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
@@ -150,16 +150,18 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		     e2e_latency_p50_ms, e2e_latency_p90_ms, e2e_latency_p95_ms, e2e_latency_p99_ms,
 		     itl_p50_ms, itl_p90_ms, itl_p95_ms, itl_p99_ms,
 		     throughput_per_request_tps, throughput_aggregate_tps, requests_per_second,
-		     accelerator_utilization_pct, accelerator_memory_peak_gib,
+		     accelerator_utilization_pct, accelerator_utilization_avg_pct, accelerator_memory_peak_gib,
+		     waiting_requests_max,
 		     successful_requests, failed_requests, total_duration_seconds)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		 RETURNING id`,
 		runID,
 		m.TTFTP50Ms, m.TTFTP90Ms, m.TTFTP95Ms, m.TTFTP99Ms,
 		m.E2ELatencyP50Ms, m.E2ELatencyP90Ms, m.E2ELatencyP95Ms, m.E2ELatencyP99Ms,
 		m.ITLP50Ms, m.ITLP90Ms, m.ITLP95Ms, m.ITLP99Ms,
 		m.ThroughputPerRequestTPS, m.ThroughputAggregateTPS, m.RequestsPerSecond,
-		m.AcceleratorUtilizationPct, m.AcceleratorMemoryPeakGiB,
+		m.AcceleratorUtilizationPct, m.AcceleratorUtilizationAvgPct, m.AcceleratorMemoryPeakGiB,
+		m.WaitingRequestsMax,
 		m.SuccessfulRequests, m.FailedRequests, m.TotalDurationSeconds,
 	).Scan(&metricsID)
 	if err != nil {
@@ -200,12 +202,12 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		`SELECT id, model_id, instance_type_id, framework, framework_version,
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, status, superseded, started_at, completed_at, created_at
+		        run_type, min_duration_seconds, status, superseded, started_at, completed_at, created_at
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
-		&run.RunType, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt)
+		&run.RunType, &run.MinDurationSeconds, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -224,7 +226,8 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		        e2e_latency_p50_ms, e2e_latency_p90_ms, e2e_latency_p95_ms, e2e_latency_p99_ms,
 		        itl_p50_ms, itl_p90_ms, itl_p95_ms, itl_p99_ms,
 		        throughput_per_request_tps, throughput_aggregate_tps, requests_per_second,
-		        accelerator_utilization_pct, accelerator_memory_peak_gib,
+		        accelerator_utilization_pct, accelerator_utilization_avg_pct, accelerator_memory_peak_gib,
+		        waiting_requests_max,
 		        successful_requests, failed_requests, total_duration_seconds, created_at
 		 FROM benchmark_metrics WHERE run_id = $1`, runID,
 	).Scan(&m.ID, &m.RunID,
@@ -232,7 +235,8 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		&m.E2ELatencyP50Ms, &m.E2ELatencyP90Ms, &m.E2ELatencyP95Ms, &m.E2ELatencyP99Ms,
 		&m.ITLP50Ms, &m.ITLP90Ms, &m.ITLP95Ms, &m.ITLP99Ms,
 		&m.ThroughputPerRequestTPS, &m.ThroughputAggregateTPS, &m.RequestsPerSecond,
-		&m.AcceleratorUtilizationPct, &m.AcceleratorMemoryPeakGiB,
+		&m.AcceleratorUtilizationPct, &m.AcceleratorUtilizationAvgPct, &m.AcceleratorMemoryPeakGiB,
+		&m.WaitingRequestsMax,
 		&m.SuccessfulRequests, &m.FailedRequests, &m.TotalDurationSeconds, &m.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil

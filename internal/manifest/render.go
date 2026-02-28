@@ -56,6 +56,7 @@ type LoadgenJobParams struct {
 	DatasetName          string
 	NumRequests          int
 	WarmupRequests       int
+	MinDurationSeconds   int
 }
 
 // RenderModelDeployment renders the model Deployment + Service manifests.
