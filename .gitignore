@@ -43,3 +43,6 @@ Thumbs.db
 *.pem
 *.key
 .env
+
+# PRDs (internal design docs)
+PRD*.md
