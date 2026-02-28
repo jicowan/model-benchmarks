@@ -1,6 +1,6 @@
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 20.0"
+  version = "~> 20.31"
 
   cluster_name = var.cluster_name
 
@@ -105,7 +105,7 @@ resource "kubectl_manifest" "gpu_node_pool" {
               values: ["amd64"]
             - key: karpenter.k8s.aws/instance-family
               operator: In
-              values: ["g5", "g6", "g6e", "p4d", "p5", "p5e"]
+              values: ["g5", "g6", "g6e", "g7e", "gr6", "p4d", "p4de", "p5", "p5e", "p5en", "p6-b200", "p6-b300"]
             - key: karpenter.sh/capacity-type
               operator: In
               values: ["on-demand"]
@@ -138,7 +138,7 @@ resource "kubectl_manifest" "neuron_node_pool" {
               values: ["amd64"]
             - key: karpenter.k8s.aws/instance-family
               operator: In
-              values: ["inf2", "trn1", "trn2"]
+              values: ["inf2", "trn1", "trn1n", "trn2"]
             - key: karpenter.sh/capacity-type
               operator: In
               values: ["on-demand"]

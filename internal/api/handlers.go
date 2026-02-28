@@ -44,6 +44,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
 	mux.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
+	mux.HandleFunc("GET /api/v1/instance-types", s.handleListInstanceTypes)
 	mux.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
 	mux.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
 }
@@ -331,6 +332,18 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 
 	rec := recommend.Recommend(*modelCfg, inst, allSpecs)
 	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) handleListInstanceTypes(w http.ResponseWriter, r *http.Request) {
+	types, err := s.repo.ListInstanceTypes(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list instance types failed")
+		return
+	}
+	if types == nil {
+		types = []database.InstanceType{}
+	}
+	writeJSON(w, http.StatusOK, types)
 }
 
 func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {

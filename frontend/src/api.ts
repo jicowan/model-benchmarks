@@ -3,6 +3,7 @@ import type {
   CatalogFilter,
   BenchmarkRun,
   BenchmarkMetrics,
+  InstanceType,
   RunRequest,
   RunListItem,
   RunListFilter,
@@ -76,6 +77,10 @@ export async function listRuns(
 
   const qs = params.toString();
   return fetchJSON<RunListItem[]>(`${BASE}/jobs${qs ? `?${qs}` : ""}`);
+}
+
+export async function listInstanceTypes(): Promise<InstanceType[]> {
+  return fetchJSON<InstanceType[]>(`${BASE}/instance-types`);
 }
 
 export async function listPricing(region?: string): Promise<PricingRow[]> {

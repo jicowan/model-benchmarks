@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createRun, getRecommendation } from "../api";
-import type { RecommendResponse } from "../types";
+import { createRun, getRecommendation, listInstanceTypes } from "../api";
+import type { InstanceType, RecommendResponse } from "../types";
 import { validateToken } from "../hfApi";
 import type { HfModelDetail } from "../hfApi";
 import ModelCombobox from "../components/ModelCombobox";
@@ -17,6 +17,11 @@ export default function Run() {
   const [recommendation, setRecommendation] =
     useState<RecommendResponse | null>(null);
   const [suggestError, setSuggestError] = useState("");
+  const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
+
+  useEffect(() => {
+    listInstanceTypes().then(setInstanceTypes).catch(() => {});
+  }, []);
 
   const [form, setForm] = useState({
     model_hf_id: "",
@@ -227,24 +232,22 @@ export default function Run() {
             >
               <option value="">Select...</option>
               <optgroup label="GPU">
-                <option>g5.xlarge</option>
-                <option>g5.2xlarge</option>
-                <option>g5.48xlarge</option>
-                <option>g6.xlarge</option>
-                <option>g6e.xlarge</option>
-                <option>g6e.48xlarge</option>
-                <option>p4d.24xlarge</option>
-                <option>p5.48xlarge</option>
-                <option>p5e.48xlarge</option>
+                {instanceTypes
+                  .filter((t) => t.accelerator_type === "gpu")
+                  .map((t) => (
+                    <option key={t.name} value={t.name}>
+                      {t.name} ({t.accelerator_count}x {t.accelerator_name})
+                    </option>
+                  ))}
               </optgroup>
               <optgroup label="Neuron">
-                <option>inf2.xlarge</option>
-                <option>inf2.8xlarge</option>
-                <option>inf2.24xlarge</option>
-                <option>inf2.48xlarge</option>
-                <option>trn1.2xlarge</option>
-                <option>trn1.32xlarge</option>
-                <option>trn2.48xlarge</option>
+                {instanceTypes
+                  .filter((t) => t.accelerator_type === "neuron")
+                  .map((t) => (
+                    <option key={t.name} value={t.name}>
+                      {t.name} ({t.accelerator_count}x {t.accelerator_name})
+                    </option>
+                  ))}
               </optgroup>
             </select>
           </div>

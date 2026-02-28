@@ -170,6 +170,18 @@ export interface RecommendResponse {
   alternatives?: RecommendAlternatives;
 }
 
+export interface InstanceType {
+  id: string;
+  name: string;
+  family: string;
+  accelerator_type: string;
+  accelerator_name: string;
+  accelerator_count: number;
+  accelerator_memory_gib: number;
+  vcpus: number;
+  memory_gib: number;
+}
+
 export interface CatalogFilter {
   model?: string;
   model_family?: string;
