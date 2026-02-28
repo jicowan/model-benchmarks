@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/accelbench/accelbench/internal/database"
@@ -40,17 +42,48 @@ type RunConfig struct {
 
 // Orchestrator manages the benchmark lifecycle.
 type Orchestrator struct {
-	client kubernetes.Interface
-	repo   database.Repo
+	client  kubernetes.Interface
+	repo    database.Repo
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc // runID → cancel
 }
 
 // New creates a new Orchestrator.
 func New(client kubernetes.Interface, repo database.Repo) *Orchestrator {
-	return &Orchestrator{client: client, repo: repo}
+	return &Orchestrator{
+		client:  client,
+		repo:    repo,
+		cancels: make(map[string]context.CancelFunc),
+	}
+}
+
+// CancelRun cancels a running benchmark by its run ID. Returns true if
+// a cancel function was found and invoked.
+func (o *Orchestrator) CancelRun(runID string) bool {
+	o.mu.Lock()
+	cancel, ok := o.cancels[runID]
+	o.mu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
 }
 
 // Execute runs the full benchmark lifecycle: deploy → ready → loadgen → collect → persist → teardown.
 func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Register the cancel function so CancelRun can stop this goroutine.
+	o.mu.Lock()
+	o.cancels[cfg.RunID] = cancel
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		delete(o.cancels, cfg.RunID)
+		o.mu.Unlock()
+	}()
+
 	ns := defaultNamespace
 	modelName := fmt.Sprintf("bench-%s", cfg.RunID[:8])
 	loadgenName := fmt.Sprintf("loadgen-%s", cfg.RunID[:8])
@@ -132,6 +165,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		AcceleratorCount:     cfg.InstanceType.AcceleratorCount,
 		AcceleratorMemoryGiB: cfg.InstanceType.AcceleratorMemoryGiB,
 		InstanceFamily:       cfg.InstanceType.Family,
+		MaxModelLen:          cfg.Request.MaxModelLen,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
 	})
@@ -167,9 +201,15 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		numRequests = cfg.Request.Concurrency * 10
 	}
 
+	loadgenImage := os.Getenv("LOADGEN_IMAGE")
+	if loadgenImage == "" {
+		loadgenImage = "ghcr.io/accelbench/loadgen:latest"
+	}
+
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:                 name,
 		Namespace:            ns,
+		LoadgenImage:         loadgenImage,
 		TargetHost:           modelSvc,
 		TargetPort:           8000,
 		ModelHfID:            cfg.Request.ModelHfID,

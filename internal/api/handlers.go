@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
@@ -34,6 +36,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/runs", s.handleCreateRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}", s.handleGetRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/metrics", s.handleGetMetrics)
+	mux.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
+	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
+	mux.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -73,14 +78,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Look up model.
-	model, err := s.repo.GetModelByHfID(ctx, req.ModelHfID, req.ModelHfRevision)
+	// Look up or auto-register model.
+	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "lookup model failed")
-		return
-	}
-	if model == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("model %s@%s not found", req.ModelHfID, req.ModelHfRevision))
+		writeError(w, http.StatusInternalServerError, "ensure model failed")
 		return
 	}
 
@@ -117,7 +118,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Launch orchestration in the background.
+	// Launch orchestration in the background with a detached context
+	// so it isn't canceled when the HTTP response is sent.
 	go func() {
 		cfg := orchestrator.RunConfig{
 			RunID:        runID,
@@ -125,7 +127,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			InstanceType: instType,
 			Request:      &req,
 		}
-		if err := s.orch.Execute(r.Context(), cfg); err != nil {
+		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)
 		}
 	}()
@@ -162,6 +164,92 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := database.RunFilter{
+		Status:  q.Get("status"),
+		ModelID: q.Get("model"),
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
+		}
+	}
+
+	items, err := s.repo.ListRuns(r.Context(), f)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list runs failed")
+		return
+	}
+	if items == nil {
+		items = []database.RunListItem{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+	ctx := r.Context()
+
+	run, err := s.repo.GetBenchmarkRun(ctx, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if run.Status != "pending" && run.Status != "running" {
+		writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel run with status %q", run.Status))
+		return
+	}
+
+	// Cancel the orchestrator goroutine if it's running.
+	s.orch.CancelRun(runID)
+
+	if err := s.repo.UpdateRunStatus(ctx, runID, "failed"); err != nil {
+		writeError(w, http.StatusInternalServerError, "update status failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"id": runID, "status": "failed"})
+}
+
+func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+	ctx := r.Context()
+
+	run, err := s.repo.GetBenchmarkRun(ctx, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	// Cancel if still active — the deferred teardown in Execute will
+	// clean up K8s resources automatically.
+	if run.Status == "pending" || run.Status == "running" {
+		s.orch.CancelRun(runID)
+		_ = s.repo.UpdateRunStatus(ctx, runID, "failed")
+	}
+
+	if err := s.repo.DeleteRun(ctx, runID); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

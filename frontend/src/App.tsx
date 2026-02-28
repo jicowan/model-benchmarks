@@ -4,6 +4,7 @@ import Catalog from "./pages/Catalog";
 import Compare from "./pages/Compare";
 import Run from "./pages/Run";
 import ResultDetail from "./pages/ResultDetail";
+import Jobs from "./pages/Jobs";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/compare" element={<Compare />} />
           <Route path="/run" element={<Run />} />
           <Route path="/results/:id" element={<ResultDetail />} />
+          <Route path="/jobs" element={<Jobs />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -307,6 +307,61 @@ func TestDeployModel_NeuronInstance(t *testing.T) {
 	}
 }
 
+func TestCancelRun_Found(t *testing.T) {
+	repo := database.NewMockRepo()
+	client := fake.NewSimpleClientset()
+	o := New(client, repo)
+
+	// Simulate registering a cancel func (normally done in Execute).
+	ctx, cancel := context.WithCancel(context.Background())
+	o.mu.Lock()
+	o.cancels["run-123"] = cancel
+	o.mu.Unlock()
+
+	if !o.CancelRun("run-123") {
+		t.Error("expected CancelRun to return true")
+	}
+
+	select {
+	case <-ctx.Done():
+		// expected — context was canceled
+	case <-time.After(time.Second):
+		t.Error("context was not canceled")
+	}
+}
+
+func TestCancelRun_NotFound(t *testing.T) {
+	repo := database.NewMockRepo()
+	client := fake.NewSimpleClientset()
+	o := New(client, repo)
+
+	if o.CancelRun("nonexistent") {
+		t.Error("expected CancelRun to return false for unknown run")
+	}
+}
+
+func TestCancelRun_CleanedUpAfterUse(t *testing.T) {
+	repo := database.NewMockRepo()
+	client := fake.NewSimpleClientset()
+	o := New(client, repo)
+
+	_, cancel := context.WithCancel(context.Background())
+	o.mu.Lock()
+	o.cancels["run-456"] = cancel
+	o.mu.Unlock()
+
+	o.CancelRun("run-456")
+
+	// Simulate Execute's deferred cleanup.
+	o.mu.Lock()
+	delete(o.cancels, "run-456")
+	o.mu.Unlock()
+
+	if o.CancelRun("run-456") {
+		t.Error("expected CancelRun to return false after cleanup")
+	}
+}
+
 // Suppress log output during tests.
 func init() {
 	_ = time.Now // ensure time is imported

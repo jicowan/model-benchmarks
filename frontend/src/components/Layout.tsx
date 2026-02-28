@@ -4,6 +4,7 @@ const navItems = [
   { to: "/", label: "Catalog" },
   { to: "/compare", label: "Compare" },
   { to: "/run", label: "Run Benchmark" },
+  { to: "/jobs", label: "Jobs" },
 ];
 
 export default function Layout() {

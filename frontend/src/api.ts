@@ -4,6 +4,8 @@ import type {
   BenchmarkRun,
   BenchmarkMetrics,
   RunRequest,
+  RunListItem,
+  RunListFilter,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -52,4 +54,25 @@ export async function createRun(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
+}
+
+export async function listRuns(
+  filter: RunListFilter = {}
+): Promise<RunListItem[]> {
+  const params = new URLSearchParams();
+  if (filter.status) params.set("status", filter.status);
+  if (filter.model) params.set("model", filter.model);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.offset) params.set("offset", String(filter.offset));
+
+  const qs = params.toString();
+  return fetchJSON<RunListItem[]>(`${BASE}/jobs${qs ? `?${qs}` : ""}`);
+}
+
+export async function cancelRun(id: string): Promise<void> {
+  await fetch(`${BASE}/runs/${id}/cancel`, { method: "POST" });
+}
+
+export async function deleteRun(id: string): Promise<void> {
+  await fetch(`${BASE}/runs/${id}`, { method: "DELETE" });
 }

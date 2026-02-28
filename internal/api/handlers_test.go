@@ -408,3 +408,230 @@ func TestHandleListCatalog_Empty(t *testing.T) {
 		t.Errorf("got %d entries, want 0", len(entries))
 	}
 }
+
+// --- Jobs (ListRuns / Cancel / Delete) API tests ---
+
+func seedJobsServer() (*database.MockRepo, *http.ServeMux) {
+	repo := seedRepo()
+	client := fake.NewSimpleClientset()
+
+	ctx := context.Background()
+	for _, status := range []string{"pending", "running", "completed", "failed"} {
+		run := &database.BenchmarkRun{
+			ModelID: "model-001", InstanceTypeID: "inst-001",
+			Framework: "vllm", FrameworkVersion: "0.4.0",
+			TensorParallelDegree: 1, Concurrency: 16,
+			InputSequenceLength: 128, OutputSequenceLength: 128,
+			DatasetName: "synthetic", RunType: "on_demand",
+			Status: status,
+		}
+		repo.CreateBenchmarkRun(ctx, run)
+	}
+
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	return repo, mux
+}
+
+func TestHandleListRuns_All(t *testing.T) {
+	_, mux := seedJobsServer()
+
+	req := httptest.NewRequest("GET", "/api/v1/jobs", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var items []database.RunListItem
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 4 {
+		t.Errorf("expected 4 items, got %d", len(items))
+	}
+}
+
+func TestHandleListRuns_FilterByStatus(t *testing.T) {
+	_, mux := seedJobsServer()
+
+	req := httptest.NewRequest("GET", "/api/v1/jobs?status=completed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var items []database.RunListItem
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 1 {
+		t.Errorf("expected 1 completed item, got %d", len(items))
+	}
+}
+
+func TestHandleListRuns_FilterByModel(t *testing.T) {
+	_, mux := seedJobsServer()
+
+	req := httptest.NewRequest("GET", "/api/v1/jobs?model=llama", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var items []database.RunListItem
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 4 {
+		t.Errorf("expected 4 llama items, got %d", len(items))
+	}
+}
+
+func TestHandleListRuns_Empty(t *testing.T) {
+	repo := database.NewMockRepo()
+	client := fake.NewSimpleClientset()
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/v1/jobs", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var items []database.RunListItem
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 0 {
+		t.Errorf("expected 0 items, got %d", len(items))
+	}
+}
+
+func TestHandleListRuns_Pagination(t *testing.T) {
+	_, mux := seedJobsServer()
+
+	req := httptest.NewRequest("GET", "/api/v1/jobs?limit=2&offset=0", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var items []database.RunListItem
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 2 {
+		t.Errorf("expected 2 items with limit=2, got %d", len(items))
+	}
+}
+
+func TestHandleCancelRun_NotFound(t *testing.T) {
+	_, mux := seedJobsServer()
+
+	req := httptest.NewRequest("POST", "/api/v1/runs/nonexistent/cancel", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleCancelRun_AlreadyCompleted(t *testing.T) {
+	repo, mux := seedJobsServer()
+
+	items, _ := repo.ListRuns(nil, database.RunFilter{Status: "completed"})
+	if len(items) == 0 {
+		t.Fatal("no completed runs")
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/runs/"+items[0].ID+"/cancel", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+}
+
+func TestHandleCancelRun_Success(t *testing.T) {
+	repo, mux := seedJobsServer()
+
+	items, _ := repo.ListRuns(nil, database.RunFilter{Status: "running"})
+	if len(items) == 0 {
+		t.Fatal("no running runs")
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/runs/"+items[0].ID+"/cancel", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	if got := repo.GetRunStatus(items[0].ID); got != "failed" {
+		t.Errorf("status = %s, want failed", got)
+	}
+}
+
+func TestHandleDeleteRun_NotFound(t *testing.T) {
+	_, mux := seedJobsServer()
+
+	req := httptest.NewRequest("DELETE", "/api/v1/runs/nonexistent", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleDeleteRun_Success(t *testing.T) {
+	repo, mux := seedJobsServer()
+
+	items, _ := repo.ListRuns(nil, database.RunFilter{Status: "completed"})
+	if len(items) == 0 {
+		t.Fatal("no completed runs")
+	}
+	runID := items[0].ID
+
+	req := httptest.NewRequest("DELETE", "/api/v1/runs/"+runID, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+
+	run, _ := repo.GetBenchmarkRun(nil, runID)
+	if run != nil {
+		t.Error("expected run to be deleted")
+	}
+}
+
+func TestHandleDeleteRun_CancelsActiveRun(t *testing.T) {
+	repo, mux := seedJobsServer()
+
+	items, _ := repo.ListRuns(nil, database.RunFilter{Status: "running"})
+	if len(items) == 0 {
+		t.Fatal("no running runs")
+	}
+	runID := items[0].ID
+
+	req := httptest.NewRequest("DELETE", "/api/v1/runs/"+runID, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+
+	run, _ := repo.GetBenchmarkRun(nil, runID)
+	if run != nil {
+		t.Error("expected run to be deleted")
+	}
+}

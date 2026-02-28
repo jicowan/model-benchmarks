@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -57,6 +58,24 @@ func (m *MockRepo) GetModelByHfID(_ context.Context, hfID, hfRevision string) (*
 	defer m.mu.Unlock()
 	key := hfID + "|" + hfRevision
 	return m.models[key], nil
+}
+
+func (m *MockRepo) EnsureModel(_ context.Context, hfID, hfRevision string) (*Model, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := hfID + "|" + hfRevision
+	if model, ok := m.models[key]; ok {
+		return model, nil
+	}
+	m.nextID++
+	model := &Model{
+		ID:         fmt.Sprintf("model-%08d", m.nextID),
+		HfID:       hfID,
+		HfRevision: hfRevision,
+		CreatedAt:  time.Now(),
+	}
+	m.models[key] = model
+	return model, nil
 }
 
 func (m *MockRepo) GetInstanceTypeByName(_ context.Context, name string) (*InstanceType, error) {
@@ -121,6 +140,80 @@ func (m *MockRepo) GetMetricsByRunID(_ context.Context, runID string) (*Benchmar
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.metrics[runID], nil
+}
+
+// ListRuns returns benchmark runs matching the given filter.
+func (m *MockRepo) ListRuns(_ context.Context, f RunFilter) ([]RunListItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var items []RunListItem
+	for _, run := range m.runs {
+		if f.Status != "" && run.Status != f.Status {
+			continue
+		}
+
+		// Resolve model for hf_id.
+		var modelHfID string
+		for _, mdl := range m.models {
+			if mdl.ID == run.ModelID {
+				modelHfID = mdl.HfID
+				break
+			}
+		}
+		if f.ModelID != "" && !strings.Contains(
+			strings.ToLower(modelHfID),
+			strings.ToLower(f.ModelID),
+		) {
+			continue
+		}
+
+		// Resolve instance type name.
+		var instName string
+		for _, it := range m.instTypes {
+			if it.ID == run.InstanceTypeID {
+				instName = it.Name
+				break
+			}
+		}
+
+		items = append(items, RunListItem{
+			ID:               run.ID,
+			ModelHfID:        modelHfID,
+			InstanceTypeName: instName,
+			Framework:        run.Framework,
+			RunType:          run.RunType,
+			Status:           run.Status,
+			CreatedAt:        run.CreatedAt,
+			StartedAt:        run.StartedAt,
+			CompletedAt:      run.CompletedAt,
+		})
+	}
+
+	// Apply limit.
+	limit := 50
+	if f.Limit > 0 && f.Limit <= 200 {
+		limit = f.Limit
+	}
+	if f.Offset > 0 && f.Offset < len(items) {
+		items = items[f.Offset:]
+	} else if f.Offset >= len(items) {
+		return nil, nil
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+
+	return items, nil
+}
+
+// DeleteRun removes a benchmark run and its metrics from the mock store.
+func (m *MockRepo) DeleteRun(_ context.Context, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.metrics, runID)
+	delete(m.runs, runID)
+	return nil
 }
 
 // ListCatalog returns catalog entries matching the given filter.

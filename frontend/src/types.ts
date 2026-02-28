@@ -88,7 +88,27 @@ export interface RunRequest {
   output_sequence_length: number;
   dataset_name: string;
   run_type: string;
+  max_model_len?: number;
   hf_token?: string;
+}
+
+export interface RunListItem {
+  id: string;
+  model_hf_id: string;
+  instance_type_name: string;
+  framework: string;
+  run_type: string;
+  status: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface RunListFilter {
+  status?: string;
+  model?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export type PricingTier = "on_demand" | "reserved_1yr" | "reserved_3yr";

@@ -7,6 +7,7 @@ import "context"
 // as a dependency in consumers to enable testing with mocks.
 type Repo interface {
 	GetModelByHfID(ctx context.Context, hfID, hfRevision string) (*Model, error)
+	EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error)
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)
 	UpdateRunStatus(ctx context.Context, runID, status string) error
@@ -14,6 +15,8 @@ type Repo interface {
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
 	ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, error)
+	ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, error)
+	DeleteRun(ctx context.Context, runID string) error
 }
 
 // Compile-time check that *Repository implements Repo.
