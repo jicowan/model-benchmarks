@@ -1,0 +1,5 @@
+FROM alpine:3.20
+RUN apk add --no-cache bash curl \
+    && curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq
+ENTRYPOINT ["/bin/bash"]

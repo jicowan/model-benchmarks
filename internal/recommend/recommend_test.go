@@ -284,6 +284,40 @@ func TestRecommendAlternatives_ShowsBothOptions(t *testing.T) {
 	}
 }
 
+func TestRecommend8B_SingleL4_MaxModelLen(t *testing.T) {
+	// DeepSeek-R1-Distill-Llama-8B on a single L4 (24 GiB).
+	// With ~1.2 GiB runtime overhead, ~5.4 GiB remains for KV cache,
+	// which supports ~44K tokens. roundDownContext caps at 32768.
+	model := ModelConfig{
+		ParameterCount:        8_030_261_248,
+		HiddenSize:            4096,
+		NumAttentionHeads:     32,
+		NumKeyValueHeads:      8,
+		NumHiddenLayers:       32,
+		MaxPositionEmbeddings: 32768,
+		TorchDtype:            "bfloat16",
+		ModelType:             "llama",
+	}
+	inst := InstanceSpec{
+		Name: "g6.2xlarge", AcceleratorType: "GPU", AcceleratorName: "L4",
+		AcceleratorCount: 1, AcceleratorMemoryGiB: 24,
+	}
+	rec := Recommend(model, inst, allInstances)
+
+	if !rec.Explanation.Feasible {
+		t.Fatalf("expected feasible: %s", rec.Explanation.Reason)
+	}
+	// KV cache has ~5.4 GiB → ~44K tokens → roundDownContext → 32768.
+	if rec.MaxModelLen != 32768 {
+		t.Errorf("max_model_len = %d, want 32768", rec.MaxModelLen)
+	}
+	// Concurrency should be reasonable (not 1).
+	if rec.Concurrency < 4 {
+		t.Errorf("concurrency = %d, want >= 4", rec.Concurrency)
+	}
+	t.Logf("recommended max_model_len = %d, concurrency = %d", rec.MaxModelLen, rec.Concurrency)
+}
+
 func TestModelMemoryBytes(t *testing.T) {
 	// 7B params in BF16 = 7e9 * 2 = 14e9 bytes ≈ 13 GiB
 	mem := modelMemoryBytes(7_000_000_000, "bfloat16")

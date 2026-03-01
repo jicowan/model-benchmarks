@@ -44,6 +44,16 @@ echo "  Instances: $NUM_INSTANCES"
 echo "  Dry run:   $DRY_RUN"
 echo ""
 
+# ── Deduplication: fetch all existing runs and build a lookup set ──
+echo "Fetching existing runs for deduplication..."
+EXISTING_RUNS=$(curl -sf "$API_URL/api/v1/jobs?limit=10000" 2>/dev/null || echo "[]")
+
+# Build a newline-separated list of "model_hf_id|instance_type_name" keys.
+EXISTING_KEYS=$(echo "$EXISTING_RUNS" | yq -r '.[] | .model_hf_id + "|" + .instance_type_name' 2>/dev/null || echo "")
+EXISTING_COUNT=$(echo "$EXISTING_KEYS" | grep -c . 2>/dev/null || echo "0")
+echo "  Found $EXISTING_COUNT existing runs."
+echo ""
+
 submitted=0
 skipped=0
 
@@ -68,6 +78,14 @@ for mi in $(seq 0 $((NUM_MODELS - 1))); do
       inf2|trn1|trn2) FRAMEWORK="vllm-neuron";;
       *)              FRAMEWORK="vllm";;
     esac
+
+    # ── Skip if this model+instance combination already exists ──
+    LOOKUP_KEY="${MODEL_HF_ID}|${INSTANCE}"
+    if echo "$EXISTING_KEYS" | grep -qF "$LOOKUP_KEY"; then
+      echo "  ✓ $MODEL_HF_ID on $INSTANCE — already exists, skipping"
+      skipped=$((skipped + 1))
+      continue
+    fi
 
     echo "  → $MODEL_HF_ID on $INSTANCE (tp=$TP, framework=$FRAMEWORK)"
 
@@ -113,4 +131,4 @@ EOF
 done
 
 echo ""
-echo "Done. Submitted: $submitted, Skipped: $skipped"
+echo "Done. Submitted: $submitted, Skipped (existing): $skipped"

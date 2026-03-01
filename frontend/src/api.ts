@@ -1,6 +1,7 @@
 import type {
   CatalogEntry,
   CatalogFilter,
+  CatalogSeedStatus,
   BenchmarkRun,
   BenchmarkMetrics,
   InstanceType,
@@ -99,6 +100,14 @@ export async function getRecommendation(
   const headers: Record<string, string> = {};
   if (hfToken) headers["X-HF-Token"] = hfToken;
   return fetchJSON<RecommendResponse>(`${BASE}/recommend?${params}`, { headers });
+}
+
+export async function seedCatalog(): Promise<{ job_name: string; status: string }> {
+  return fetchJSON(`${BASE}/catalog/seed`, { method: "POST" });
+}
+
+export async function getCatalogSeedStatus(): Promise<CatalogSeedStatus> {
+  return fetchJSON<CatalogSeedStatus>(`${BASE}/catalog/seed`);
 }
 
 export async function cancelRun(id: string): Promise<void> {

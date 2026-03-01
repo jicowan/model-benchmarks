@@ -41,6 +41,14 @@ spec:
             - name: LOADGEN_IMAGE
               value: "{{ .Values.image.loadgen.repository }}:{{ .Values.image.loadgen.tag | default "latest" }}"
             {{- end }}
+            - name: TOOLS_IMAGE
+              value: "{{ .Values.image.tools.repository }}:{{ .Values.image.tools.tag }}"
+            - name: CATALOG_CONFIGMAP
+              value: "{{ include "accelbench.fullname" . }}-catalog-scripts"
+            {{- if or .Values.huggingface.token .Values.huggingface.existingSecret }}
+            - name: HF_SECRET_NAME
+              value: "{{ include "accelbench.hfSecretName" . }}"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

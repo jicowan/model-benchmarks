@@ -182,6 +182,13 @@ export interface InstanceType {
   memory_gib: number;
 }
 
+export interface CatalogSeedStatus {
+  job_name?: string;
+  status: "none" | "active" | "succeeded" | "failed";
+  started_at?: string;
+  completed_at?: string;
+}
+
 export interface CatalogFilter {
   model?: string;
   model_family?: string;

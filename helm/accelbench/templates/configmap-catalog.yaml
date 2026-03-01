@@ -1,0 +1,14 @@
+{{- if .Values.catalogSeed.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "accelbench.fullname" . }}-catalog-scripts
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+data:
+  seed-catalog.sh: |
+    {{- .Files.Get "files/seed-catalog.sh" | nindent 4 }}
+  catalog-matrix.yaml: |
+    {{- .Files.Get "files/catalog-matrix.yaml" | nindent 4 }}
+{{- end }}

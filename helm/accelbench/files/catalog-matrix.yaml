@@ -1,0 +1,135 @@
+# AccelBench Catalog Matrix
+# Defines which model x instance type combinations to benchmark.
+# The seed script iterates over this matrix and calls POST /api/v1/runs for each.
+
+defaults:
+  framework_version: "v0.6.6"
+  concurrency: 16
+  input_sequence_length: 512
+  output_sequence_length: 256
+  dataset_name: "sharegpt"
+
+models:
+  - hf_id: "meta-llama/Llama-3.1-8B-Instruct"
+    family: llama
+    parameter_count: 8000000000
+
+  - hf_id: "meta-llama/Llama-3.1-70B-Instruct"
+    family: llama
+    parameter_count: 70000000000
+
+  - hf_id: "meta-llama/Llama-3.3-70B-Instruct"
+    family: llama
+    parameter_count: 70000000000
+
+  - hf_id: "mistralai/Mistral-7B-Instruct-v0.3"
+    family: mistral
+    parameter_count: 7000000000
+
+  - hf_id: "mistralai/Mixtral-8x7B-Instruct-v0.1"
+    family: mistral
+    parameter_count: 46700000000
+
+  - hf_id: "Qwen/Qwen2.5-7B-Instruct"
+    family: qwen
+    parameter_count: 7000000000
+
+  - hf_id: "Qwen/Qwen2.5-72B-Instruct"
+    family: qwen
+    parameter_count: 72000000000
+
+  - hf_id: "google/gemma-2-9b-it"
+    family: gemma
+    parameter_count: 9000000000
+
+  - hf_id: "google/gemma-2-27b-it"
+    family: gemma
+    parameter_count: 27000000000
+
+  - hf_id: "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+    family: deepseek
+    parameter_count: 8000000000
+
+  - hf_id: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
+    family: deepseek
+    parameter_count: 70000000000
+
+  - hf_id: "microsoft/Phi-4"
+    family: phi
+    parameter_count: 14000000000
+
+# Instance type to benchmark configuration.
+# tp = tensor_parallel_degree, framework is auto-selected by accelerator type.
+# Models are matched to instances based on accelerator memory requirements.
+instance_configs:
+  # --- GPU instances ---
+  # 8B-class models (need ~16 GiB, fit on single GPU)
+  - instance: g5.xlarge
+    tp: 1
+    max_params: 10000000000
+
+  - instance: g5.2xlarge
+    tp: 1
+    max_params: 10000000000
+
+  - instance: g6.xlarge
+    tp: 1
+    max_params: 10000000000
+
+  - instance: g6e.xlarge
+    tp: 1
+    max_params: 15000000000
+
+  - instance: g6e.2xlarge
+    tp: 1
+    max_params: 30000000000
+
+  # 70B-class models (need ~140 GiB FP16, need multi-GPU)
+  - instance: g5.48xlarge
+    tp: 8
+    min_params: 40000000000
+
+  - instance: g6e.48xlarge
+    tp: 8
+    min_params: 40000000000
+
+  - instance: p4d.24xlarge
+    tp: 8
+    min_params: 40000000000
+
+  - instance: p5.48xlarge
+    tp: 8
+    min_params: 40000000000
+
+  - instance: p5e.48xlarge
+    tp: 8
+    min_params: 40000000000
+
+  # --- Neuron instances ---
+  - instance: inf2.xlarge
+    tp: 2
+    max_params: 10000000000
+
+  - instance: inf2.8xlarge
+    tp: 2
+    max_params: 10000000000
+
+  - instance: inf2.24xlarge
+    tp: 12
+    min_params: 40000000000
+
+  - instance: inf2.48xlarge
+    tp: 24
+    min_params: 40000000000
+
+  - instance: trn1.2xlarge
+    tp: 2
+    max_params: 10000000000
+
+  - instance: trn1.32xlarge
+    tp: 16
+    min_params: 40000000000
+
+  - instance: trn2.48xlarge
+    tp: 32
+    min_params: 40000000000

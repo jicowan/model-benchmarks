@@ -127,6 +127,16 @@ func kvCachePerTokenBytes(cfg ModelConfig) float64 {
 	return 2 * float64(cfg.NumHiddenLayers) * float64(cfg.NumKeyValueHeads) * headDim * 2
 }
 
+// inferenceOverheadBytes estimates non-weight, non-KV GPU memory used by vLLM.
+// This covers the CUDA context/runtime (~0.5 GiB), vLLM worker and tokenizer
+// (~0.2 GiB), and CUDA graph captures (~0.3-0.5 GiB). Captured graphs reuse a
+// shared activation buffer pool, so the total is roughly constant regardless of
+// model size. Empirically measured at 1-1.5 GiB across 7B-70B models.
+func inferenceOverheadBytes(cfg ModelConfig) float64 {
+	_ = cfg // reserved for future model-dependent adjustments
+	return 1.2 * gibBytes
+}
+
 // nativeDtype returns the native dtype string, defaulting to "bfloat16".
 func nativeDtype(cfg ModelConfig) string {
 	if cfg.TorchDtype != "" {
@@ -277,9 +287,16 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec) 
 	rec.Explanation.Feasible = true
 
 	// Calculate max model length.
+	// Beyond raw weights, vLLM consumes GPU memory for:
+	//   1. CUDA context + runtime: ~0.5 GiB (fixed)
+	//   2. CUDA graph captures: vLLM pre-captures ~35 graphs for different
+	//      batch sizes (sum ≈ 3400 tokens). Each graph allocates per-layer
+	//      activation buffers proportional to hidden_size and FFN width.
+	//      FFN intermediate_size ≈ 3.5 × hidden_size for gated architectures.
 	kvPerToken := kvCachePerTokenBytes(cfg)
 	effectiveModelMem := modelMemoryBytes(cfg.ParameterCount, chosenQuant)
-	remainingBytes := totalUsableBytes - effectiveModelMem
+	runtimeOverhead := inferenceOverheadBytes(cfg)
+	remainingBytes := totalUsableBytes - effectiveModelMem - runtimeOverhead
 	if remainingBytes < 0 {
 		remainingBytes = 0
 	}

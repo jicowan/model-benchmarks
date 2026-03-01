@@ -7,13 +7,20 @@ import (
 	"log"
 	"net/http"
 	"errors"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/recommend"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -47,6 +54,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/instance-types", s.handleListInstanceTypes)
 	mux.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
 	mux.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
+	mux.HandleFunc("POST /api/v1/catalog/seed", s.handleCatalogSeed)
+	mux.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +371,179 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, rows)
 }
+
+const (
+	seedNamespace = "accelbench"
+	seedLabelKey  = "accelbench/role"
+	seedLabelVal  = "catalog-seed"
+)
+
+func (s *Server) handleCatalogSeed(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	toolsImage := os.Getenv("TOOLS_IMAGE")
+	if toolsImage == "" {
+		writeError(w, http.StatusInternalServerError, "TOOLS_IMAGE not configured")
+		return
+	}
+	configMap := os.Getenv("CATALOG_CONFIGMAP")
+	if configMap == "" {
+		writeError(w, http.StatusInternalServerError, "CATALOG_CONFIGMAP not configured")
+		return
+	}
+
+	// Check for active seed jobs.
+	jobs, err := s.client.BatchV1().Jobs(seedNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: seedLabelKey + "=" + seedLabelVal,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list seed jobs")
+		return
+	}
+	for _, j := range jobs.Items {
+		if j.Status.Active > 0 {
+			writeError(w, http.StatusConflict, fmt.Sprintf("A catalog seed job is already running: %s", j.Name))
+			return
+		}
+	}
+
+	// Build the Job spec.
+	jobName := fmt.Sprintf("catalog-seed-%d", time.Now().Unix())
+	backoffLimit := int32(1)
+	ttl := int32(86400)
+
+	env := []corev1.EnvVar{
+		{
+			Name:  "API_URL",
+			Value: fmt.Sprintf("http://accelbench-api.%s.svc.cluster.local:8080", seedNamespace),
+		},
+	}
+	if secretName := os.Getenv("HF_SECRET_NAME"); secretName != "" {
+		env = append(env, corev1.EnvVar{
+			Name: "HF_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+					Key:                  "HF_TOKEN",
+					Optional:             boolPtr(true),
+				},
+			},
+		})
+	}
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: seedNamespace,
+			Labels:    map[string]string{seedLabelKey: seedLabelVal},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttl,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
+						{
+							Name:    "catalog-seed",
+							Image:   toolsImage,
+							Command: []string{"/bin/bash", "/scripts/seed-catalog.sh"},
+							Env:     env,
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "scripts", MountPath: "/scripts"},
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("500m"),
+									corev1.ResourceMemory: resource.MustParse("256Mi"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1"),
+									corev1.ResourceMemory: resource.MustParse("512Mi"),
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "scripts",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: configMap},
+								},
+							},
+						},
+					},
+					NodeSelector: map[string]string{"accelbench/node-type": "system"},
+				},
+			},
+		},
+	}
+
+	created, err := s.client.BatchV1().Jobs(seedNamespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create seed job: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"job_name": created.Name,
+		"status":   "active",
+	})
+}
+
+func (s *Server) handleCatalogSeedStatus(w http.ResponseWriter, r *http.Request) {
+	jobs, err := s.client.BatchV1().Jobs(seedNamespace).List(r.Context(), metav1.ListOptions{
+		LabelSelector: seedLabelKey + "=" + seedLabelVal,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list seed jobs")
+		return
+	}
+
+	if len(jobs.Items) == 0 {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "none"})
+		return
+	}
+
+	// Sort by creation timestamp descending, pick most recent.
+	sort.Slice(jobs.Items, func(i, j int) bool {
+		return jobs.Items[i].CreationTimestamp.After(jobs.Items[j].CreationTimestamp.Time)
+	})
+	latest := jobs.Items[0]
+
+	status := seedJobStatus(&latest)
+	resp := map[string]any{
+		"job_name": latest.Name,
+		"status":   status,
+	}
+	if latest.Status.StartTime != nil {
+		resp["started_at"] = latest.Status.StartTime.Format(time.RFC3339)
+	}
+	if latest.Status.CompletionTime != nil {
+		resp["completed_at"] = latest.Status.CompletionTime.Format(time.RFC3339)
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func seedJobStatus(job *batchv1.Job) string {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return "succeeded"
+		}
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return "failed"
+		}
+	}
+	if job.Status.Active > 0 {
+		return "active"
+	}
+	// Job exists but hasn't started yet — treat as active.
+	return "active"
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")

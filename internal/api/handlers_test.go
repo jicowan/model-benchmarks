@@ -11,6 +11,9 @@ import (
 
 	"github.com/accelbench/accelbench/internal/database"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -634,5 +637,274 @@ func TestHandleDeleteRun_CancelsActiveRun(t *testing.T) {
 	run, _ := repo.GetBenchmarkRun(nil, runID)
 	if run != nil {
 		t.Error("expected run to be deleted")
+	}
+}
+
+// --- Catalog Seed API tests ---
+
+func setupSeedServer() (*Server, *http.ServeMux) {
+	repo := seedRepo()
+	client := fake.NewSimpleClientset()
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	return srv, mux
+}
+
+func TestHandleCatalogSeed_MissingEnv(t *testing.T) {
+	t.Setenv("TOOLS_IMAGE", "")
+	t.Setenv("CATALOG_CONFIGMAP", "")
+
+	_, mux := setupSeedServer()
+
+	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestHandleCatalogSeed_Success(t *testing.T) {
+	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
+	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
+
+	_, mux := setupSeedServer()
+
+	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["job_name"] == "" {
+		t.Error("response missing job_name")
+	}
+	if resp["status"] != "active" {
+		t.Errorf("status = %s, want active", resp["status"])
+	}
+}
+
+func TestHandleCatalogSeed_ConflictWhenActive(t *testing.T) {
+	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
+	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
+
+	repo := seedRepo()
+	// Pre-create an active seed Job in the fake client.
+	activeJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "catalog-seed-existing",
+			Namespace: seedNamespace,
+			Labels:    map[string]string{seedLabelKey: seedLabelVal},
+		},
+		Status: batchv1.JobStatus{Active: 1},
+	}
+	client := fake.NewSimpleClientset(activeJob)
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusConflict, w.Body.String())
+	}
+}
+
+func TestHandleCatalogSeed_AllowsAfterCompleted(t *testing.T) {
+	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
+	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
+
+	repo := seedRepo()
+	completedJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "catalog-seed-old",
+			Namespace: seedNamespace,
+			Labels:    map[string]string{seedLabelKey: seedLabelVal},
+		},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	client := fake.NewSimpleClientset(completedJob)
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+}
+
+func TestHandleCatalogSeedStatus_None(t *testing.T) {
+	_, mux := setupSeedServer()
+
+	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["status"] != "none" {
+		t.Errorf("status = %s, want none", resp["status"])
+	}
+}
+
+func TestHandleCatalogSeedStatus_Active(t *testing.T) {
+	repo := seedRepo()
+	now := metav1.Now()
+	activeJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "catalog-seed-123",
+			Namespace:         seedNamespace,
+			Labels:            map[string]string{seedLabelKey: seedLabelVal},
+			CreationTimestamp: now,
+		},
+		Status: batchv1.JobStatus{
+			Active:    1,
+			StartTime: &now,
+		},
+	}
+	client := fake.NewSimpleClientset(activeJob)
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["status"] != "active" {
+		t.Errorf("status = %v, want active", resp["status"])
+	}
+	if resp["job_name"] != "catalog-seed-123" {
+		t.Errorf("job_name = %v, want catalog-seed-123", resp["job_name"])
+	}
+}
+
+func TestHandleCatalogSeedStatus_Succeeded(t *testing.T) {
+	repo := seedRepo()
+	now := metav1.Now()
+	completedJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "catalog-seed-456",
+			Namespace:         seedNamespace,
+			Labels:            map[string]string{seedLabelKey: seedLabelVal},
+			CreationTimestamp: now,
+		},
+		Status: batchv1.JobStatus{
+			StartTime:      &now,
+			CompletionTime: &now,
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	client := fake.NewSimpleClientset(completedJob)
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["status"] != "succeeded" {
+		t.Errorf("status = %v, want succeeded", resp["status"])
+	}
+	if resp["completed_at"] == nil {
+		t.Error("expected completed_at to be set")
+	}
+}
+
+func TestHandleCatalogSeedStatus_MostRecent(t *testing.T) {
+	repo := seedRepo()
+	older := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	newer := metav1.Now()
+	jobs := []batchv1.Job{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "catalog-seed-old",
+				Namespace:         seedNamespace,
+				Labels:            map[string]string{seedLabelKey: seedLabelVal},
+				CreationTimestamp: older,
+			},
+			Status: batchv1.JobStatus{
+				Conditions: []batchv1.JobCondition{
+					{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "catalog-seed-new",
+				Namespace:         seedNamespace,
+				Labels:            map[string]string{seedLabelKey: seedLabelVal},
+				CreationTimestamp: newer,
+			},
+			Status: batchv1.JobStatus{Active: 1},
+		},
+	}
+	client := fake.NewSimpleClientset(&jobs[0], &jobs[1])
+	srv := NewServer(repo, client)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["job_name"] != "catalog-seed-new" {
+		t.Errorf("job_name = %v, want catalog-seed-new (most recent)", resp["job_name"])
+	}
+	if resp["status"] != "active" {
+		t.Errorf("status = %v, want active", resp["status"])
+	}
+}
+
+func TestHandleCatalogSeed_WithHFSecret(t *testing.T) {
+	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
+	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
+	t.Setenv("HF_SECRET_NAME", "my-hf-secret")
+
+	_, mux := setupSeedServer()
+
+	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
 	}
 }

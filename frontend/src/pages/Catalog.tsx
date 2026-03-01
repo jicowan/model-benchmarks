@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -8,8 +8,8 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { useNavigate } from "react-router-dom";
-import { listCatalog } from "../api";
-import type { CatalogEntry, CatalogFilter } from "../types";
+import { listCatalog, seedCatalog, getCatalogSeedStatus } from "../api";
+import type { CatalogEntry, CatalogFilter, CatalogSeedStatus } from "../types";
 import FilterBar from "../components/FilterBar";
 
 function fmtNum(v: number | undefined, d = 1): string {
@@ -28,19 +28,70 @@ export default function Catalog() {
   const [loading, setLoading] = useState(true);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [seedStatus, setSeedStatus] = useState<CatalogSeedStatus["status"]>("none");
+  const [seedError, setSeedError] = useState<string | null>(null);
+  const [seedFlash, setSeedFlash] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigate = useNavigate();
 
-  const fetchData = (filter: CatalogFilter = {}) => {
+  const fetchData = useCallback((filter: CatalogFilter = {}) => {
     setLoading(true);
     listCatalog({ ...filter, limit: 500 })
       .then(setData)
       .catch(console.error)
       .finally(() => setLoading(false));
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getCatalogSeedStatus();
+        setSeedStatus(s.status);
+        if (s.status === "succeeded") {
+          stopPolling();
+          setSeedFlash(true);
+          fetchData();
+          setTimeout(() => setSeedFlash(false), 3000);
+        } else if (s.status === "failed") {
+          stopPolling();
+          setSeedError("Seed job failed");
+          setTimeout(() => setSeedError(null), 5000);
+        }
+      } catch {
+        stopPolling();
+      }
+    }, 5000);
+  }, [stopPolling, fetchData]);
+
+  const handleSeed = async () => {
+    setSeedError(null);
+    try {
+      await seedCatalog();
+      setSeedStatus("active");
+      startPolling();
+    } catch (err: any) {
+      setSeedError(err.message || "Failed to start seed job");
+      setTimeout(() => setSeedError(null), 5000);
+    }
   };
 
   useEffect(() => {
     fetchData();
-  }, []);
+    // Check if a seed is already running on mount.
+    getCatalogSeedStatus().then((s) => {
+      setSeedStatus(s.status);
+      if (s.status === "active") startPolling();
+    }).catch(() => {});
+    return stopPolling;
+  }, [fetchData, startPolling, stopPolling]);
 
   const columns = useMemo<ColumnDef<CatalogEntry>[]>(
     () => [
@@ -151,16 +202,41 @@ export default function Catalog() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Benchmark Catalog</h1>
-        {selected.size > 0 && (
+        <div className="flex items-center gap-3">
+          {seedFlash && (
+            <span className="text-sm text-green-600 font-medium">Seed complete</span>
+          )}
+          {seedError && (
+            <span className="text-sm text-red-600">{seedError}</span>
+          )}
           <button
-            onClick={() =>
-              navigate(`/compare?ids=${Array.from(selected).join(",")}`)
-            }
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            onClick={handleSeed}
+            disabled={seedStatus === "active"}
+            className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Compare ({selected.size})
+            {seedStatus === "active" ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Seeding...
+              </span>
+            ) : (
+              "Seed Catalog"
+            )}
           </button>
-        )}
+          {selected.size > 0 && (
+            <button
+              onClick={() =>
+                navigate(`/compare?ids=${Array.from(selected).join(",")}`)
+              }
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Compare ({selected.size})
+            </button>
+          )}
+        </div>
       </div>
 
       <FilterBar onFilter={fetchData} />

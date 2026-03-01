@@ -4,19 +4,22 @@ namespace: accelbench
 # -- Container images
 image:
   api:
-    repository: ghcr.io/accelbench/api
+    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-api
     tag: "latest"
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   web:
-    repository: ghcr.io/accelbench/web
+    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-web
     tag: "latest"
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   tools:
-    repository: ghcr.io/accelbench/tools
+    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-tools
     tag: "latest"
     pullPolicy: IfNotPresent
+  loadgen:
+    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-loadgen
+    tag: "latest"
   migration:
-    repository: ghcr.io/accelbench/migration
+    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-migration
     tag: "latest"
     pullPolicy: IfNotPresent
 
@@ -113,17 +116,9 @@ pricingRefresh:
       cpu: 500m
       memory: 512Mi
 
-# -- Catalog refresh CronJob
-catalogRefresh:
+# -- Catalog seed (on-demand via API, no schedule)
+catalogSeed:
   enabled: true
-  schedule: "0 2 * * 0"  # Weekly, Sunday at 02:00 UTC
-  resources:
-    requests:
-      cpu: 500m
-      memory: 256Mi
-    limits:
-      cpu: "1"
-      memory: 512Mi
 
 # -- HuggingFace token (optional, for gated model access)
 huggingface:

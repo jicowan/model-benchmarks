@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	readinessTimeout = 15 * time.Minute
+	readinessTimeout = 25 * time.Minute
 	readinessPoll    = 10 * time.Second
 	jobTimeout       = 2 * time.Hour
 	jobPoll          = 15 * time.Second
@@ -191,12 +191,12 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 }
 
 func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg RunConfig) error {
-	cpuReq := "4"
-	memReq := "16Gi"
-	if cfg.InstanceType.MemoryGiB > 256 {
-		cpuReq = "8"
-		memReq = "32Gi"
-	}
+	// Reserve headroom for kubelet, kube-proxy, and OS overhead.
+	// Request ~75% of instance vCPUs and ~85% of memory.
+	vcpus := cfg.InstanceType.VCPUs
+	memGiB := cfg.InstanceType.MemoryGiB
+	cpuReq := fmt.Sprintf("%d", max(1, vcpus*3/4))
+	memReq := fmt.Sprintf("%dGi", max(1, memGiB*85/100))
 
 	yamlStr, err := manifest.RenderModelDeployment(manifest.ModelDeploymentParams{
 		Name:                 name,
