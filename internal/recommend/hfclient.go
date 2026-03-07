@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// HFClientInterface defines the methods required for fetching model metadata.
+// This allows for easy mocking in tests.
+type HFClientInterface interface {
+	FetchModelConfig(modelID, hfToken string) (*ModelConfig, error)
+}
+
 // HFClient fetches model metadata from the HuggingFace API.
 type HFClient struct {
 	httpClient *http.Client

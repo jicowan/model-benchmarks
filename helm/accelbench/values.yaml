@@ -36,8 +36,7 @@ api:
     limits:
       cpu: "1"
       memory: 1Gi
-  nodeSelector:
-    accelbench/node-type: system
+  nodeSelector: {}
   tolerations: []
   # -- Service account for API (IRSA)
   serviceAccount:
@@ -61,8 +60,7 @@ web:
     limits:
       cpu: 500m
       memory: 256Mi
-  nodeSelector:
-    accelbench/node-type: system
+  nodeSelector: {}
   tolerations: []
 
 # -- Ingress

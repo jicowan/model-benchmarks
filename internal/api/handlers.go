@@ -29,7 +29,7 @@ type Server struct {
 	repo     database.Repo
 	orch     *orchestrator.Orchestrator
 	client   kubernetes.Interface
-	hfClient *recommend.HFClient
+	hfClient recommend.HFClientInterface
 }
 
 // NewServer creates a new API server.
@@ -39,6 +39,16 @@ func NewServer(repo database.Repo, client kubernetes.Interface) *Server {
 		orch:     orchestrator.New(client, repo),
 		client:   client,
 		hfClient: recommend.NewHFClient(),
+	}
+}
+
+// NewServerWithHFClient creates a new API server with a custom HFClient (for testing).
+func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfClient recommend.HFClientInterface) *Server {
+	return &Server{
+		repo:     repo,
+		orch:     orchestrator.New(client, repo),
+		client:   client,
+		hfClient: hfClient,
 	}
 }
 
@@ -127,6 +137,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		DatasetName:          req.DatasetName,
 		RunType:              req.RunType,
 		MinDurationSeconds:   req.MinDurationSeconds,
+		MaxModelLen:          req.MaxModelLen,
 		Status:               "pending",
 	}
 
@@ -291,17 +302,6 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if Neuron instance.
-	if !strings.EqualFold(instType.AcceleratorType, "gpu") {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"explanation": map[string]any{
-				"feasible": false,
-				"reason":   "Configuration suggestions are not yet available for Neuron instances.",
-			},
-		})
-		return
-	}
-
 	// Fetch model config from HuggingFace.
 	modelCfg, err := s.hfClient.FetchModelConfig(modelID, hfToken)
 	if err != nil {
@@ -339,7 +339,12 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		AcceleratorMemoryGiB: instType.AcceleratorMemoryGiB,
 	}
 
-	rec := recommend.Recommend(*modelCfg, inst, allSpecs)
+	var rec *recommend.Recommendation
+	if strings.EqualFold(instType.AcceleratorType, "neuron") {
+		rec = recommend.RecommendNeuron(*modelCfg, inst)
+	} else {
+		rec = recommend.Recommend(*modelCfg, inst, allSpecs)
+	}
 	writeJSON(w, http.StatusOK, rec)
 }
 

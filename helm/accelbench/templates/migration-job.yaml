@@ -32,6 +32,4 @@ spec:
                   key: {{ .Values.database.existingSecretKey | default "DATABASE_URL" }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
-      nodeSelector:
-        accelbench/node-type: system
 {{- end }}

@@ -97,18 +97,26 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		    (model_id, instance_type_id, framework, framework_version,
 		     tensor_parallel_degree, quantization, concurrency,
 		     input_sequence_length, output_sequence_length, dataset_name,
-		     run_type, status, min_duration_seconds)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		     run_type, status, min_duration_seconds, max_model_len)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
 		run.InputSequenceLength, run.OutputSequenceLength, run.DatasetName,
-		run.RunType, run.Status, run.MinDurationSeconds,
+		run.RunType, run.Status, run.MinDurationSeconds, nullableInt(run.MaxModelLen),
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
 	}
 	return id, nil
+}
+
+// nullableInt returns nil if v is 0, otherwise returns a pointer to v.
+func nullableInt(v int) *int {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 // UpdateRunStatus updates the status and optional timestamps of a benchmark run.
@@ -198,21 +206,25 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 // GetBenchmarkRun returns a benchmark run by ID.
 func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error) {
 	var run BenchmarkRun
+	var maxModelLen *int
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, model_id, instance_type_id, framework, framework_version,
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, min_duration_seconds, status, superseded, started_at, completed_at, created_at
+		        run_type, min_duration_seconds, max_model_len, status, superseded, started_at, completed_at, created_at
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
-		&run.RunType, &run.MinDurationSeconds, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt)
+		&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query benchmark run: %w", err)
+	}
+	if maxModelLen != nil {
+		run.MaxModelLen = *maxModelLen
 	}
 	return &run, nil
 }

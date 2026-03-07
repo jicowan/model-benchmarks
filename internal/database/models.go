@@ -39,6 +39,7 @@ type BenchmarkRun struct {
 	DatasetName           string     `json:"dataset_name"`
 	RunType               string     `json:"run_type"`
 	MinDurationSeconds    int        `json:"min_duration_seconds"`
+	MaxModelLen           int        `json:"max_model_len,omitempty"`
 	Status                string     `json:"status"`
 	Superseded            bool       `json:"superseded"`
 	StartedAt             *time.Time `json:"started_at,omitempty"`

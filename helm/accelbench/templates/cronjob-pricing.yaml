@@ -38,6 +38,4 @@ spec:
                   value: {{ .Values.pricingRefresh.regions | default "us-east-2" | quote }}
               resources:
                 {{- toYaml .Values.pricingRefresh.resources | nindent 16 }}
-          nodeSelector:
-            accelbench/node-type: system
 {{- end }}
