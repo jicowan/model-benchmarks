@@ -37,7 +37,7 @@ spec:
 {{- if eq .AcceleratorType "gpu" }}
           image: vllm/vllm-openai:{{ .FrameworkVersion }}
 {{- else }}
-          image: vllm/vllm-neuron:{{ .FrameworkVersion }}
+          image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
 {{- end }}
           ports:
             - name: http
@@ -46,6 +46,7 @@ spec:
           env:
             - name: HF_TOKEN
               value: "{{ .HfToken }}"
+{{- if eq .AcceleratorType "gpu" }}
           args:
             - "--model"
             - "{{ .ModelHfID }}"
@@ -69,6 +70,23 @@ spec:
 {{- if gt .MaxModelLen 0 }}
             - "--max-model-len"
             - "{{ .MaxModelLen }}"
+{{- end }}
+{{- else }}
+          command: ["vllm"]
+          args:
+            - "serve"
+            - "{{ .ModelHfID }}"
+            - "--port"
+            - "8000"
+            - "--tensor-parallel-size"
+            - "{{ .TensorParallelDegree }}"
+            - "--trust-remote-code"
+            - "--block-size"
+            - "32"
+{{- if gt .MaxModelLen 0 }}
+            - "--max-model-len"
+            - "{{ .MaxModelLen }}"
+{{- end }}
 {{- end }}
           resources:
             requests:

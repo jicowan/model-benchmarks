@@ -127,7 +127,7 @@ func TestValidNeuronTPDegree(t *testing.T) {
 		maxCores int
 		wantTP   int
 	}{
-		{"1 core sufficient, roundup to 1", 1, 32, 8, 2, 1},
+		{"1 core sufficient but prefer TP>=2 for KV heads", 1, 32, 8, 2, 2},
 		{"needs 2, power of 2", 2, 32, 8, 8, 2},
 		{"needs 3, roundup to 4", 3, 32, 8, 8, 4},
 		{"needs 5, roundup to 8", 5, 64, 8, 8, 8},

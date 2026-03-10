@@ -89,7 +89,7 @@ func TestRenderModelDeployment_Neuron(t *testing.T) {
 		name string
 		want string
 	}{
-		{"neuron image", "vllm/vllm-neuron:v0.6.0"},
+		{"neuron image", "public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04"},
 		{"neuron toleration", "aws.amazon.com/neuron"},
 		{"neuron resource", `aws.amazon.com/neuron: "1"`}, // 2 NeuronCores / 2 = 1 Neuron device
 		{"instance type", "node.kubernetes.io/instance-type: inf2.xlarge"},

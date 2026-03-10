@@ -72,8 +72,17 @@ func nextPowerOfTwo(n int) int {
 
 // validNeuronTPDegree finds a valid TP degree for Neuron instances.
 // Constraints: must be power of 2 AND divide both num_attention_heads and num_key_value_heads.
+// When numKVHeads > 1, we prefer TP >= 2 to actually distribute KV heads and avoid
+// the GQA-to-MHA conversion which causes significant memory overhead during compilation.
 func validNeuronTPDegree(minTP, numHeads, numKVHeads, maxCores int) int {
-	tp := nextPowerOfTwo(minTP)
+	// When model has multiple KV heads, prefer TP >= 2 to distribute them
+	// and avoid GQA-to-MHA conversion overhead
+	effectiveMin := minTP
+	if numKVHeads > 1 && effectiveMin < 2 {
+		effectiveMin = 2
+	}
+
+	tp := nextPowerOfTwo(effectiveMin)
 	for tp <= maxCores {
 		if numHeads%tp == 0 && numKVHeads%tp == 0 {
 			return tp
