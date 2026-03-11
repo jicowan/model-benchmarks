@@ -28,6 +28,7 @@ type InstanceSpec struct {
 	AcceleratorName      string `json:"accelerator_name"`
 	AcceleratorCount     int    `json:"accelerator_count"`
 	AcceleratorMemoryGiB int    `json:"accelerator_memory_gib"`
+	MemoryGiB            int    `json:"memory_gib"` // host memory
 }
 
 // Recommendation holds the recommended configuration values.

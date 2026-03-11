@@ -328,6 +328,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 			AcceleratorName:      it.AcceleratorName,
 			AcceleratorCount:     it.AcceleratorCount,
 			AcceleratorMemoryGiB: it.AcceleratorMemoryGiB,
+			MemoryGiB:            it.MemoryGiB,
 		})
 	}
 
@@ -337,6 +338,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		AcceleratorName:      instType.AcceleratorName,
 		AcceleratorCount:     instType.AcceleratorCount,
 		AcceleratorMemoryGiB: instType.AcceleratorMemoryGiB,
+		MemoryGiB:            instType.MemoryGiB,
 	}
 
 	var rec *recommend.Recommendation

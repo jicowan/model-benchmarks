@@ -134,6 +134,21 @@ func RecommendNeuron(cfg ModelConfig, inst InstanceSpec) *Recommendation {
 		return rec
 	}
 
+	// Check host memory for Neuron compilation
+	// Compilation requires significant host RAM, with ratio decreasing for larger models
+	modelGiB := modelMemBytes / gibBytes
+	multiplier := 10.0 / math.Log2(modelGiB+2) // logarithmic decay: smaller models need higher ratio
+	minHostMemGiB := int(modelGiB*multiplier) + 32
+	if minHostMemGiB < 64 {
+		minHostMemGiB = 64 // minimum 64 GiB for any Neuron compilation
+	}
+	if inst.MemoryGiB > 0 && inst.MemoryGiB < minHostMemGiB {
+		rec.Explanation.Feasible = false
+		rec.Explanation.Reason = fmt.Sprintf("%s has %d GiB host memory, but Neuron compilation requires ~%d GiB. Use a larger instance (e.g., inf2.8xlarge with 128 GiB or inf2.24xlarge with 384 GiB).",
+			inst.Name, inst.MemoryGiB, minHostMemGiB)
+		return rec
+	}
+
 	// Check if model fits
 	if modelMemBytes > usableBytes {
 		rec.Explanation.Feasible = false

@@ -8,27 +8,27 @@ import (
 var (
 	inf2xlarge = InstanceSpec{
 		Name: "inf2.xlarge", AcceleratorType: "Neuron", AcceleratorName: "Inferentia2",
-		AcceleratorCount: 2, AcceleratorMemoryGiB: 32, // 2 cores × 16 GiB
+		AcceleratorCount: 2, AcceleratorMemoryGiB: 32, MemoryGiB: 16, // 2 cores × 16 GiB, 16 GiB host
 	}
 	inf2_8xlarge = InstanceSpec{
 		Name: "inf2.8xlarge", AcceleratorType: "Neuron", AcceleratorName: "Inferentia2",
-		AcceleratorCount: 2, AcceleratorMemoryGiB: 32,
+		AcceleratorCount: 2, AcceleratorMemoryGiB: 32, MemoryGiB: 128, // 128 GiB host
 	}
 	inf2_24xlarge = InstanceSpec{
 		Name: "inf2.24xlarge", AcceleratorType: "Neuron", AcceleratorName: "Inferentia2",
-		AcceleratorCount: 12, AcceleratorMemoryGiB: 192, // 12 cores × 16 GiB
+		AcceleratorCount: 12, AcceleratorMemoryGiB: 192, MemoryGiB: 384, // 12 cores × 16 GiB, 384 GiB host
 	}
 	trn1_2xlarge = InstanceSpec{
 		Name: "trn1.2xlarge", AcceleratorType: "Neuron", AcceleratorName: "Trainium",
-		AcceleratorCount: 2, AcceleratorMemoryGiB: 32, // 2 cores × 16 GiB
+		AcceleratorCount: 2, AcceleratorMemoryGiB: 32, MemoryGiB: 32, // 2 cores × 16 GiB, 32 GiB host
 	}
 	trn1_32xlarge = InstanceSpec{
 		Name: "trn1.32xlarge", AcceleratorType: "Neuron", AcceleratorName: "Trainium",
-		AcceleratorCount: 32, AcceleratorMemoryGiB: 512, // 32 cores × 16 GiB
+		AcceleratorCount: 32, AcceleratorMemoryGiB: 512, MemoryGiB: 512, // 32 cores × 16 GiB, 512 GiB host
 	}
 	trn2_48xlarge = InstanceSpec{
 		Name: "trn2.48xlarge", AcceleratorType: "Neuron", AcceleratorName: "Trainium2",
-		AcceleratorCount: 64, AcceleratorMemoryGiB: 6144, // 64 cores × 96 GiB
+		AcceleratorCount: 64, AcceleratorMemoryGiB: 6144, MemoryGiB: 768, // 64 cores × 96 GiB, 768 GiB host
 	}
 )
 
@@ -162,9 +162,19 @@ func TestIsNeuronSupportedArchitecture(t *testing.T) {
 }
 
 func TestRecommendNeuron_Mistral7B_Inf2Xlarge(t *testing.T) {
-	// Mistral 7B (~14.5 GiB BF16) on inf2.xlarge (2 cores × 16 GiB = 32 GiB).
-	// Should fit with TP=2 (power of 2).
+	// Mistral 7B (~14.5 GiB BF16) on inf2.xlarge (16 GiB host memory).
+	// Should be INFEASIBLE due to insufficient host memory for compilation.
 	rec := RecommendNeuron(mistral7B, inf2xlarge)
+
+	if rec.Explanation.Feasible {
+		t.Fatalf("expected infeasible due to host memory, got feasible")
+	}
+}
+
+func TestRecommendNeuron_Mistral7B_Inf2_8xlarge(t *testing.T) {
+	// Mistral 7B (~14.5 GiB BF16) on inf2.8xlarge (128 GiB host memory).
+	// Should fit with TP=2 (power of 2).
+	rec := RecommendNeuron(mistral7B, inf2_8xlarge)
 
 	if !rec.Explanation.Feasible {
 		t.Fatalf("expected feasible: %s", rec.Explanation.Reason)

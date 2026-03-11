@@ -116,7 +116,12 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
+{{- if eq .AcceleratorType "gpu" }}
             failureThreshold: 120
+{{- else }}
+            {{- /* Neuron compilation can take 30-60+ minutes; allow up to 90 minutes */}}
+            failureThreshold: 540
+{{- end }}
           livenessProbe:
             httpGet:
               path: /health
