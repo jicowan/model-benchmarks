@@ -158,6 +158,33 @@ func validTPDegree(minTP, numHeads, numKVHeads, maxGPUs int) int {
 	return maxGPUs
 }
 
+// maxValidTPDegree returns the largest valid TP degree that fits the model and
+// divides attention heads evenly. This maximizes GPU utilization.
+func maxValidTPDegree(minTP, numHeads, numKVHeads, maxGPUs int) int {
+	best := minTP
+	for tp := minTP; tp <= maxGPUs; tp++ {
+		if numHeads%tp == 0 && numKVHeads%tp == 0 {
+			best = tp
+		}
+	}
+	return best
+}
+
+// ValidTPOptions returns all valid TP degrees for the given model and instance.
+// Used by the UI to populate a dropdown for user override.
+func ValidTPOptions(numHeads, numKVHeads, maxGPUs int) []int {
+	var options []int
+	for tp := 1; tp <= maxGPUs; tp++ {
+		if numHeads%tp == 0 && numKVHeads%tp == 0 {
+			options = append(options, tp)
+		}
+	}
+	if len(options) == 0 {
+		options = []int{1}
+	}
+	return options
+}
+
 // roundDownContext rounds a token count down to the nearest common context length.
 func roundDownContext(tokens int) int {
 	common := []int{131072, 65536, 32768, 16384, 8192, 4096, 2048, 1024, 512}
@@ -171,7 +198,8 @@ func roundDownContext(tokens int) int {
 
 // Recommend computes configuration recommendations given model and instance specs.
 // allInstances is used to suggest a larger instance when the model doesn't fit.
-func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec) *Recommendation {
+// tpOverride, if > 0, forces a specific tensor parallel degree instead of the default.
+func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, tpOverride int) *Recommendation {
 	dtype := nativeDtype(cfg)
 	perDeviceGiB := float64(inst.AcceleratorMemoryGiB) / float64(inst.AcceleratorCount)
 	perDeviceBytes := perDeviceGiB * gibBytes
@@ -205,7 +233,14 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec) 
 
 	if modelMemNative <= totalUsableBytes {
 		// Fits at native precision.
-		tp := validTPDegree(minGPUs, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)
+		// Default to max valid TP to use all GPUs; allow user override.
+		tp := maxValidTPDegree(minGPUs, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)
+		if tpOverride > 0 && tpOverride >= minGPUs && tpOverride <= inst.AcceleratorCount {
+			// Validate override divides attention heads
+			if cfg.NumAttentionHeads%tpOverride == 0 && cfg.NumKeyValueHeads%tpOverride == 0 {
+				tp = tpOverride
+			}
+		}
 		rec.TensorParallelDegree = tp
 		rec.Quantization = nil
 		chosenQuant = dtype
@@ -297,7 +332,10 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec) 
 	kvPerToken := kvCachePerTokenBytes(cfg)
 	effectiveModelMem := modelMemoryBytes(cfg.ParameterCount, chosenQuant)
 	runtimeOverhead := inferenceOverheadBytes(cfg)
-	remainingBytes := totalUsableBytes - effectiveModelMem - runtimeOverhead
+	// Use memory from the GPUs actually being used (TP), not total instance memory.
+	// With TP=1 on a 4-GPU instance, only 1 GPU's memory is available for KV cache.
+	tpUsableBytes := usablePerDevice * float64(rec.TensorParallelDegree)
+	remainingBytes := tpUsableBytes - effectiveModelMem - runtimeOverhead
 	if remainingBytes < 0 {
 		remainingBytes = 0
 	}
@@ -309,8 +347,8 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec) 
 	}
 	maxModelLen = roundDownContext(maxModelLen)
 	rec.MaxModelLen = maxModelLen
-	rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache after model weights. Supports up to %d tokens (capped by context window).",
-		remainingBytes/gibBytes, maxModelLen)
+	rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens.",
+		remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen)
 
 	// Adjust input/output if model context is too small.
 	if maxModelLen < rec.InputSequenceLength+rec.OutputSequenceLength {

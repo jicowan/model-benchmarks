@@ -142,7 +142,7 @@ func TestRoundDownContext(t *testing.T) {
 func TestRecommendMistral7B_G5Xlarge(t *testing.T) {
 	// Mistral 7B (~14.5 GiB in BF16) on g5.xlarge (1 A10G, 24 GiB).
 	// Should fit at native precision with TP=1.
-	rec := Recommend(mistral7B, g5xlarge, allInstances)
+	rec := Recommend(mistral7B, g5xlarge, allInstances, 0)
 
 	if !rec.Explanation.Feasible {
 		t.Fatal("expected feasible recommendation")
@@ -170,7 +170,7 @@ func TestRecommendMistral7B_G5Xlarge(t *testing.T) {
 func TestRecommendMistral7B_G5_12xlarge(t *testing.T) {
 	// Mistral 7B on g5.12xlarge (4 A10G, 96 GiB).
 	// Should fit easily at native precision.
-	rec := Recommend(mistral7B, g5_12xlarge, allInstances)
+	rec := Recommend(mistral7B, g5_12xlarge, allInstances, 0)
 
 	if !rec.Explanation.Feasible {
 		t.Fatal("expected feasible recommendation")
@@ -178,20 +178,20 @@ func TestRecommendMistral7B_G5_12xlarge(t *testing.T) {
 	if rec.Quantization != nil {
 		t.Errorf("quantization = %v, want nil", rec.Quantization)
 	}
-	// TP should be 1 since model fits on one GPU.
-	if rec.TensorParallelDegree != 1 {
-		t.Errorf("TP = %d, want 1", rec.TensorParallelDegree)
+	// TP defaults to max (4) to use all GPUs, even though model fits on 1.
+	if rec.TensorParallelDegree != 4 {
+		t.Errorf("TP = %d, want 4", rec.TensorParallelDegree)
 	}
-	// Lots of memory → large context should be possible.
-	if rec.MaxModelLen < 4096 {
-		t.Errorf("max_model_len = %d, want >= 4096", rec.MaxModelLen)
+	// With 4 GPUs, we have more memory → large context should be possible.
+	if rec.MaxModelLen < 32768 {
+		t.Errorf("max_model_len = %d, want >= 32768", rec.MaxModelLen)
 	}
 }
 
 func TestRecommendLlama70B_G5Xlarge_Infeasible(t *testing.T) {
 	// Llama 70B (~140 GiB in BF16) on g5.xlarge (24 GiB).
 	// Even INT4 (~35 GiB) doesn't fit on 24 GiB.
-	rec := Recommend(llama70B, g5xlarge, allInstances)
+	rec := Recommend(llama70B, g5xlarge, allInstances, 0)
 
 	if rec.Explanation.Feasible {
 		t.Fatal("expected infeasible recommendation")
@@ -208,7 +208,7 @@ func TestRecommendLlama70B_G5Xlarge_Infeasible(t *testing.T) {
 func TestRecommendLlama70B_P5_48xlarge(t *testing.T) {
 	// Llama 70B on p5.48xlarge (8 H100, 640 GiB).
 	// Should fit at native BF16 with TP=2 or more.
-	rec := Recommend(llama70B, p5_48xlarge, allInstances)
+	rec := Recommend(llama70B, p5_48xlarge, allInstances, 0)
 
 	if !rec.Explanation.Feasible {
 		t.Fatalf("expected feasible: %s", rec.Explanation.Reason)
@@ -229,7 +229,7 @@ func TestRecommendLlama70B_G5_48xlarge_NeedsQuantization(t *testing.T) {
 	// Doesn't fit at BF16 (192*0.9=172.8 < 140... actually it does barely).
 	// Let's recalculate: 140 GiB < 172.8 GiB — it fits!
 	// But per-device: 140/8=17.5 GiB per GPU, each has 24 GiB usable 21.6 — fits.
-	rec := Recommend(llama70B, g5_48xlarge, allInstances)
+	rec := Recommend(llama70B, g5_48xlarge, allInstances, 0)
 
 	if !rec.Explanation.Feasible {
 		t.Fatalf("expected feasible: %s", rec.Explanation.Reason)
@@ -262,7 +262,7 @@ func TestRecommendAlternatives_ShowsBothOptions(t *testing.T) {
 		AcceleratorCount: 2, AcceleratorMemoryGiB: 48,
 	}
 
-	rec := Recommend(model, inst, allInstances)
+	rec := Recommend(model, inst, allInstances, 0)
 
 	if !rec.Explanation.Feasible {
 		t.Fatalf("expected feasible with quantization: %s", rec.Explanation.Reason)
@@ -302,7 +302,7 @@ func TestRecommend8B_SingleL4_MaxModelLen(t *testing.T) {
 		Name: "g6.2xlarge", AcceleratorType: "GPU", AcceleratorName: "L4",
 		AcceleratorCount: 1, AcceleratorMemoryGiB: 24,
 	}
-	rec := Recommend(model, inst, allInstances)
+	rec := Recommend(model, inst, allInstances, 0)
 
 	if !rec.Explanation.Feasible {
 		t.Fatalf("expected feasible: %s", rec.Explanation.Reason)

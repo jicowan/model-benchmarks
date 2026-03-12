@@ -291,6 +291,12 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 
 	hfToken := r.Header.Get("X-HF-Token")
 
+	// Optional TP override from user
+	var tpOverride int
+	if tpStr := r.URL.Query().Get("tp"); tpStr != "" {
+		fmt.Sscanf(tpStr, "%d", &tpOverride)
+	}
+
 	// Look up instance type from DB.
 	instType, err := s.repo.GetInstanceTypeByName(r.Context(), instanceName)
 	if err != nil {
@@ -345,9 +351,19 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(instType.AcceleratorType, "neuron") {
 		rec = recommend.RecommendNeuron(*modelCfg, inst)
 	} else {
-		rec = recommend.Recommend(*modelCfg, inst, allSpecs)
+		rec = recommend.Recommend(*modelCfg, inst, allSpecs, tpOverride)
 	}
-	writeJSON(w, http.StatusOK, rec)
+
+	// Add valid TP options for UI dropdown
+	type responseWithOptions struct {
+		*recommend.Recommendation
+		ValidTPOptions []int `json:"valid_tp_options,omitempty"`
+	}
+	resp := responseWithOptions{
+		Recommendation: rec,
+		ValidTPOptions: recommend.ValidTPOptions(modelCfg.NumAttentionHeads, modelCfg.NumKeyValueHeads, instType.AcceleratorCount),
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleListInstanceTypes(w http.ResponseWriter, r *http.Request) {
