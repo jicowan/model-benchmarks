@@ -59,31 +59,44 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 		}
 	}
 
-	// Strategy 2: Look for end marker and find JSON by brace matching.
-	// Container runtimes may truncate long lines, corrupting both the BEGIN
-	// marker and the opening brace. The END marker on its own line survives.
-	// Find the closing "}" before END and match braces backwards.
+	// Strategy 2: Look for end marker and find JSON by structure.
+	// Container runtimes may truncate long lines, corrupting the BEGIN marker
+	// and potentially the opening '{'. The END marker on its own line typically survives.
+	// Search for '"requests":' which uniquely identifies our JSON payload.
 	if endIdx := bytes.Index(data, endMarker); endIdx >= 0 {
 		chunk := data[:endIdx]
-		// Find the last '}' which closes our JSON object
-		closingBrace := bytes.LastIndexByte(chunk, '}')
-		if closingBrace >= 0 {
-			// Scan backwards counting braces to find matching '{'
-			depth := 1
-			jsonStart := -1
-			for i := closingBrace - 1; i >= 0 && depth > 0; i-- {
-				switch chunk[i] {
-				case '}':
-					depth++
-				case '{':
-					depth--
-					if depth == 0 {
+		// Find '"requests":' which marks the start of our JSON content
+		reqMarker := []byte(`"requests":`)
+		if reqIdx := bytes.Index(chunk, reqMarker); reqIdx >= 0 {
+			// Find the closing '}' - it's right before the END marker
+			closingBrace := bytes.LastIndexByte(chunk, '}')
+			if closingBrace > reqIdx {
+				// Search backwards from "requests" to find the opening '{'
+				jsonStart := -1
+				for i := reqIdx - 1; i >= 0; i-- {
+					if chunk[i] == '{' {
 						jsonStart = i
+						break
+					}
+					// Stop if we hit a non-whitespace character that isn't '{'
+					if chunk[i] != ' ' && chunk[i] != '\t' && chunk[i] != '\n' && chunk[i] != '\r' {
+						break
 					}
 				}
-			}
-			if jsonStart >= 0 {
-				jsonData := bytes.TrimSpace(chunk[jsonStart : closingBrace+1])
+
+				var jsonData []byte
+				if jsonStart >= 0 {
+					jsonData = chunk[jsonStart : closingBrace+1]
+				} else {
+					// Opening '{' was truncated - reconstruct it
+					// Find where "requests" line starts and prepend '{'
+					lineStart := reqIdx
+					for lineStart > 0 && chunk[lineStart-1] != '\n' {
+						lineStart--
+					}
+					jsonData = append([]byte("{"), chunk[lineStart:closingBrace+1]...)
+				}
+
 				if err := json.Unmarshal(jsonData, &out); err == nil && len(out.Requests) > 0 {
 					return &out, nil
 				}
