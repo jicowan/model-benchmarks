@@ -109,6 +109,9 @@ resource "kubectl_manifest" "gpu_node_pool" {
             - key: karpenter.sh/capacity-type
               operator: In
               values: ["on-demand"]
+          taints:
+            - key: nvidia.com/gpu
+              effect: NoSchedule
           nodeClassRef:
             group: karpenter.k8s.aws
             kind: EC2NodeClass
@@ -142,6 +145,9 @@ resource "kubectl_manifest" "neuron_node_pool" {
             - key: karpenter.sh/capacity-type
               operator: In
               values: ["on-demand"]
+          taints:
+            - key: aws.amazon.com/neuron
+              effect: NoSchedule
           nodeClassRef:
             group: karpenter.k8s.aws
             kind: EC2NodeClass

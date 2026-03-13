@@ -169,6 +169,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "results" {
     id     = "expire-old-results"
     status = "Enabled"
 
+    filter {
+      prefix = "results/"
+    }
+
     expiration {
       days = 30
     }
