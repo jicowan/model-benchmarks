@@ -67,6 +67,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
 	mux.HandleFunc("POST /api/v1/catalog/seed", s.handleCatalogSeed)
 	mux.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
+	mux.HandleFunc("POST /api/v1/admin/backfill-model-families", s.handleBackfillModelFamilies)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -577,4 +578,27 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+func (s *Server) handleBackfillModelFamilies(w http.ResponseWriter, r *http.Request) {
+	// Check if repo supports backfill (real repo does, mock may not)
+	type backfiller interface {
+		BackfillModelFamilies(ctx context.Context) (int64, error)
+	}
+	bf, ok := s.repo.(backfiller)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "backfill not supported")
+		return
+	}
+
+	updated, err := bf.BackfillModelFamilies(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"updated": updated,
+		"message": fmt.Sprintf("Updated model_family for %d models", updated),
+	})
 }

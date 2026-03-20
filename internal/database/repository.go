@@ -3,11 +3,39 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// extractModelFamily extracts the model family from a HuggingFace model ID.
+// Returns one of: llama, mistral, qwen, deepseek, gemma, phi, or empty string.
+// Priority: check organization name first (before /), then model name.
+func extractModelFamily(hfID string) string {
+	lower := strings.ToLower(hfID)
+	families := []string{"llama", "mistral", "qwen", "deepseek", "gemma", "phi"}
+
+	// Split into org and model name
+	parts := strings.SplitN(lower, "/", 2)
+	org := parts[0]
+
+	// Check organization name first (more reliable)
+	for _, f := range families {
+		if strings.Contains(org, f) {
+			return f
+		}
+	}
+
+	// Fall back to checking full ID (for cases like TinyLlama/...)
+	for _, f := range families {
+		if strings.Contains(lower, f) {
+			return f
+		}
+	}
+	return ""
+}
 
 // Repository provides database operations for benchmark data.
 type Repository struct {
@@ -57,18 +85,65 @@ func (r *Repository) EnsureModel(ctx context.Context, hfID, hfRevision string) (
 	if m != nil {
 		return m, nil
 	}
+
+	// Extract model family from HuggingFace ID
+	family := extractModelFamily(hfID)
+	var familyPtr *string
+	if family != "" {
+		familyPtr = &family
+	}
+
 	var created Model
 	err = r.pool.QueryRow(ctx,
-		`INSERT INTO models (hf_id, hf_revision)
-		 VALUES ($1, $2)
-		 ON CONFLICT (hf_id, hf_revision) DO UPDATE SET hf_id = EXCLUDED.hf_id
+		`INSERT INTO models (hf_id, hf_revision, model_family)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (hf_id, hf_revision) DO UPDATE SET model_family = COALESCE(models.model_family, EXCLUDED.model_family)
 		 RETURNING id, hf_id, hf_revision, model_family, parameter_count, created_at`,
-		hfID, hfRevision,
+		hfID, hfRevision, familyPtr,
 	).Scan(&created.ID, &created.HfID, &created.HfRevision, &created.ModelFamily, &created.ParameterCount, &created.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("upsert model: %w", err)
 	}
 	return &created, nil
+}
+
+// BackfillModelFamilies updates model_family for all models using the same
+// priority logic as extractModelFamily (org takes priority over model name).
+func (r *Repository) BackfillModelFamilies(ctx context.Context) (int64, error) {
+	var totalUpdated int64
+
+	// First pass: match by organization (higher priority)
+	// Process in order so that more specific orgs are checked first
+	families := []string{"deepseek", "llama", "mistral", "qwen", "gemma", "phi"}
+	for _, family := range families {
+		pattern := "%" + family + "%"
+		result, err := r.pool.Exec(ctx,
+			`UPDATE models SET model_family = $1
+			 WHERE model_family IS NULL
+			   AND LOWER(SPLIT_PART(hf_id, '/', 1)) LIKE $2`,
+			family, pattern,
+		)
+		if err != nil {
+			return totalUpdated, fmt.Errorf("backfill org %s: %w", family, err)
+		}
+		totalUpdated += result.RowsAffected()
+	}
+
+	// Second pass: match by full ID (for remaining NULL values)
+	for _, family := range families {
+		pattern := "%" + family + "%"
+		result, err := r.pool.Exec(ctx,
+			`UPDATE models SET model_family = $1
+			 WHERE model_family IS NULL AND LOWER(hf_id) LIKE $2`,
+			family, pattern,
+		)
+		if err != nil {
+			return totalUpdated, fmt.Errorf("backfill full %s: %w", family, err)
+		}
+		totalUpdated += result.RowsAffected()
+	}
+
+	return totalUpdated, nil
 }
 
 // GetInstanceTypeByName returns an instance type by name, or nil if not found.
