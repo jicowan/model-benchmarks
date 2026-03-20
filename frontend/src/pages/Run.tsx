@@ -44,7 +44,7 @@ export default function Run() {
       dataset_name: "sharegpt",
       max_model_len: Number(searchParams.get("max_model_len")) || 0,
       min_duration_seconds: 180,
-      hf_token: "",
+      hf_token: searchParams.get("hf_token") || "",
     };
   });
 

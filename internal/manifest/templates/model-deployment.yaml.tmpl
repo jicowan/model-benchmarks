@@ -102,11 +102,9 @@ spec:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
             limits:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
-{{- if gt .TensorParallelDegree 1 }}
           volumeMounts:
             - name: shm
               mountPath: /dev/shm
-{{- end }}
 {{- else }}
               {{- /* Neuron: accelerator_count is NeuronCores, but K8s resource is devices (cores/2) */}}
               aws.amazon.com/neuron: "{{ div .AcceleratorCount 2 }}"
@@ -140,7 +138,7 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-{{- if and (eq .AcceleratorType "gpu") (gt .TensorParallelDegree 1) }}
+{{- if eq .AcceleratorType "gpu" }}
       volumes:
         - name: shm
           emptyDir:

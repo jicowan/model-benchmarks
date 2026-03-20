@@ -77,6 +77,9 @@ export default function Estimate() {
     if (row.config.quantization) {
       params.set("quantization", row.config.quantization);
     }
+    if (hfToken) {
+      params.set("hf_token", hfToken);
+    }
     navigate(`/run?${params}`);
   }
 

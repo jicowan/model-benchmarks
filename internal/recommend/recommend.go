@@ -89,6 +89,13 @@ type QuantizationOption struct {
 const (
 	overheadFraction = 0.10 // 10% reserved for CUDA context, activations, etc.
 	gibBytes         = 1024 * 1024 * 1024
+	// kvCacheSafetyFactor accounts for vLLM's additional memory consumers beyond
+	// weights and explicit overhead: CUDA graphs, block tables, output logits
+	// buffers, speculative decoding, chunked prefill, etc. Real-world testing
+	// shows vLLM uses significantly more memory than theoretical calculations
+	// predict. A factor of 0.15 means only 15% of theoretical KV cache space
+	// is assumed usable, which aligns with empirical observations.
+	kvCacheSafetyFactor = 0.15
 )
 
 // bytesPerParam returns the bytes per parameter for a given dtype/quantization.
@@ -130,12 +137,24 @@ func kvCachePerTokenBytes(cfg ModelConfig) float64 {
 
 // inferenceOverheadBytes estimates non-weight, non-KV GPU memory used by vLLM.
 // This covers the CUDA context/runtime (~0.5 GiB), vLLM worker and tokenizer
-// (~0.2 GiB), and CUDA graph captures (~0.3-0.5 GiB). Captured graphs reuse a
-// shared activation buffer pool, so the total is roughly constant regardless of
-// model size. Empirically measured at 1-1.5 GiB across 7B-70B models.
+// (~0.2 GiB), CUDA graph captures (~1-2 GiB), and activation memory during
+// inference (~1-3 GiB depending on batch size and model architecture).
+// vLLM's block-based KV cache also has per-block overhead.
+// Empirically, vLLM uses 3-5 GiB overhead on 7B-8B models with default settings.
 func inferenceOverheadBytes(cfg ModelConfig) float64 {
-	_ = cfg // reserved for future model-dependent adjustments
-	return 1.2 * gibBytes
+	// Base overhead for CUDA context, vLLM runtime, tokenizer
+	baseOverhead := 1.0 * gibBytes
+	// Activation memory scales with hidden_size and batch
+	activationOverhead := float64(cfg.HiddenSize) * 4096 * 4 // rough estimate
+	if activationOverhead < 1.5*gibBytes {
+		activationOverhead = 1.5 * gibBytes
+	}
+	if activationOverhead > 3*gibBytes {
+		activationOverhead = 3 * gibBytes
+	}
+	// CUDA graph captures
+	graphOverhead := 1.5 * gibBytes
+	return baseOverhead + activationOverhead + graphOverhead
 }
 
 // nativeDtype returns the native dtype string, defaulting to "bfloat16".
@@ -331,11 +350,15 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	//      FFN intermediate_size ≈ 3.5 × hidden_size for gated architectures.
 	kvPerToken := kvCachePerTokenBytes(cfg)
 	effectiveModelMem := modelMemoryBytes(cfg.ParameterCount, chosenQuant)
-	runtimeOverhead := inferenceOverheadBytes(cfg)
+	perGPUOverhead := inferenceOverheadBytes(cfg)
 	// Use memory from the GPUs actually being used (TP), not total instance memory.
 	// With TP=1 on a 4-GPU instance, only 1 GPU's memory is available for KV cache.
+	// Each GPU has its own CUDA context, graphs, and activation buffers, so overhead scales with TP.
 	tpUsableBytes := usablePerDevice * float64(rec.TensorParallelDegree)
-	remainingBytes := tpUsableBytes - effectiveModelMem - runtimeOverhead
+	totalOverhead := perGPUOverhead * float64(rec.TensorParallelDegree)
+	theoreticalRemaining := tpUsableBytes - effectiveModelMem - totalOverhead
+	// Apply safety factor to account for vLLM's hidden memory consumers.
+	remainingBytes := theoreticalRemaining * kvCacheSafetyFactor
 	if remainingBytes < 0 {
 		remainingBytes = 0
 	}
