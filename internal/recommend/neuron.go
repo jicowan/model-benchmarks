@@ -5,6 +5,35 @@ import (
 	"math"
 )
 
+// Neuron-specific constants (different from GPU/vLLM settings)
+const (
+	// Neuron uses more conservative memory utilization due to compilation overhead
+	neuronMemoryUtilization = 0.85
+)
+
+// neuronRuntimeOverheadBytes estimates Neuron-specific runtime overhead.
+// Neuron doesn't use CUDA graphs or vLLM's block tables, but has its own
+// overhead from the Neuron runtime and XLA compiled graphs.
+func neuronRuntimeOverheadBytes(cfg ModelConfig) float64 {
+	// Neuron runtime overhead is simpler than GPU vLLM:
+	// - No CUDA context (uses Neuron runtime instead)
+	// - No CUDA graphs (uses XLA compilation)
+	// - Simpler memory management
+	// Empirically, Neuron runtime uses ~2-3 GiB overhead
+	baseOverhead := 2.0 * gibBytes
+
+	// Activation memory still scales with model size
+	activationOverhead := float64(cfg.HiddenSize) * 2048 * 2 // smaller than GPU
+	if activationOverhead < 1.0*gibBytes {
+		activationOverhead = 1.0 * gibBytes
+	}
+	if activationOverhead > 2*gibBytes {
+		activationOverhead = 2 * gibBytes
+	}
+
+	return baseOverhead + activationOverhead
+}
+
 // NeuronInstanceSpec holds Neuron-specific instance specifications.
 type NeuronInstanceSpec struct {
 	Name                 string `json:"name"`
@@ -101,12 +130,12 @@ func RecommendNeuron(cfg ModelConfig, inst InstanceSpec) *Recommendation {
 	totalCores := inst.AcceleratorCount
 	totalMemGiB := memPerCore * totalCores
 	totalMemBytes := float64(totalMemGiB) * gibBytes
-	usableBytes := totalMemBytes * (1 - overheadFraction)
+	usableBytes := totalMemBytes * neuronMemoryUtilization
 
 	// Neuron only supports BF16
 	dtype := "bfloat16"
 	modelMemBytes := modelMemoryBytes(cfg.ParameterCount, dtype)
-	minCores := int(math.Ceil(modelMemBytes / (float64(memPerCore) * gibBytes * (1 - overheadFraction))))
+	minCores := int(math.Ceil(modelMemBytes / (float64(memPerCore) * gibBytes * neuronMemoryUtilization)))
 	if minCores < 1 {
 		minCores = 1
 	}
@@ -167,7 +196,7 @@ func RecommendNeuron(cfg ModelConfig, inst InstanceSpec) *Recommendation {
 
 	// Calculate max model length
 	kvPerToken := kvCachePerTokenBytes(cfg)
-	runtimeOverhead := inferenceOverheadBytes(cfg)
+	runtimeOverhead := neuronRuntimeOverheadBytes(cfg)
 	remainingBytes := usableBytes - modelMemBytes - runtimeOverhead
 	if remainingBytes < 0 {
 		remainingBytes = 0
