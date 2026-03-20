@@ -304,6 +304,38 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 	return &run, nil
 }
 
+// GetRunsByStatus returns all benchmark runs with the given status.
+func (r *Repository) GetRunsByStatus(ctx context.Context, status string) ([]BenchmarkRun, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, model_id, instance_type_id, framework, framework_version,
+		        tensor_parallel_degree, quantization, concurrency,
+		        input_sequence_length, output_sequence_length, dataset_name,
+		        run_type, min_duration_seconds, max_model_len, status, superseded, started_at, completed_at, created_at
+		 FROM benchmark_runs WHERE status = $1`, status,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query runs by status: %w", err)
+	}
+	defer rows.Close()
+
+	var runs []BenchmarkRun
+	for rows.Next() {
+		var run BenchmarkRun
+		var maxModelLen *int
+		if err := rows.Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
+			&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
+			&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
+			&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		if maxModelLen != nil {
+			run.MaxModelLen = *maxModelLen
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
 // GetMetricsByRunID returns benchmark metrics for a given run.
 func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error) {
 	var m BenchmarkMetrics

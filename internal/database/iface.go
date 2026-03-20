@@ -16,6 +16,7 @@ type Repo interface {
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
 	ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, error)
 	ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, error)
+	GetRunsByStatus(ctx context.Context, status string) ([]BenchmarkRun, error)
 	DeleteRun(ctx context.Context, runID string) error
 	UpsertPricing(ctx context.Context, p *Pricing) error
 	ListPricing(ctx context.Context, region string) ([]PricingRow, error)

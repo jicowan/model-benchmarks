@@ -460,3 +460,82 @@ func derefStr(s *string) string {
 	}
 	return *s
 }
+
+// RecoverOrphanedRuns checks for runs stuck in "running" status and attempts
+// to complete them by fetching results from S3. This handles cases where the
+// API restarted while a benchmark was in progress.
+func (o *Orchestrator) RecoverOrphanedRuns(ctx context.Context) {
+	runs, err := o.repo.GetRunsByStatus(ctx, "running")
+	if err != nil {
+		log.Printf("[recovery] failed to query running runs: %v", err)
+		return
+	}
+
+	if len(runs) == 0 {
+		log.Printf("[recovery] no orphaned runs found")
+		return
+	}
+
+	log.Printf("[recovery] found %d orphaned run(s)", len(runs))
+
+	bucket := os.Getenv("RESULTS_S3_BUCKET")
+	if bucket == "" {
+		log.Printf("[recovery] RESULTS_S3_BUCKET not set, marking runs as failed")
+		for _, run := range runs {
+			o.markFailed(ctx, run.ID)
+			o.cleanupResources(ctx, run.ID)
+		}
+		return
+	}
+
+	for _, run := range runs {
+		o.recoverRun(ctx, bucket, run.ID)
+	}
+}
+
+func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
+	shortID := runID[:8]
+	log.Printf("[recovery] attempting to recover run %s", shortID)
+
+	// Try to fetch results from S3
+	key := fmt.Sprintf("results/%s.json", runID)
+	data, err := o.readResultsFromS3(ctx, bucket, key)
+	if err != nil {
+		log.Printf("[recovery] %s: no S3 results found, marking as failed: %v", shortID, err)
+		o.markFailed(ctx, runID)
+		o.cleanupResources(ctx, runID)
+		return
+	}
+
+	log.Printf("[recovery] %s: found S3 results (%d bytes), processing", shortID, len(data))
+
+	// Parse and persist metrics
+	output, err := metrics.ParseLoadgenOutput(data)
+	if err != nil {
+		log.Printf("[recovery] %s: failed to parse results: %v", shortID, err)
+		o.markFailed(ctx, runID)
+		o.cleanupResources(ctx, runID)
+		return
+	}
+
+	computed := metrics.ComputeMetrics(output)
+	computed.RunID = runID
+	// Note: GPU metrics are lost since the scraper was killed
+
+	if err := o.repo.PersistMetrics(ctx, runID, computed); err != nil {
+		log.Printf("[recovery] %s: failed to persist metrics: %v", shortID, err)
+		o.markFailed(ctx, runID)
+		o.cleanupResources(ctx, runID)
+		return
+	}
+
+	log.Printf("[recovery] %s: successfully recovered and completed", shortID)
+	o.cleanupResources(ctx, runID)
+}
+
+func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
+	ns := defaultNamespace
+	modelName := fmt.Sprintf("bench-%s", runID[:8])
+	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
+	o.teardown(ctx, ns, modelName, loadgenName)
+}

@@ -138,6 +138,18 @@ func (m *MockRepo) GetBenchmarkRun(_ context.Context, runID string) (*BenchmarkR
 	return m.runs[runID], nil
 }
 
+func (m *MockRepo) GetRunsByStatus(_ context.Context, status string) ([]BenchmarkRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var runs []BenchmarkRun
+	for _, run := range m.runs {
+		if run.Status == status {
+			runs = append(runs, *run)
+		}
+	}
+	return runs, nil
+}
+
 func (m *MockRepo) GetMetricsByRunID(_ context.Context, runID string) (*BenchmarkMetrics, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

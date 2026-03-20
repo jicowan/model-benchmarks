@@ -52,6 +52,12 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 	}
 }
 
+// RecoverOrphanedRuns attempts to complete any runs that were left in "running"
+// status due to an API restart. Call this on server startup.
+func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
+	s.orch.RecoverOrphanedRuns(ctx)
+}
+
 // RegisterRoutes registers all API routes on the given mux.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/catalog", s.handleListCatalog)

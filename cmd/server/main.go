@@ -44,6 +44,9 @@ func main() {
 
 	srv := api.NewServer(repo, k8sClient)
 
+	// Recover any runs left in "running" status from a previous crash
+	go srv.RecoverOrphanedRuns(ctx)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
