@@ -92,6 +92,7 @@ export interface RunRequest {
   run_type: string;
   max_model_len?: number;
   min_duration_seconds?: number;
+  huge_pages_enabled?: boolean;
   hf_token?: string;
 }
 
@@ -165,6 +166,8 @@ export interface RecommendResponse {
   input_sequence_length: number;
   output_sequence_length: number;
   overhead_gib: number;
+  huge_pages_recommended: boolean;
+  huge_pages_reason?: string;
   explanation: RecommendExplanation;
   model_info: RecommendModelInfo;
   instance_info: RecommendInstanceInfo;

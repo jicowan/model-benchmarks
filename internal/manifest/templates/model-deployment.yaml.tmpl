@@ -102,6 +102,9 @@ spec:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
             limits:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
+{{- if .HugePagesEnabled }}
+              hugepages-2Mi: {{ .HugePagesLimit }}
+{{- end }}
           volumeMounts:
             - name: shm
               mountPath: /dev/shm
@@ -142,8 +145,13 @@ spec:
       volumes:
         - name: shm
           emptyDir:
+{{- if .HugePagesEnabled }}
+            medium: HugePages
+            sizeLimit: {{ .HugePagesLimit }}
+{{- else }}
             medium: Memory
             sizeLimit: 16Gi
+{{- end }}
 {{- end }}
 ---
 apiVersion: v1

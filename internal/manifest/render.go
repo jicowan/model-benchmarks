@@ -41,6 +41,8 @@ type ModelDeploymentParams struct {
 	MaxModelLen          int    // 0 = auto-detect from model config
 	CPURequest           string
 	MemoryRequest        string
+	HugePagesEnabled     bool   // Enable huge pages for /dev/shm
+	HugePagesLimit       string // e.g. "4Gi" - limit for hugepages-2Mi resource
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.

@@ -201,6 +201,12 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 	cpuReq := fmt.Sprintf("%d", max(1, vcpus*3/4))
 	memReq := fmt.Sprintf("%dGi", max(1, memGiB*85/100))
 
+	// Determine huge pages limit based on instance family
+	hugePagesLimit := "4Gi" // default for g5/g6
+	if cfg.InstanceType.Family == "p4d" || cfg.InstanceType.Family == "p5" || cfg.InstanceType.Family == "p5e" {
+		hugePagesLimit = "16Gi" // larger for A100/H100 instances
+	}
+
 	yamlStr, err := manifest.RenderModelDeployment(manifest.ModelDeploymentParams{
 		Name:                 name,
 		Namespace:            ns,
@@ -218,6 +224,8 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		MaxModelLen:          cfg.Request.MaxModelLen,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
+		HugePagesEnabled:     cfg.Request.HugePagesEnabled,
+		HugePagesLimit:       hugePagesLimit,
 	})
 	if err != nil {
 		return err

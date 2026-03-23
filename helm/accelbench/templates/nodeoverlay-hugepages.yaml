@@ -1,0 +1,29 @@
+{{/*
+Huge Pages Configuration for GPU Workloads
+
+The Karpenter NodeOverlay CRD (v1alpha1) currently supports capacity/pricing
+but NOT sysctl or kubelet configuration. To enable huge pages, configure
+the EC2NodeClass userData to allocate huge pages at boot time.
+
+Example EC2NodeClass patch for gpu nodes:
+
+  kubectl patch ec2nodeclass gpu --type=merge -p '
+  spec:
+    userData: |
+      MIME-Version: 1.0
+      Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+      --BOUNDARY
+      Content-Type: text/x-shellscript; charset="us-ascii"
+
+      #!/bin/bash
+      # Allocate 4096 x 2MB huge pages = 8 GiB
+      echo 4096 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+      sysctl -w vm.nr_hugepages=4096
+
+      --BOUNDARY--
+  '
+
+After configuring the EC2NodeClass, new GPU nodes will have huge pages allocated.
+The pod-level support (HugePagesEnabled toggle) will then work for benchmark runs.
+*/}}
