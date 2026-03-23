@@ -43,10 +43,6 @@ type Recommendation struct {
 	OutputSequenceLength int     `json:"output_sequence_length"`
 	OverheadGiB          float64 `json:"overhead_gib"` // Runtime overhead used (for display/tuning)
 
-	// Huge pages recommendation for multi-GPU workloads
-	HugePagesRecommended bool   `json:"huge_pages_recommended"`
-	HugePagesReason      string `json:"huge_pages_reason,omitempty"`
-
 	Explanation  Explanation  `json:"explanation"`
 	ModelInfo    ModelInfo    `json:"model_info"`
 	InstanceInfo InstanceInfo `json:"instance_info"`
@@ -462,13 +458,6 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	}
 	rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory with %d-token average sequence length.",
 		remainingBytes/gibBytes, int(avgSeqLen))
-
-	// Recommend huge pages for multi-GPU workloads (TP > 1)
-	// Huge pages improve NCCL inter-process communication via /dev/shm
-	if rec.TensorParallelDegree > 1 {
-		rec.HugePagesRecommended = true
-		rec.HugePagesReason = fmt.Sprintf("TP=%d uses NCCL for multi-GPU communication. Huge pages can improve /dev/shm performance by 2-5%%.", rec.TensorParallelDegree)
-	}
 
 	return rec
 }

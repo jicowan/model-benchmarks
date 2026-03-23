@@ -146,7 +146,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		RunType:              req.RunType,
 		MinDurationSeconds:   req.MinDurationSeconds,
 		MaxModelLen:          req.MaxModelLen,
-		HugePagesEnabled:     req.HugePagesEnabled,
 		Status:               "pending",
 	}
 

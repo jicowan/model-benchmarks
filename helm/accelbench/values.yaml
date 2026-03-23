@@ -129,11 +129,3 @@ results:
   # -- S3 bucket name for storing loadgen results (avoids log truncation)
   # Set from Terraform output: accelbench-results-<account-id>
   s3Bucket: ""
-
-# -- Huge pages for GPU workloads
-# Improves NCCL performance for multi-GPU (TP > 1) configurations.
-# NOTE: Requires manual EC2NodeClass userData configuration to allocate
-# huge pages at boot time. See nodeoverlay-hugepages.yaml for instructions.
-# The podLimit below is used by benchmark pods when huge_pages_enabled=true.
-hugepages:
-  podLimit: "4Gi"  # Default limit per benchmark pod (hugepages-2Mi)

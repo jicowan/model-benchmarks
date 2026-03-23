@@ -40,7 +40,6 @@ type BenchmarkRun struct {
 	RunType               string     `json:"run_type"`
 	MinDurationSeconds    int        `json:"min_duration_seconds"`
 	MaxModelLen           int        `json:"max_model_len,omitempty"`
-	HugePagesEnabled      bool       `json:"huge_pages_enabled"`
 	Status                string     `json:"status"`
 	Superseded            bool       `json:"superseded"`
 	StartedAt             *time.Time `json:"started_at,omitempty"`
@@ -103,6 +102,5 @@ type RunRequest struct {
 	RunType              string  `json:"run_type"`
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
 	MinDurationSeconds   int     `json:"min_duration_seconds,omitempty"`
-	HugePagesEnabled     bool    `json:"huge_pages_enabled,omitempty"`
 	HfToken              string  `json:"hf_token,omitempty"`
 }

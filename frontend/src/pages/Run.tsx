@@ -46,11 +46,10 @@ export default function Run() {
       min_duration_seconds: 180,
       hf_token: searchParams.get("hf_token") || "",
       overhead_gib: 0, // 0 = auto-calculated
-      huge_pages_enabled: false,
     };
   });
 
-  function set(key: string, value: string | number | boolean) {
+  function set(key: string, value: string | number) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -108,7 +107,6 @@ export default function Run() {
           input_sequence_length: rec.input_sequence_length,
           output_sequence_length: rec.output_sequence_length,
           overhead_gib: rec.overhead_gib,
-          huge_pages_enabled: rec.huge_pages_recommended,
         }));
       }
     } catch (err) {
@@ -193,7 +191,6 @@ export default function Run() {
         quantization: form.quantization || undefined,
         max_model_len: form.max_model_len || undefined,
         min_duration_seconds: form.min_duration_seconds || undefined,
-        huge_pages_enabled: form.huge_pages_enabled || undefined,
         hf_token: form.hf_token || undefined,
         run_type: "on_demand",
       });
@@ -543,9 +540,9 @@ export default function Run() {
           </div>
         </div>
 
-        {/* Advanced: Runtime Overhead and Huge Pages */}
+        {/* Advanced: Runtime Overhead */}
         {recommendation && recommendation.explanation.feasible && (
-          <div className="border-t border-gray-200 pt-4 space-y-4">
+          <div className="border-t border-gray-200 pt-4">
             <div className="flex items-center gap-4">
               <div className="w-48">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -569,29 +566,6 @@ export default function Run() {
                 Changing this recalculates max_model_len and concurrency.
               </p>
             </div>
-
-            {/* Huge Pages toggle - shown when TP > 1 */}
-            {form.tensor_parallel_degree > 1 && (
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.huge_pages_enabled}
-                    onChange={(e) => set("huge_pages_enabled", e.target.checked)}
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Enable Huge Pages</span>
-                </label>
-                {recommendation.huge_pages_recommended && (
-                  <span className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
-                    Recommended for TP={form.tensor_parallel_degree}
-                  </span>
-                )}
-                <p className="text-xs text-gray-500">
-                  {recommendation.huge_pages_reason || "Improves NCCL performance for multi-GPU workloads."}
-                </p>
-              </div>
-            )}
           </div>
         )}
 
