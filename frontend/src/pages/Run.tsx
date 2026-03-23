@@ -35,7 +35,7 @@ export default function Run() {
       model_hf_revision: "main",
       instance_type_name: instance,
       framework: isNeuron ? "vllm-neuron" : "vllm",
-      framework_version: "v0.6.6",
+      framework_version: "v0.7.3",
       tensor_parallel_degree: Number(searchParams.get("tp")) || 1,
       quantization: searchParams.get("quantization") || "",
       concurrency: Number(searchParams.get("concurrency")) || 16,
@@ -149,8 +149,11 @@ export default function Run() {
 
   // Recalculate recommendation when overhead is changed by user
   async function handleOverheadChange(newOverhead: number) {
-    set("overhead_gib", newOverhead);
-    if (!recommendation || !recommendation.explanation.feasible) return;
+    // If no recommendation yet, just update the form field
+    if (!recommendation || !recommendation.explanation.feasible) {
+      set("overhead_gib", newOverhead);
+      return;
+    }
 
     setRecalculating(true);
     try {
@@ -159,19 +162,20 @@ export default function Run() {
         form.instance_type_name,
         form.hf_token || undefined,
         form.tensor_parallel_degree,
-        newOverhead || undefined
+        newOverhead > 0 ? newOverhead : undefined
       );
       setRecommendation(rec);
-      if (rec.explanation.feasible) {
-        setForm((prev) => ({
-          ...prev,
-          max_model_len: rec.max_model_len,
-          concurrency: rec.concurrency,
-          overhead_gib: rec.overhead_gib,
-        }));
-      }
-    } catch {
-      // Silently fail - user can still proceed with manual values
+      // Update all form fields at once
+      setForm((prev) => ({
+        ...prev,
+        overhead_gib: newOverhead,
+        max_model_len: rec.explanation.feasible ? rec.max_model_len : prev.max_model_len,
+        concurrency: rec.explanation.feasible ? rec.concurrency : prev.concurrency,
+      }));
+    } catch (err) {
+      console.error("Overhead recalculation failed:", err);
+      // Still update the overhead field even if API fails
+      set("overhead_gib", newOverhead);
     } finally {
       setRecalculating(false);
     }

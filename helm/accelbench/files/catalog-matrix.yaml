@@ -4,7 +4,7 @@
 # optimal configuration, then submits the run via POST /api/v1/runs.
 
 defaults:
-  framework_version: "v0.6.6"
+  framework_version: "v0.7.3"
   dataset_name: "sharegpt"
 
 # Models to benchmark. Parameter count is fetched from HuggingFace.
