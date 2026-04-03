@@ -231,6 +231,55 @@ func (m *MockRepo) DeleteRun(_ context.Context, runID string) error {
 	return nil
 }
 
+// GetRunExportDetails returns the information needed to export a run's configuration.
+func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExportDetails, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	run, ok := m.runs[runID]
+	if !ok {
+		return nil, nil
+	}
+
+	// Resolve model.
+	var model *Model
+	for _, mdl := range m.models {
+		if mdl.ID == run.ModelID {
+			model = mdl
+			break
+		}
+	}
+
+	// Resolve instance type.
+	var inst *InstanceType
+	for _, it := range m.instTypes {
+		if it.ID == run.InstanceTypeID {
+			inst = it
+			break
+		}
+	}
+
+	if model == nil || inst == nil {
+		return nil, nil
+	}
+
+	return &RunExportDetails{
+		RunID:                runID,
+		ModelHfID:            model.HfID,
+		InstanceTypeName:     inst.Name,
+		Framework:            run.Framework,
+		FrameworkVersion:     run.FrameworkVersion,
+		TensorParallelDegree: run.TensorParallelDegree,
+		Quantization:         run.Quantization,
+		MaxModelLen:          run.MaxModelLen,
+		AcceleratorType:      inst.AcceleratorType,
+		AcceleratorCount:     inst.AcceleratorCount,
+		AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,
+		VCPUs:                inst.VCPUs,
+		MemoryGiB:            inst.MemoryGiB,
+	}, nil
+}
+
 func (m *MockRepo) UpsertPricing(_ context.Context, p *Pricing) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

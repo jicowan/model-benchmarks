@@ -185,3 +185,8 @@ export async function getOOMHistory(
   if (limit) params.set("limit", String(limit));
   return fetchJSON<OOMHistory>(`${BASE}/oom-history?${params}`);
 }
+
+// Export Kubernetes manifest
+export function getExportManifestUrl(runId: string): string {
+  return `${BASE}/runs/${runId}/export`;
+}

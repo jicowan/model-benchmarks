@@ -77,6 +77,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// PRD-15: Memory breakdown and OOM history
 	mux.HandleFunc("GET /api/v1/memory-breakdown", s.handleMemoryBreakdown)
 	mux.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
+	// Export Kubernetes manifest
+	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

@@ -9,7 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { getRun, getMetrics } from "../api";
+import { getRun, getMetrics, getExportManifestUrl } from "../api";
 import type { BenchmarkRun, BenchmarkMetrics } from "../types";
 import MetricCard from "../components/MetricCard";
 
@@ -214,6 +214,23 @@ export default function ResultDetail() {
                 <Bar dataKey="p99" fill="#bfdbfe" name="p99" />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+
+          {/* Export button */}
+          <div className="mt-8 pt-6 border-t border-gray-200">
+            <a
+              href={getExportManifestUrl(run.id)}
+              download
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export
+            </a>
+            <p className="mt-2 text-sm text-gray-500">
+              Download Kubernetes manifest to deploy this model configuration
+            </p>
           </div>
         </>
       )}

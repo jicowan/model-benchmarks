@@ -104,6 +104,59 @@ func (r *Repository) ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, 
 	return items, rows.Err()
 }
 
+// RunExportDetails contains all the information needed to export a run's
+// Kubernetes configuration, including joined model and instance type data.
+type RunExportDetails struct {
+	RunID                string
+	ModelHfID            string
+	InstanceTypeName     string
+	Framework            string
+	FrameworkVersion     string
+	TensorParallelDegree int
+	Quantization         *string
+	MaxModelLen          int
+	AcceleratorType      string
+	AcceleratorCount     int
+	AcceleratorMemoryGiB int
+	VCPUs                int
+	MemoryGiB            int
+}
+
+// GetRunExportDetails returns the information needed to export a run's
+// Kubernetes configuration. Returns nil if the run is not found.
+func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*RunExportDetails, error) {
+	var d RunExportDetails
+	var maxModelLen *int
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			br.id, m.hf_id, it.name,
+			br.framework, br.framework_version,
+			br.tensor_parallel_degree, br.quantization, br.max_model_len,
+			it.accelerator_type, it.accelerator_count, it.accelerator_memory_gib,
+			it.vcpus, it.memory_gib
+		FROM benchmark_runs br
+		JOIN models m ON br.model_id = m.id
+		JOIN instance_types it ON br.instance_type_id = it.id
+		WHERE br.id = $1
+	`, runID).Scan(
+		&d.RunID, &d.ModelHfID, &d.InstanceTypeName,
+		&d.Framework, &d.FrameworkVersion,
+		&d.TensorParallelDegree, &d.Quantization, &maxModelLen,
+		&d.AcceleratorType, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
+		&d.VCPUs, &d.MemoryGiB,
+	)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query run export details: %w", err)
+	}
+	if maxModelLen != nil {
+		d.MaxModelLen = *maxModelLen
+	}
+	return &d, nil
+}
+
 // DeleteRun removes a benchmark run and its associated metrics.
 func (r *Repository) DeleteRun(ctx context.Context, runID string) error {
 	tx, err := r.pool.Begin(ctx)

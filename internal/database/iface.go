@@ -21,6 +21,7 @@ type Repo interface {
 	ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, error)
 	GetRunsByStatus(ctx context.Context, status string) ([]BenchmarkRun, error)
 	DeleteRun(ctx context.Context, runID string) error
+	GetRunExportDetails(ctx context.Context, runID string) (*RunExportDetails, error)
 	UpsertPricing(ctx context.Context, p *Pricing) error
 	ListPricing(ctx context.Context, region string) ([]PricingRow, error)
 	ListInstanceTypes(ctx context.Context) ([]InstanceType, error)
