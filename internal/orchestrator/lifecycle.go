@@ -183,6 +183,16 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		computed.AcceleratorUtilizationAvgPct = &gpuMetrics.UtilizationAvgPct
 		computed.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
 		computed.WaitingRequestsMax = &gpuMetrics.WaitingRequestsMax
+
+		// Extended metrics (PRD-14)
+		computed.PromptThroughputTPS = &gpuMetrics.PromptThroughputTPS
+		computed.GenerationThroughputTPS = &gpuMetrics.GenerationThroughputTPS
+		computed.KVCacheUtilizationAvgPct = &gpuMetrics.KVCacheUtilizationAvgPct
+		computed.KVCacheUtilizationPeakPct = &gpuMetrics.KVCacheUtilizationPeakPct
+		computed.PrefixCacheHitRate = &gpuMetrics.PrefixCacheHitRate
+		computed.PreemptionCount = &gpuMetrics.PreemptionCount
+		computed.RunningRequestsAvg = &gpuMetrics.RunningRequestsAvg
+		computed.RunningRequestsMax = &gpuMetrics.RunningRequestsMax
 	}
 
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {

@@ -85,6 +85,13 @@ export default function ResultDetail() {
           p95: metrics.itl_p95_ms ?? 0,
           p99: metrics.itl_p99_ms ?? 0,
         },
+        {
+          name: "TPOT",
+          p50: metrics.tpot_p50_ms ?? 0,
+          p90: metrics.tpot_p90_ms ?? 0,
+          p95: 0, // Not collected
+          p99: metrics.tpot_p99_ms ?? 0,
+        },
       ]
     : [];
 
@@ -196,6 +203,101 @@ export default function ResultDetail() {
               unit="s"
             />
           </div>
+
+          {/* Latency Breakdown section */}
+          {(metrics.tpot_p50_ms || metrics.prefill_time_p50_ms || metrics.decode_time_p50_ms) && (
+            <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
+              <h2 className="text-lg font-semibold mb-4">Latency Breakdown</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <MetricCard
+                  label="TPOT p50"
+                  value={metrics.tpot_p50_ms}
+                  unit="ms"
+                />
+                <MetricCard
+                  label="Prefill p50"
+                  value={metrics.prefill_time_p50_ms}
+                  unit="ms"
+                />
+                <MetricCard
+                  label="Decode p50"
+                  value={metrics.decode_time_p50_ms}
+                  unit="ms"
+                />
+                <MetricCard
+                  label="Queue p50"
+                  value={metrics.queue_time_p50_ms}
+                  unit="ms"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Cache & Memory section */}
+          {(metrics.kv_cache_utilization_avg_pct || metrics.prefix_cache_hit_rate !== undefined || metrics.preemption_count !== undefined) && (
+            <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
+              <h2 className="text-lg font-semibold mb-4">Cache & Memory</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <MetricCard
+                  label="KV Cache Avg"
+                  value={metrics.kv_cache_utilization_avg_pct}
+                  unit="%"
+                  precision={1}
+                />
+                <MetricCard
+                  label="KV Cache Peak"
+                  value={metrics.kv_cache_utilization_peak_pct}
+                  unit="%"
+                  precision={1}
+                />
+                <MetricCard
+                  label="Prefix Cache Hit"
+                  value={metrics.prefix_cache_hit_rate}
+                  unit="%"
+                  precision={1}
+                />
+                <MetricCard
+                  label="Preemptions"
+                  value={metrics.preemption_count}
+                  unit=""
+                  precision={0}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Throughput Breakdown section */}
+          {(metrics.prompt_throughput_tps || metrics.generation_throughput_tps) && (
+            <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
+              <h2 className="text-lg font-semibold mb-4">Throughput Breakdown</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <MetricCard
+                  label="Prompt Tokens"
+                  value={metrics.prompt_throughput_tps}
+                  unit="tok/s"
+                  precision={1}
+                />
+                <MetricCard
+                  label="Generation Tokens"
+                  value={metrics.generation_throughput_tps}
+                  unit="tok/s"
+                  precision={1}
+                />
+                <MetricCard
+                  label="Running Requests Avg"
+                  value={metrics.running_requests_avg}
+                  unit=""
+                  precision={1}
+                />
+                <MetricCard
+                  label="Running Requests Max"
+                  value={metrics.running_requests_max}
+                  unit=""
+                  precision={0}
+                />
+              </div>
+            </div>
+          )}
 
           {/* Latency percentile chart */}
           <div className="bg-white border border-gray-200 rounded-lg p-4">

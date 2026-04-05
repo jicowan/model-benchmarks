@@ -75,6 +75,21 @@ export interface BenchmarkMetrics {
   successful_requests?: number;
   failed_requests?: number;
   total_duration_seconds?: number;
+  // Extended metrics (PRD-14)
+  tpot_p50_ms?: number;
+  tpot_p90_ms?: number;
+  tpot_p99_ms?: number;
+  prefill_time_p50_ms?: number;
+  decode_time_p50_ms?: number;
+  queue_time_p50_ms?: number;
+  prompt_throughput_tps?: number;
+  generation_throughput_tps?: number;
+  kv_cache_utilization_avg_pct?: number;
+  kv_cache_utilization_peak_pct?: number;
+  prefix_cache_hit_rate?: number;
+  preemption_count?: number;
+  running_requests_avg?: number;
+  running_requests_max?: number;
 }
 
 export interface RunRequest {

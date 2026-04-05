@@ -75,6 +75,22 @@ type BenchmarkMetrics struct {
 	FailedRequests           *int     `json:"failed_requests,omitempty"`
 	TotalDurationSeconds     *float64 `json:"total_duration_seconds,omitempty"`
 	CreatedAt                time.Time `json:"created_at"`
+
+	// Extended metrics (PRD-14)
+	TPOTP50Ms                 *float64 `json:"tpot_p50_ms,omitempty"`
+	TPOTP90Ms                 *float64 `json:"tpot_p90_ms,omitempty"`
+	TPOTP99Ms                 *float64 `json:"tpot_p99_ms,omitempty"`
+	PrefillTimeP50Ms          *float64 `json:"prefill_time_p50_ms,omitempty"`
+	DecodeTimeP50Ms           *float64 `json:"decode_time_p50_ms,omitempty"`
+	QueueTimeP50Ms            *float64 `json:"queue_time_p50_ms,omitempty"`
+	PromptThroughputTPS       *float64 `json:"prompt_throughput_tps,omitempty"`
+	GenerationThroughputTPS   *float64 `json:"generation_throughput_tps,omitempty"`
+	KVCacheUtilizationAvgPct  *float64 `json:"kv_cache_utilization_avg_pct,omitempty"`
+	KVCacheUtilizationPeakPct *float64 `json:"kv_cache_utilization_peak_pct,omitempty"`
+	PrefixCacheHitRate        *float64 `json:"prefix_cache_hit_rate,omitempty"`
+	PreemptionCount           *int     `json:"preemption_count,omitempty"`
+	RunningRequestsAvg        *float64 `json:"running_requests_avg,omitempty"`
+	RunningRequestsMax        *int     `json:"running_requests_max,omitempty"`
 }
 
 type Pricing struct {

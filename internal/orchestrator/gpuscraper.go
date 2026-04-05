@@ -28,6 +28,21 @@ type GPUMetrics struct {
 	MemoryPeakGiB float64
 	// Maximum number of waiting requests observed.
 	WaitingRequestsMax int
+
+	// Extended metrics (PRD-14)
+	// Throughput breakdown
+	PromptThroughputTPS     float64
+	GenerationThroughputTPS float64
+	// KV cache metrics (separate from utilization for clarity)
+	KVCacheUtilizationAvgPct  float64
+	KVCacheUtilizationPeakPct float64
+	// Prefix cache
+	PrefixCacheHitRate float64
+	// Preemption count
+	PreemptionCount int
+	// Running requests
+	RunningRequestsAvg float64
+	RunningRequestsMax int
 }
 
 // GPUScraper periodically polls a vLLM Prometheus metrics endpoint and
@@ -40,8 +55,24 @@ type GPUScraper struct {
 	mu                sync.Mutex
 	utilizationSample []float64
 	waitingSamples    []int
+	runningSamples    []int
 	cancel            context.CancelFunc
 	done              chan struct{}
+
+	// Counter tracking for rate metrics
+	startTime          time.Time
+	endTime            time.Time
+	firstPromptTokens  float64
+	lastPromptTokens   float64
+	firstGenTokens     float64
+	lastGenTokens      float64
+	firstPrefixHits    float64
+	lastPrefixHits     float64
+	firstPrefixQueries float64
+	lastPrefixQueries  float64
+	firstPreemptions   float64
+	lastPreemptions    float64
+	samplesCollected   int
 }
 
 // NewGPUScraper creates a scraper targeting the given vLLM service.
@@ -54,13 +85,19 @@ func NewGPUScraper(serviceHost string, port int, totalMemoryGiB float64) *GPUScr
 		client: &http.Client{
 			Timeout: scrapeTimeout,
 		},
-		done: make(chan struct{}),
+		done:               make(chan struct{}),
+		firstPromptTokens:  -1,
+		firstGenTokens:     -1,
+		firstPrefixHits:    -1,
+		firstPrefixQueries: -1,
+		firstPreemptions:   -1,
 	}
 }
 
 // Start begins scraping in a background goroutine. It is safe to call
 // Start only once.
 func (s *GPUScraper) Start(ctx context.Context) {
+	s.startTime = time.Now()
 	ctx, s.cancel = context.WithCancel(ctx)
 	go s.loop(ctx)
 }
@@ -68,6 +105,7 @@ func (s *GPUScraper) Start(ctx context.Context) {
 // Stop stops the scraper and returns the aggregated GPU metrics.
 // Returns nil if no samples were collected.
 func (s *GPUScraper) Stop() *GPUMetrics {
+	s.endTime = time.Now()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -96,16 +134,66 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 		}
 	}
 
+	// Running requests stats
+	var runningSum float64
+	var maxRunning int
+	for _, r := range s.runningSamples {
+		runningSum += float64(r)
+		if r > maxRunning {
+			maxRunning = r
+		}
+	}
+	var runningAvg float64
+	if len(s.runningSamples) > 0 {
+		runningAvg = runningSum / float64(len(s.runningSamples))
+	}
+
 	// Convert cache utilization to percentage (vLLM reports 0.0-1.0).
 	peakPct := peak * 100
 	avgPct := avg * 100
 	memPeakGiB := peak * s.totalMemoryGiB
 
+	// Compute throughput from counter deltas
+	duration := s.endTime.Sub(s.startTime).Seconds()
+	var promptTPS, genTPS float64
+	if duration > 0 {
+		if s.firstPromptTokens >= 0 && s.lastPromptTokens >= 0 {
+			promptTPS = (s.lastPromptTokens - s.firstPromptTokens) / duration
+		}
+		if s.firstGenTokens >= 0 && s.lastGenTokens >= 0 {
+			genTPS = (s.lastGenTokens - s.firstGenTokens) / duration
+		}
+	}
+
+	// Compute prefix cache hit rate
+	var prefixHitRate float64
+	if s.firstPrefixQueries >= 0 && s.lastPrefixQueries >= 0 {
+		queries := s.lastPrefixQueries - s.firstPrefixQueries
+		hits := s.lastPrefixHits - s.firstPrefixHits
+		if queries > 0 {
+			prefixHitRate = (hits / queries) * 100
+		}
+	}
+
+	// Preemption count (delta from first to last)
+	var preemptions int
+	if s.firstPreemptions >= 0 && s.lastPreemptions >= 0 {
+		preemptions = int(s.lastPreemptions - s.firstPreemptions)
+	}
+
 	return &GPUMetrics{
-		UtilizationPeakPct: peakPct,
-		UtilizationAvgPct:  avgPct,
-		MemoryPeakGiB:      memPeakGiB,
-		WaitingRequestsMax: maxWaiting,
+		UtilizationPeakPct:        peakPct,
+		UtilizationAvgPct:         avgPct,
+		MemoryPeakGiB:             memPeakGiB,
+		WaitingRequestsMax:        maxWaiting,
+		PromptThroughputTPS:       promptTPS,
+		GenerationThroughputTPS:   genTPS,
+		KVCacheUtilizationAvgPct:  avgPct,
+		KVCacheUtilizationPeakPct: peakPct,
+		PrefixCacheHitRate:        prefixHitRate,
+		PreemptionCount:           preemptions,
+		RunningRequestsAvg:        runningAvg,
+		RunningRequestsMax:        maxRunning,
 	}
 }
 
@@ -146,25 +234,80 @@ func (s *GPUScraper) scrape(ctx context.Context) {
 		return
 	}
 
-	utilization, waiting := parsePrometheusMetrics(resp.Body)
+	metrics := parsePrometheusMetricsExtended(resp.Body)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if utilization >= 0 {
-		s.utilizationSample = append(s.utilizationSample, utilization)
+	if metrics.utilization >= 0 {
+		s.utilizationSample = append(s.utilizationSample, metrics.utilization)
 	}
-	if waiting >= 0 {
-		s.waitingSamples = append(s.waitingSamples, waiting)
+	if metrics.waiting >= 0 {
+		s.waitingSamples = append(s.waitingSamples, metrics.waiting)
 	}
+	if metrics.running >= 0 {
+		s.runningSamples = append(s.runningSamples, metrics.running)
+	}
+
+	// Track counter values (first and last)
+	if metrics.promptTokens >= 0 {
+		if s.firstPromptTokens < 0 {
+			s.firstPromptTokens = metrics.promptTokens
+		}
+		s.lastPromptTokens = metrics.promptTokens
+	}
+	if metrics.genTokens >= 0 {
+		if s.firstGenTokens < 0 {
+			s.firstGenTokens = metrics.genTokens
+		}
+		s.lastGenTokens = metrics.genTokens
+	}
+	if metrics.prefixHits >= 0 {
+		if s.firstPrefixHits < 0 {
+			s.firstPrefixHits = metrics.prefixHits
+		}
+		s.lastPrefixHits = metrics.prefixHits
+	}
+	if metrics.prefixQueries >= 0 {
+		if s.firstPrefixQueries < 0 {
+			s.firstPrefixQueries = metrics.prefixQueries
+		}
+		s.lastPrefixQueries = metrics.prefixQueries
+	}
+	if metrics.preemptions >= 0 {
+		if s.firstPreemptions < 0 {
+			s.firstPreemptions = metrics.preemptions
+		}
+		s.lastPreemptions = metrics.preemptions
+	}
+	s.samplesCollected++
 }
 
-// parsePrometheusMetrics does a simple line-by-line parse of Prometheus
-// text format to extract vllm:gpu_cache_usage_perc and
-// vllm:num_requests_waiting. Returns -1 for values not found.
-func parsePrometheusMetrics(r io.Reader) (utilization float64, waiting int) {
-	utilization = -1
-	waiting = -1
+// promScrapeResult holds all metrics parsed from a single scrape.
+type promScrapeResult struct {
+	utilization   float64
+	waiting       int
+	running       int
+	promptTokens  float64
+	genTokens     float64
+	prefixHits    float64
+	prefixQueries float64
+	preemptions   float64
+}
+
+// parsePrometheusMetricsExtended does a line-by-line parse of Prometheus
+// text format to extract vLLM metrics. Returns -1 for values not found.
+func parsePrometheusMetricsExtended(r io.Reader) promScrapeResult {
+	result := promScrapeResult{
+		utilization:   -1,
+		waiting:       -1,
+		running:       -1,
+		promptTokens:  -1,
+		genTokens:     -1,
+		prefixHits:    -1,
+		prefixQueries: -1,
+		preemptions:   -1,
+	}
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -175,17 +318,42 @@ func parsePrometheusMetrics(r io.Reader) (utilization float64, waiting int) {
 
 		// vLLM exposes these metrics with possible label suffixes.
 		// Match the metric name prefix.
-		if strings.HasPrefix(line, "vllm:gpu_cache_usage_perc") {
+		switch {
+		case strings.HasPrefix(line, "vllm:gpu_cache_usage_perc"):
 			if v, err := parsePromValue(line); err == nil {
-				utilization = v
+				result.utilization = v
 			}
-		} else if strings.HasPrefix(line, "vllm:num_requests_waiting") {
+		case strings.HasPrefix(line, "vllm:num_requests_waiting"):
 			if v, err := parsePromValue(line); err == nil {
-				waiting = int(v)
+				result.waiting = int(v)
+			}
+		case strings.HasPrefix(line, "vllm:num_requests_running"):
+			if v, err := parsePromValue(line); err == nil {
+				result.running = int(v)
+			}
+		case strings.HasPrefix(line, "vllm:prompt_tokens_total"):
+			if v, err := parsePromValue(line); err == nil {
+				result.promptTokens = v
+			}
+		case strings.HasPrefix(line, "vllm:generation_tokens_total"):
+			if v, err := parsePromValue(line); err == nil {
+				result.genTokens = v
+			}
+		case strings.HasPrefix(line, "vllm:prefix_cache_hit_total"):
+			if v, err := parsePromValue(line); err == nil {
+				result.prefixHits = v
+			}
+		case strings.HasPrefix(line, "vllm:prefix_cache_queries_total"):
+			if v, err := parsePromValue(line); err == nil {
+				result.prefixQueries = v
+			}
+		case strings.HasPrefix(line, "vllm:num_preemptions_total"):
+			if v, err := parsePromValue(line); err == nil {
+				result.preemptions = v
 			}
 		}
 	}
-	return utilization, waiting
+	return result
 }
 
 // parsePromValue extracts the float64 value from a Prometheus text line.
