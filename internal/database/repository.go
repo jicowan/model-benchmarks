@@ -172,13 +172,14 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		    (model_id, instance_type_id, framework, framework_version,
 		     tensor_parallel_degree, quantization, concurrency,
 		     input_sequence_length, output_sequence_length, dataset_name,
-		     run_type, status, min_duration_seconds, max_model_len)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		     run_type, status, min_duration_seconds, max_model_len, scenario_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
 		run.InputSequenceLength, run.OutputSequenceLength, run.DatasetName,
 		run.RunType, run.Status, run.MinDurationSeconds, nullableInt(run.MaxModelLen),
+		run.ScenarioID,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
