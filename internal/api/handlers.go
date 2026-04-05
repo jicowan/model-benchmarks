@@ -17,6 +17,7 @@ import (
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/recommend"
 	"github.com/accelbench/accelbench/internal/scenario"
+	"github.com/accelbench/accelbench/internal/testsuite"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -82,6 +83,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
 	// Scenarios
 	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
+	// Test Suites
+	mux.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
+	mux.HandleFunc("POST /api/v1/test-suites/run", s.handleCreateSuiteRun)
+	mux.HandleFunc("GET /api/v1/test-suites/runs/{id}", s.handleGetSuiteRun)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -648,3 +653,179 @@ func (s *Server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, result)
 }
+
+// handleListTestSuites returns all available test suites.
+func (s *Server) handleListTestSuites(w http.ResponseWriter, r *http.Request) {
+	suites := testsuite.List()
+
+	type suiteResponse struct {
+		ID              string   `json:"id"`
+		Name            string   `json:"name"`
+		Description     string   `json:"description"`
+		Scenarios       []string `json:"scenarios"`
+		TotalDuration   int      `json:"total_duration_seconds"`
+	}
+
+	result := make([]suiteResponse, 0, len(suites))
+	for _, suite := range suites {
+		result = append(result, suiteResponse{
+			ID:            suite.ID,
+			Name:          suite.Name,
+			Description:   suite.Description,
+			Scenarios:     suite.Scenarios,
+			TotalDuration: suite.TotalDuration,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleCreateSuiteRun creates a new test suite run.
+func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
+	var req database.SuiteRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Validate required fields
+	if req.ModelHfID == "" || req.InstanceTypeName == "" || req.SuiteID == "" {
+		writeError(w, http.StatusBadRequest, "model_hf_id, instance_type_name, and suite_id are required")
+		return
+	}
+
+	// Validate suite exists
+	suite := testsuite.Get(req.SuiteID)
+	if suite == nil {
+		writeError(w, http.StatusBadRequest, "unknown suite: "+req.SuiteID)
+		return
+	}
+
+	// Validate all scenarios in suite exist
+	for _, scenarioID := range suite.Scenarios {
+		if scenario.Get(scenarioID) == nil {
+			writeError(w, http.StatusInternalServerError, "suite references unknown scenario: "+scenarioID)
+			return
+		}
+	}
+
+	ctx := r.Context()
+
+	// Ensure model exists
+	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ensure model: "+err.Error())
+		return
+	}
+
+	// Get instance type
+	instType, err := s.repo.GetInstanceTypeByName(ctx, req.InstanceTypeName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get instance type: "+err.Error())
+		return
+	}
+	if instType == nil {
+		writeError(w, http.StatusBadRequest, "unknown instance type: "+req.InstanceTypeName)
+		return
+	}
+
+	// Create suite run record
+	suiteRun := &database.TestSuiteRun{
+		ModelID:              model.ID,
+		InstanceTypeID:       instType.ID,
+		SuiteID:              req.SuiteID,
+		TensorParallelDegree: req.TensorParallelDegree,
+		Quantization:         req.Quantization,
+		MaxModelLen:          req.MaxModelLen,
+		Status:               "pending",
+	}
+
+	suiteRunID, err := s.repo.CreateTestSuiteRun(ctx, suiteRun)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create suite run: "+err.Error())
+		return
+	}
+
+	// Create scenario result records for each scenario
+	for _, scenarioID := range suite.Scenarios {
+		result := &database.ScenarioResult{
+			SuiteRunID: suiteRunID,
+			ScenarioID: scenarioID,
+			Status:     "pending",
+		}
+		if _, err := s.repo.CreateScenarioResult(ctx, result); err != nil {
+			writeError(w, http.StatusInternalServerError, "create scenario result: "+err.Error())
+			return
+		}
+	}
+
+	// Start suite execution in background
+	go s.orch.ExecuteSuite(context.Background(), suiteRunID, req)
+
+	// Return the created suite run
+	suiteRun.ID = suiteRunID
+	writeJSON(w, http.StatusAccepted, suiteRun)
+}
+
+// handleGetSuiteRun returns a test suite run with its scenario results.
+func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing suite run ID")
+		return
+	}
+
+	ctx := r.Context()
+
+	suiteRun, err := s.repo.GetTestSuiteRun(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get suite run: "+err.Error())
+		return
+	}
+	if suiteRun == nil {
+		writeError(w, http.StatusNotFound, "suite run not found")
+		return
+	}
+
+	results, err := s.repo.GetScenarioResults(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get scenario results: "+err.Error())
+		return
+	}
+
+	// Build response with progress info
+	type scenarioProgress struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	type progressInfo struct {
+		Completed int                `json:"completed"`
+		Total     int                `json:"total"`
+		Scenarios []scenarioProgress `json:"scenarios"`
+	}
+	type suiteRunResponse struct {
+		*database.TestSuiteRun
+		Progress progressInfo              `json:"progress"`
+		Results  []database.ScenarioResult `json:"results"`
+	}
+
+	completed := 0
+	scenarios := make([]scenarioProgress, 0, len(results))
+	for _, r := range results {
+		scenarios = append(scenarios, scenarioProgress{ID: r.ScenarioID, Status: r.Status})
+		if r.Status == "completed" || r.Status == "failed" || r.Status == "skipped" {
+			completed++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, suiteRunResponse{
+		TestSuiteRun: suiteRun,
+		Progress: progressInfo{
+			Completed: completed,
+			Total:     len(results),
+			Scenarios: scenarios,
+		},
+		Results: results,
+	})
+}
+
