@@ -10,24 +10,28 @@ import (
 
 // MockRepo is an in-memory implementation of Repo for testing.
 type MockRepo struct {
-	mu        sync.Mutex
-	models    map[string]*Model            // keyed by "hfID|revision"
-	instTypes map[string]*InstanceType     // keyed by name
-	runs      map[string]*BenchmarkRun     // keyed by run ID
-	metrics   map[string]*BenchmarkMetrics // keyed by run ID
-	pricing   map[string]*Pricing          // keyed by "instanceTypeID|region|date"
-	oomEvents []OOMEvent                   // OOM events
-	nextID    int
+	mu              sync.Mutex
+	models          map[string]*Model            // keyed by "hfID|revision"
+	instTypes       map[string]*InstanceType     // keyed by name
+	runs            map[string]*BenchmarkRun     // keyed by run ID
+	metrics         map[string]*BenchmarkMetrics // keyed by run ID
+	pricing         map[string]*Pricing          // keyed by "instanceTypeID|region|date"
+	oomEvents       []OOMEvent                   // OOM events
+	suiteRuns       map[string]*TestSuiteRun     // keyed by suite run ID
+	scenarioResults map[string]*ScenarioResult   // keyed by scenario result ID
+	nextID          int
 }
 
 // NewMockRepo creates a new MockRepo.
 func NewMockRepo() *MockRepo {
 	return &MockRepo{
-		models:    make(map[string]*Model),
-		instTypes: make(map[string]*InstanceType),
-		runs:      make(map[string]*BenchmarkRun),
-		metrics:   make(map[string]*BenchmarkMetrics),
-		pricing:   make(map[string]*Pricing),
+		models:          make(map[string]*Model),
+		instTypes:       make(map[string]*InstanceType),
+		runs:            make(map[string]*BenchmarkRun),
+		metrics:         make(map[string]*BenchmarkMetrics),
+		pricing:         make(map[string]*Pricing),
+		suiteRuns:       make(map[string]*TestSuiteRun),
+		scenarioResults: make(map[string]*ScenarioResult),
 	}
 }
 
@@ -476,4 +480,120 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 	}
 
 	return entries, nil
+}
+
+// Test Suite methods
+
+func (m *MockRepo) CreateTestSuiteRun(_ context.Context, run *TestSuiteRun) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("suite-run-%08d", m.nextID)
+	run.ID = id
+	run.CreatedAt = time.Now()
+	m.suiteRuns[id] = run
+	return id, nil
+}
+
+func (m *MockRepo) GetTestSuiteRun(_ context.Context, id string) (*TestSuiteRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.suiteRuns[id]
+	if !ok {
+		return nil, nil
+	}
+	return run, nil
+}
+
+func (m *MockRepo) UpdateSuiteRunStatus(_ context.Context, id, status string, currentScenario *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.suiteRuns[id]
+	if !ok {
+		return fmt.Errorf("suite run %s not found", id)
+	}
+	run.Status = status
+	run.CurrentScenario = currentScenario
+	now := time.Now()
+	switch status {
+	case "running":
+		run.StartedAt = &now
+	case "completed", "failed":
+		run.CompletedAt = &now
+	}
+	return nil
+}
+
+func (m *MockRepo) CreateScenarioResult(_ context.Context, result *ScenarioResult) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("scenario-result-%08d", m.nextID)
+	result.ID = id
+	result.CreatedAt = time.Now()
+	m.scenarioResults[id] = result
+	return id, nil
+}
+
+func (m *MockRepo) UpdateScenarioResult(_ context.Context, result *ScenarioResult) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.scenarioResults[result.ID]
+	if !ok {
+		return fmt.Errorf("scenario result %s not found", result.ID)
+	}
+	now := time.Now()
+	existing.Status = result.Status
+	switch result.Status {
+	case "running":
+		existing.StartedAt = &now
+	case "completed":
+		existing.CompletedAt = &now
+		existing.TTFTP50Ms = result.TTFTP50Ms
+		existing.TTFTP90Ms = result.TTFTP90Ms
+		existing.TTFTP99Ms = result.TTFTP99Ms
+		existing.E2ELatencyP50Ms = result.E2ELatencyP50Ms
+		existing.E2ELatencyP90Ms = result.E2ELatencyP90Ms
+		existing.E2ELatencyP99Ms = result.E2ELatencyP99Ms
+		existing.ITLP50Ms = result.ITLP50Ms
+		existing.ITLP90Ms = result.ITLP90Ms
+		existing.ITLP99Ms = result.ITLP99Ms
+		existing.ThroughputTPS = result.ThroughputTPS
+		existing.RequestsPerSecond = result.RequestsPerSecond
+		existing.SuccessfulRequests = result.SuccessfulRequests
+		existing.FailedRequests = result.FailedRequests
+		existing.LoadgenConfig = result.LoadgenConfig
+	case "failed":
+		existing.CompletedAt = &now
+		existing.ErrorMessage = result.ErrorMessage
+	}
+	return nil
+}
+
+func (m *MockRepo) GetScenarioResults(_ context.Context, suiteRunID string) ([]ScenarioResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var results []ScenarioResult
+	for _, r := range m.scenarioResults {
+		if r.SuiteRunID == suiteRunID {
+			results = append(results, *r)
+		}
+	}
+	return results, nil
+}
+
+func (m *MockRepo) ListTestSuiteRuns(_ context.Context, modelID, instanceTypeID string) ([]TestSuiteRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var runs []TestSuiteRun
+	for _, run := range m.suiteRuns {
+		if modelID != "" && run.ModelID != modelID {
+			continue
+		}
+		if instanceTypeID != "" && run.InstanceTypeID != instanceTypeID {
+			continue
+		}
+		runs = append(runs, *run)
+	}
+	return runs, nil
 }

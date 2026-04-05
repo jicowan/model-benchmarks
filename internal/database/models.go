@@ -107,3 +107,59 @@ type RunRequest struct {
 	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
 	HfToken              string  `json:"hf_token,omitempty"`
 }
+
+// TestSuiteRun represents a test suite execution.
+type TestSuiteRun struct {
+	ID                   string     `json:"id"`
+	ModelID              string     `json:"model_id"`
+	InstanceTypeID       string     `json:"instance_type_id"`
+	SuiteID              string     `json:"suite_id"`
+	TensorParallelDegree int        `json:"tensor_parallel_degree"`
+	Quantization         *string    `json:"quantization,omitempty"`
+	MaxModelLen          int        `json:"max_model_len,omitempty"`
+	Status               string     `json:"status"`
+	CurrentScenario      *string    `json:"current_scenario,omitempty"`
+	StartedAt            *time.Time `json:"started_at,omitempty"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+}
+
+// ScenarioResult represents the result of a single scenario within a suite run.
+type ScenarioResult struct {
+	ID                string     `json:"id"`
+	SuiteRunID        string     `json:"suite_run_id"`
+	ScenarioID        string     `json:"scenario_id"`
+	Status            string     `json:"status"`
+	ErrorMessage      *string    `json:"error_message,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	TTFTP50Ms         *float64   `json:"ttft_p50_ms,omitempty"`
+	TTFTP90Ms         *float64   `json:"ttft_p90_ms,omitempty"`
+	TTFTP99Ms         *float64   `json:"ttft_p99_ms,omitempty"`
+	E2ELatencyP50Ms   *float64   `json:"e2e_latency_p50_ms,omitempty"`
+	E2ELatencyP90Ms   *float64   `json:"e2e_latency_p90_ms,omitempty"`
+	E2ELatencyP99Ms   *float64   `json:"e2e_latency_p99_ms,omitempty"`
+	ITLP50Ms          *float64   `json:"itl_p50_ms,omitempty"`
+	ITLP90Ms          *float64   `json:"itl_p90_ms,omitempty"`
+	ITLP99Ms          *float64   `json:"itl_p99_ms,omitempty"`
+	ThroughputTPS     *float64   `json:"throughput_tps,omitempty"`
+	RequestsPerSecond *float64   `json:"requests_per_second,omitempty"`
+	SuccessfulRequests *int      `json:"successful_requests,omitempty"`
+	FailedRequests    *int       `json:"failed_requests,omitempty"`
+	LoadgenConfig     *string    `json:"loadgen_config,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+// SuiteRunRequest represents the input parameters for starting a test suite run.
+type SuiteRunRequest struct {
+	ModelHfID            string  `json:"model_hf_id"`
+	ModelHfRevision      string  `json:"model_hf_revision"`
+	InstanceTypeName     string  `json:"instance_type_name"`
+	SuiteID              string  `json:"suite_id"`
+	Framework            string  `json:"framework"`
+	FrameworkVersion     string  `json:"framework_version"`
+	TensorParallelDegree int     `json:"tensor_parallel_degree"`
+	Quantization         *string `json:"quantization,omitempty"`
+	MaxModelLen          int     `json:"max_model_len,omitempty"`
+	HfToken              string  `json:"hf_token,omitempty"`
+}
