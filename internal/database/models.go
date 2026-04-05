@@ -40,6 +40,7 @@ type BenchmarkRun struct {
 	RunType               string     `json:"run_type"`
 	MinDurationSeconds    int        `json:"min_duration_seconds"`
 	MaxModelLen           int        `json:"max_model_len,omitempty"`
+	ScenarioID            *string    `json:"scenario_id,omitempty"`    // scenario identifier (chatbot, batch, etc.)
 	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
 	Status                string     `json:"status"`
 	Superseded            bool       `json:"superseded"`
@@ -103,5 +104,6 @@ type RunRequest struct {
 	RunType              string  `json:"run_type"`
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
 	MinDurationSeconds   int     `json:"min_duration_seconds,omitempty"`
+	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
 	HfToken              string  `json:"hf_token,omitempty"`
 }

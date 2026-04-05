@@ -16,6 +16,7 @@ import (
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
 	"github.com/accelbench/accelbench/internal/oom"
+	"github.com/accelbench/accelbench/internal/scenario"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -268,67 +269,78 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc string, cfg RunConfig) error {
 	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
 
-	// Build inference-perf config with default chatbot scenario
-	// TODO: Support scenario selection from PRD-12
-	inputMean := cfg.Request.InputSequenceLength
-	if inputMean == 0 {
-		inputMean = 256
-	}
-	outputMean := cfg.Request.OutputSequenceLength
-	if outputMean == 0 {
-		outputMean = 128
-	}
+	// Build inference-perf config from scenario or compute defaults
+	var inferencePerfConfig manifest.InferencePerfConfigParams
 
-	// Calculate distribution bounds (std_dev = mean/4, min = mean/2, max = mean*2)
-	inputStdDev := inputMean / 4
-	inputMin := inputMean / 2
-	inputMax := inputMean * 2
-	outputStdDev := outputMean / 4
-	outputMin := outputMean / 2
-	outputMax := outputMean * 2
+	if cfg.Request.ScenarioID != "" {
+		// Use predefined scenario
+		s := scenario.Get(cfg.Request.ScenarioID)
+		if s == nil {
+			return fmt.Errorf("unknown scenario: %s", cfg.Request.ScenarioID)
+		}
+		inferencePerfConfig = s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
+		log.Printf("[%s] using scenario %q: %s", cfg.RunID[:8], s.ID, s.Name)
+	} else {
+		// Fall back to computed defaults based on request parameters
+		inputMean := cfg.Request.InputSequenceLength
+		if inputMean == 0 {
+			inputMean = 256
+		}
+		outputMean := cfg.Request.OutputSequenceLength
+		if outputMean == 0 {
+			outputMean = 128
+		}
 
-	// Duration from request or default 120 seconds
-	duration := cfg.Request.MinDurationSeconds
-	if duration == 0 {
-		duration = 120
-	}
+		// Calculate distribution bounds (std_dev = mean/4, min = mean/2, max = mean*2)
+		inputStdDev := inputMean / 4
+		inputMin := inputMean / 2
+		inputMax := inputMean * 2
+		outputStdDev := outputMean / 4
+		outputMin := outputMean / 2
+		outputMax := outputMean * 2
 
-	// Workers based on concurrency
-	numWorkers := cfg.Request.Concurrency
-	if numWorkers < 4 {
-		numWorkers = 4
-	}
-	if numWorkers > 8 {
-		numWorkers = 8
-	}
+		// Duration from request or default 120 seconds
+		duration := cfg.Request.MinDurationSeconds
+		if duration == 0 {
+			duration = 120
+		}
 
-	// Calculate QPS from concurrency (rough estimate: concurrency / avg_latency)
-	// For now use concurrency / 10 as a reasonable starting point
-	qps := cfg.Request.Concurrency / 2
-	if qps < 1 {
-		qps = 1
-	}
-	if qps > 50 {
-		qps = 50
-	}
+		// Workers based on concurrency
+		numWorkers := cfg.Request.Concurrency
+		if numWorkers < 4 {
+			numWorkers = 4
+		}
+		if numWorkers > 8 {
+			numWorkers = 8
+		}
 
-	inferencePerfConfig := manifest.InferencePerfConfigParams{
-		ModelHfID:    cfg.Request.ModelHfID,
-		TargetHost:   modelSvc,
-		TargetPort:   8000,
-		Streaming:    true,
-		DatasetType:  "synthetic",
-		InputMean:    inputMean,
-		InputStdDev:  inputStdDev,
-		InputMin:     inputMin,
-		InputMax:     inputMax,
-		OutputMean:   outputMean,
-		OutputStdDev: outputStdDev,
-		OutputMin:    outputMin,
-		OutputMax:    outputMax,
-		LoadType:     "constant",
-		Stages:       []manifest.LoadStage{{Rate: qps, Duration: duration}},
-		NumWorkers:   numWorkers,
+		// Calculate QPS from concurrency
+		qps := cfg.Request.Concurrency / 2
+		if qps < 1 {
+			qps = 1
+		}
+		if qps > 50 {
+			qps = 50
+		}
+
+		inferencePerfConfig = manifest.InferencePerfConfigParams{
+			ModelHfID:    cfg.Request.ModelHfID,
+			TargetHost:   modelSvc,
+			TargetPort:   8000,
+			Streaming:    true,
+			DatasetType:  "synthetic",
+			InputMean:    inputMean,
+			InputStdDev:  inputStdDev,
+			InputMin:     inputMin,
+			InputMax:     inputMax,
+			OutputMean:   outputMean,
+			OutputStdDev: outputStdDev,
+			OutputMin:    outputMin,
+			OutputMax:    outputMax,
+			LoadType:     "constant",
+			Stages:       []manifest.LoadStage{{Rate: qps, Duration: duration}},
+			NumWorkers:   numWorkers,
+		}
 	}
 
 	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)

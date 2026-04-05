@@ -16,6 +16,7 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/recommend"
+	"github.com/accelbench/accelbench/internal/scenario"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -79,6 +80,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
 	// Export Kubernetes manifest
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
+	// Scenarios
+	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -615,4 +618,33 @@ func (s *Server) handleBackfillModelFamilies(w http.ResponseWriter, r *http.Requ
 		"updated": updated,
 		"message": fmt.Sprintf("Updated model_family for %d models", updated),
 	})
+}
+
+// handleListScenarios returns all available benchmark scenarios.
+func (s *Server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
+	scenarios := scenario.List()
+
+	// Build response with computed duration
+	type scenarioResponse struct {
+		ID              string               `json:"id"`
+		Name            string               `json:"name"`
+		Description     string               `json:"description"`
+		DurationSeconds int                  `json:"duration_seconds"`
+		LoadType        string               `json:"load_type"`
+		Stages          []scenario.LoadStage `json:"stages"`
+	}
+
+	result := make([]scenarioResponse, 0, len(scenarios))
+	for _, s := range scenarios {
+		result = append(result, scenarioResponse{
+			ID:              s.ID,
+			Name:            s.Name,
+			Description:     s.Description,
+			DurationSeconds: s.TotalDuration(),
+			LoadType:        s.LoadType,
+			Stages:          s.Stages,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
