@@ -29,7 +29,6 @@ type RequestResult struct {
 	Success         bool    `json:"success"`
 
 	// Extended latency breakdown (PRD-14)
-	TPOTMs        float64 `json:"tpot_ms"`
 	PrefillTimeMs float64 `json:"prefill_time_ms"`
 	DecodeTimeMs  float64 `json:"decode_time_ms"`
 	QueueTimeMs   float64 `json:"queue_time_ms"`
