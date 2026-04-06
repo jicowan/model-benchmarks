@@ -12,7 +12,7 @@ function ScenarioMetrics({ result }: { result: ScenarioResult }) {
   if (result.status !== "completed") return null;
 
   return (
-    <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-sm">
+    <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 text-sm">
       <div className="bg-white p-2 rounded border">
         <div className="text-gray-500 text-xs">TTFT p50</div>
         <div className="font-medium">{formatMetric(result.ttft_p50_ms)} ms</div>
@@ -38,6 +38,14 @@ function ScenarioMetrics({ result }: { result: ScenarioResult }) {
         <div className="font-medium">
           {result.successful_requests ?? 0} / {(result.successful_requests ?? 0) + (result.failed_requests ?? 0)}
         </div>
+      </div>
+      <div className="bg-white p-2 rounded border">
+        <div className="text-gray-500 text-xs">GPU Util</div>
+        <div className="font-medium">{formatMetric(result.accelerator_utilization_pct, 0)}%</div>
+      </div>
+      <div className="bg-white p-2 rounded border">
+        <div className="text-gray-500 text-xs">Peak Memory</div>
+        <div className="font-medium">{formatMetric(result.accelerator_memory_peak_gib)} GiB</div>
       </div>
     </div>
   );

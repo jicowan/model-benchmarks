@@ -318,6 +318,8 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.orch.CancelRun(runID)
+	// Forcibly clean up Kubernetes resources in case the goroutine is stuck
+	s.orch.CleanupSuiteResources(runID)
 	if err := s.repo.UpdateSuiteRunStatus(ctx, runID, "failed", nil); err != nil {
 		writeError(w, http.StatusInternalServerError, "update status failed")
 		return

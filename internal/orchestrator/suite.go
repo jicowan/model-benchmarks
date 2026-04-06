@@ -114,13 +114,9 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 		return
 	}
 
-	// Start GPU scraper
-	var gpuScraper *GPUScraper
-	if strings.EqualFold(instType.AcceleratorType, "gpu") {
-		totalMemGiB := float64(instType.AcceleratorMemoryGiB)
-		gpuScraper = NewGPUScraper(modelName, 8000, totalMemGiB)
-		gpuScraper.Start(ctx)
-	}
+	// GPU scraper config for per-scenario metrics
+	isGPU := strings.EqualFold(instType.AcceleratorType, "gpu")
+	totalMemGiB := float64(instType.AcceleratorMemoryGiB)
 
 	// Execute each scenario sequentially
 	for i, scenarioID := range suite.Scenarios {
@@ -136,8 +132,26 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 		// Mark scenario as running
 		o.repo.UpdateScenarioResult(ctx, &database.ScenarioResult{ID: resultID, Status: "running"})
 
+		// Start GPU scraper for this scenario
+		var gpuScraper *GPUScraper
+		if isGPU {
+			gpuScraper = NewGPUScraper(modelName, 8000, totalMemGiB)
+			gpuScraper.Start(ctx)
+		}
+
 		// Run the scenario
 		computed, configYAML, err := o.runScenario(ctx, ns, modelName, suiteRunID, scenarioID, cfg)
+
+		// Stop GPU scraper and collect metrics for this scenario
+		var gpuMetrics *GPUMetrics
+		if gpuScraper != nil {
+			gpuMetrics = gpuScraper.Stop()
+			if gpuMetrics != nil {
+				log.Printf("[suite %s] scenario %s GPU metrics: util=%.1f%% mem=%.1fGiB",
+					suiteRunID[:8], scenarioID, gpuMetrics.UtilizationPeakPct, gpuMetrics.MemoryPeakGiB)
+			}
+		}
+
 		if err != nil {
 			log.Printf("[suite %s] scenario %s failed: %v", suiteRunID[:8], scenarioID, err)
 			errMsg := err.Error()
@@ -149,8 +163,8 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 			continue
 		}
 
-		// Update scenario result with metrics
-		o.repo.UpdateScenarioResult(ctx, &database.ScenarioResult{
+		// Build scenario result with metrics
+		result := &database.ScenarioResult{
 			ID:                 resultID,
 			Status:             "completed",
 			TTFTP50Ms:          computed.TTFTP50Ms,
@@ -167,14 +181,17 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 			SuccessfulRequests: computed.SuccessfulRequests,
 			FailedRequests:     computed.FailedRequests,
 			LoadgenConfig:      &configYAML,
-		})
+		}
+
+		// Merge GPU metrics if available
+		if gpuMetrics != nil {
+			result.AcceleratorUtilizationPct = &gpuMetrics.UtilizationPeakPct
+			result.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
+		}
+
+		o.repo.UpdateScenarioResult(ctx, result)
 
 		log.Printf("[suite %s] scenario %s completed", suiteRunID[:8], scenarioID)
-	}
-
-	// Stop GPU scraper
-	if gpuScraper != nil {
-		gpuScraper.Stop()
 	}
 
 	// Mark suite as completed
@@ -261,4 +278,31 @@ func (o *Orchestrator) teardownSuite(ctx context.Context, ns, modelName, suiteRu
 	log.Printf("[suite %s] tearing down resources", suiteRunID[:8])
 	o.client.CoreV1().Services(ns).Delete(ctx, modelName, metav1.DeleteOptions{})
 	o.client.AppsV1().Deployments(ns).Delete(ctx, modelName, metav1.DeleteOptions{})
+}
+
+// CleanupSuiteResources forcibly cleans up Kubernetes resources for a suite run.
+// This is called when cancelling a suite to ensure resources are deleted even if
+// the goroutine is stuck.
+func (o *Orchestrator) CleanupSuiteResources(suiteRunID string) {
+	ns := defaultNamespace
+	modelName := fmt.Sprintf("suite-%s", suiteRunID[:8])
+	ctx := context.Background()
+
+	log.Printf("[suite %s] force cleanup: deleting resources", suiteRunID[:8])
+
+	// Delete any loadgen jobs for this suite
+	jobs, err := o.client.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("suite-run-id=%s", suiteRunID[:8]),
+	})
+	if err == nil {
+		for _, job := range jobs.Items {
+			o.client.BatchV1().Jobs(ns).Delete(ctx, job.Name, metav1.DeleteOptions{})
+		}
+	}
+
+	// Delete model service and deployment
+	o.client.CoreV1().Services(ns).Delete(ctx, modelName, metav1.DeleteOptions{})
+	o.client.AppsV1().Deployments(ns).Delete(ctx, modelName, metav1.DeleteOptions{})
+
+	log.Printf("[suite %s] force cleanup completed", suiteRunID[:8])
 }

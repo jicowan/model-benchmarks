@@ -399,6 +399,8 @@ export interface ScenarioResult {
   requests_per_second?: number;
   successful_requests?: number;
   failed_requests?: number;
+  accelerator_utilization_pct?: number;
+  accelerator_memory_peak_gib?: number;
 }
 
 export interface TestSuiteRun {

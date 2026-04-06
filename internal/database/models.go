@@ -159,12 +159,14 @@ type ScenarioResult struct {
 	ITLP50Ms          *float64   `json:"itl_p50_ms,omitempty"`
 	ITLP90Ms          *float64   `json:"itl_p90_ms,omitempty"`
 	ITLP99Ms          *float64   `json:"itl_p99_ms,omitempty"`
-	ThroughputTPS     *float64   `json:"throughput_tps,omitempty"`
-	RequestsPerSecond *float64   `json:"requests_per_second,omitempty"`
-	SuccessfulRequests *int      `json:"successful_requests,omitempty"`
-	FailedRequests    *int       `json:"failed_requests,omitempty"`
-	LoadgenConfig     *string    `json:"loadgen_config,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
+	ThroughputTPS            *float64   `json:"throughput_tps,omitempty"`
+	RequestsPerSecond        *float64   `json:"requests_per_second,omitempty"`
+	SuccessfulRequests       *int       `json:"successful_requests,omitempty"`
+	FailedRequests           *int       `json:"failed_requests,omitempty"`
+	AcceleratorUtilizationPct *float64  `json:"accelerator_utilization_pct,omitempty"`
+	AcceleratorMemoryPeakGiB  *float64  `json:"accelerator_memory_peak_gib,omitempty"`
+	LoadgenConfig            *string    `json:"loadgen_config,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
 }
 
 // SuiteRunRequest represents the input parameters for starting a test suite run.

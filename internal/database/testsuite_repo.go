@@ -102,8 +102,9 @@ func (r *Repository) UpdateScenarioResult(ctx context.Context, result *ScenarioR
 		    itl_p50_ms = $9, itl_p90_ms = $10, itl_p99_ms = $11,
 		    throughput_tps = $12, requests_per_second = $13,
 		    successful_requests = $14, failed_requests = $15,
-		    loadgen_config = $16
-		 WHERE id = $17`
+		    accelerator_utilization_pct = $16, accelerator_memory_peak_gib = $17,
+		    loadgen_config = $18
+		 WHERE id = $19`
 		args = []any{
 			result.Status, time.Now(),
 			result.TTFTP50Ms, result.TTFTP90Ms, result.TTFTP99Ms,
@@ -111,6 +112,7 @@ func (r *Repository) UpdateScenarioResult(ctx context.Context, result *ScenarioR
 			result.ITLP50Ms, result.ITLP90Ms, result.ITLP99Ms,
 			result.ThroughputTPS, result.RequestsPerSecond,
 			result.SuccessfulRequests, result.FailedRequests,
+			result.AcceleratorUtilizationPct, result.AcceleratorMemoryPeakGiB,
 			result.LoadgenConfig,
 			result.ID,
 		}
@@ -139,6 +141,7 @@ func (r *Repository) GetScenarioResults(ctx context.Context, suiteRunID string) 
 		        itl_p50_ms, itl_p90_ms, itl_p99_ms,
 		        throughput_tps, requests_per_second,
 		        successful_requests, failed_requests,
+		        accelerator_utilization_pct, accelerator_memory_peak_gib,
 		        loadgen_config, created_at
 		 FROM scenario_results
 		 WHERE suite_run_id = $1
@@ -159,6 +162,7 @@ func (r *Repository) GetScenarioResults(ctx context.Context, suiteRunID string) 
 			&r.ITLP50Ms, &r.ITLP90Ms, &r.ITLP99Ms,
 			&r.ThroughputTPS, &r.RequestsPerSecond,
 			&r.SuccessfulRequests, &r.FailedRequests,
+			&r.AcceleratorUtilizationPct, &r.AcceleratorMemoryPeakGiB,
 			&r.LoadgenConfig, &r.CreatedAt,
 		)
 		if err != nil {
