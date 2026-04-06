@@ -62,7 +62,8 @@ export default function ResultDetail() {
     failed: "bg-red-100 text-red-800",
   };
 
-  const latencyBars = metrics
+  // High latency metrics (request-level): TTFT, E2E
+  const highLatencyBars = metrics
     ? [
         {
           name: "TTFT",
@@ -78,6 +79,12 @@ export default function ResultDetail() {
           p95: metrics.e2e_latency_p95_ms ?? 0,
           p99: metrics.e2e_latency_p99_ms ?? 0,
         },
+      ]
+    : [];
+
+  // Low latency metrics (token-level): ITL, TPOT
+  const lowLatencyBars = metrics
+    ? [
         {
           name: "ITL",
           p50: metrics.itl_p50_ms ?? 0,
@@ -299,13 +306,32 @@ export default function ResultDetail() {
             </div>
           )}
 
-          {/* Latency percentile chart */}
+          {/* Request-level latency chart (TTFT, E2E) */}
           <div className="bg-white border border-gray-200 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-700 mb-4">
-              Latency Percentiles (ms)
+              Request Latency Percentiles (ms)
             </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={latencyBars}>
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={highLatencyBars}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="p50" fill="#2563eb" name="p50" />
+                <Bar dataKey="p90" fill="#60a5fa" name="p90" />
+                <Bar dataKey="p95" fill="#93c5fd" name="p95" />
+                <Bar dataKey="p99" fill="#bfdbfe" name="p99" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Token-level latency chart (ITL, TPOT) */}
+          <div className="bg-white border border-gray-200 rounded-lg p-4 mt-4">
+            <h3 className="text-sm font-medium text-gray-700 mb-4">
+              Token Latency Percentiles (ms)
+            </h3>
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={lowLatencyBars}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" />
                 <YAxis />
