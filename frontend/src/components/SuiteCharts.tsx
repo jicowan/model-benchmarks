@@ -94,27 +94,21 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
           {/* QPS vs Latency */}
           <div className="border border-gray-100 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">
-              QPS vs Latency
+              QPS vs Latency (ms)
             </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={chartData}>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="qps"
-                  label={{ value: "Target QPS", position: "bottom", offset: -5 }}
+                  label={{ value: "Target QPS", position: "insideBottom", offset: -15 }}
                 />
-                <YAxis
-                  label={{
-                    value: "Latency (ms)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
+                <YAxis width={50} />
                 <Tooltip
                   formatter={(value: number) => `${value.toFixed(1)} ms`}
                   labelFormatter={(qps) => `QPS: ${qps}`}
                 />
-                <Legend />
+                <Legend verticalAlign="top" height={36} />
                 <Line
                   type="monotone"
                   dataKey="ttft_p50"
@@ -146,27 +140,21 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
           {/* QPS vs Throughput */}
           <div className="border border-gray-100 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">
-              QPS vs Throughput
+              QPS vs Throughput (tok/s)
             </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={chartData}>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="qps"
-                  label={{ value: "Target QPS", position: "bottom", offset: -5 }}
+                  label={{ value: "Target QPS", position: "insideBottom", offset: -15 }}
                 />
-                <YAxis
-                  label={{
-                    value: "Tokens/sec",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
+                <YAxis width={50} />
                 <Tooltip
                   formatter={(value: number) => `${value.toFixed(0)} tok/s`}
                   labelFormatter={(qps) => `QPS: ${qps}`}
                 />
-                <Legend />
+                <Legend verticalAlign="top" height={36} />
                 <Line
                   type="monotone"
                   dataKey="throughput"
@@ -182,30 +170,26 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
           {/* Latency vs Throughput Scatter */}
           <div className="border border-gray-100 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">
-              Latency vs Throughput
+              TTFT p50 (ms) vs Throughput (tok/s)
             </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <ScatterChart>
+            <ResponsiveContainer width="100%" height={280}>
+              <ScatterChart margin={{ top: 5, right: 20, left: 10, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="throughput"
                   name="Throughput"
                   type="number"
                   label={{
-                    value: "Throughput (tok/s)",
-                    position: "bottom",
-                    offset: -5,
+                    value: "Throughput",
+                    position: "insideBottom",
+                    offset: -15,
                   }}
                 />
                 <YAxis
                   dataKey="ttft_p50"
                   name="TTFT p50"
                   type="number"
-                  label={{
-                    value: "TTFT p50 (ms)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
+                  width={50}
                 />
                 <ZAxis dataKey="name" name="Scenario" />
                 <Tooltip
@@ -239,21 +223,15 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
           {/* Scenario Comparison Bar Chart */}
           <div className="border border-gray-100 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">
-              Scenario Comparison
+              Scenario Comparison (ms)
             </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={comparisonData}>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={comparisonData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="metric" />
-                <YAxis
-                  label={{
-                    value: "Latency (ms)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
+                <YAxis width={50} />
                 <Tooltip formatter={(value: number) => `${value.toFixed(1)} ms`} />
-                <Legend />
+                <Legend verticalAlign="top" height={36} />
                 {scenarioNames.map((name, i) => (
                   <Bar
                     key={name}
