@@ -36,6 +36,12 @@ resource "helm_release" "karpenter" {
   depends_on = [module.karpenter]
 }
 
+# Wait for Karpenter to be ready before creating node classes
+resource "time_sleep" "wait_for_karpenter" {
+  depends_on      = [helm_release.karpenter]
+  create_duration = "30s"
+}
+
 resource "kubectl_manifest" "default_node_class" {
   yaml_body = <<-YAML
     apiVersion: karpenter.k8s.aws/v1
@@ -62,7 +68,7 @@ resource "kubectl_manifest" "default_node_class" {
         karpenter.sh/discovery: ${var.cluster_name}
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "general_purpose_node_pool" {
@@ -128,7 +134,7 @@ resource "kubectl_manifest" "gpu_node_class" {
             encrypted: true
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "neuron_node_class" {
@@ -155,7 +161,7 @@ resource "kubectl_manifest" "neuron_node_class" {
             encrypted: true
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "gpu_node_pool" {
@@ -191,7 +197,7 @@ resource "kubectl_manifest" "gpu_node_pool" {
         consolidateAfter: 10m
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [kubectl_manifest.gpu_node_class]
 }
 
 resource "kubectl_manifest" "neuron_node_pool" {
@@ -227,7 +233,7 @@ resource "kubectl_manifest" "neuron_node_pool" {
         consolidateAfter: 10m
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [kubectl_manifest.neuron_node_class]
 }
 
 # ---------- NVIDIA Device Plugin ----------
