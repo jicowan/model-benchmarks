@@ -210,10 +210,10 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 		dcgmUtilAvg = sum / float64(len(s.dcgmUtilSamples))
 	}
 
-	// Compute DCGM memory peak (convert bytes to GiB)
+	// Compute DCGM memory peak (convert MB to GiB)
 	var dcgmMemPeakGiB float64
 	for _, v := range s.dcgmMemSamples {
-		gib := v / (1024 * 1024 * 1024)
+		gib := v / 1024 // DCGM reports memory in MB
 		if gib > dcgmMemPeakGiB {
 			dcgmMemPeakGiB = gib
 		}
