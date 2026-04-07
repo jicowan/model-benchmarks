@@ -153,6 +153,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// For backwards compatibility, check if RunType contains a scenario ID
 		if scn := scenario.Get(req.RunType); scn != nil {
 			scenarioID = req.RunType
+			req.ScenarioID = scenarioID // Ensure orchestrator sees the scenario
 			if datasetName == "" {
 				datasetName = scn.Dataset
 			}
