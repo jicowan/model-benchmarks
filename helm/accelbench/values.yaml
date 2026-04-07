@@ -2,24 +2,26 @@
 namespace: accelbench
 
 # -- Container images
+# Set image.*.repository to your ECR registry URLs during helm install, e.g.:
+#   --set image.api.repository=<account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-api
 image:
   api:
-    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-api
+    repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-api
     tag: "latest"
     pullPolicy: Always
   web:
-    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-web
+    repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-web
     tag: "latest"
     pullPolicy: Always
   tools:
-    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-tools
+    repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-tools
     tag: "latest"
     pullPolicy: IfNotPresent
   loadgen:
-    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-loadgen
+    repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-loadgen
     tag: "latest"
   migration:
-    repository: 820537372947.dkr.ecr.us-east-2.amazonaws.com/accelbench-migration
+    repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-migration
     tag: "latest"
     pullPolicy: IfNotPresent
 

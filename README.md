@@ -119,6 +119,11 @@ docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.loadgen \
   -t $REGISTRY/accelbench-loadgen:latest --push .
 
+# Tools (used by catalog seed job)
+docker buildx build --platform linux/amd64 \
+  -f docker/Dockerfile.tools \
+  -t $REGISTRY/accelbench-tools:latest --push .
+
 # Database migration
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.migration \
@@ -160,11 +165,13 @@ cd helm/accelbench
 
 helm install accelbench . \
   --namespace accelbench \
-  --create-namespace \
   --set image.api.repository=$REGISTRY/accelbench-api \
   --set image.web.repository=$REGISTRY/accelbench-web \
   --set image.migration.repository=$REGISTRY/accelbench-migration \
+  --set image.loadgen.repository=$REGISTRY/accelbench-loadgen \
+  --set image.tools.repository=$REGISTRY/accelbench-tools \
   --set database.existingSecret=accelbench-db \
+  --set results.s3Bucket=accelbench-results-$(aws sts get-caller-identity --query Account --output text) \
   --set ingress.host=your-domain.example.com
 ```
 
