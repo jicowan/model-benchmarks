@@ -38,6 +38,7 @@ resource "helm_release" "karpenter" {
   depends_on = [module.karpenter]
 }
 
+# Wait for Karpenter to be ready before creating node classes
 resource "time_sleep" "wait_for_karpenter" {
   depends_on      = [helm_release.karpenter]
   create_duration = "30s"
