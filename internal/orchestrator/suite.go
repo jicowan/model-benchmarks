@@ -254,6 +254,7 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 		ResultsS3Bucket:    resultsBucket,
 		ResultsS3Key:       resultsKey,
 		AWSRegion:          awsRegion,
+		HfToken:            cfg.Request.HfToken,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("render loadgen job: %w", err)

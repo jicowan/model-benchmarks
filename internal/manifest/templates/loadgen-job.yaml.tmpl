@@ -34,6 +34,11 @@ spec:
           image: {{ .InferencePerfImage }}
           command: ["inference-perf"]
           args: ["--config_file", "/workspace/config.yml"]
+          env:
+{{- if .HfToken }}
+            - name: HF_TOKEN
+              value: "{{ .HfToken }}"
+{{- end }}
           volumeMounts:
             - name: config
               mountPath: /workspace/config.yml

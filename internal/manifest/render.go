@@ -45,13 +45,14 @@ type ModelDeploymentParams struct {
 
 // LoadgenJobParams holds values for rendering the load generator Job.
 type LoadgenJobParams struct {
-	Name              string
-	Namespace         string
+	Name               string
+	Namespace          string
 	InferencePerfImage string // inference-perf container image
-	ConfigMapName     string // ConfigMap containing inference-perf config
-	ResultsS3Bucket   string // S3 bucket for results upload
-	ResultsS3Key      string // S3 key for results file
-	AWSRegion         string // AWS region for S3 upload
+	ConfigMapName      string // ConfigMap containing inference-perf config
+	ResultsS3Bucket    string // S3 bucket for results upload
+	ResultsS3Key       string // S3 key for results file
+	AWSRegion          string // AWS region for S3 upload
+	HfToken            string // HuggingFace token for downloading datasets (sharegpt, cnn_dailymail)
 }
 
 // RenderModelDeployment renders the model Deployment + Service manifests.

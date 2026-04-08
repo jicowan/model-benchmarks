@@ -413,6 +413,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		ResultsS3Bucket:    resultsBucket,
 		ResultsS3Key:       resultsKey,
 		AWSRegion:          awsRegion,
+		HfToken:            cfg.Request.HfToken,
 	})
 	if err != nil {
 		return err
