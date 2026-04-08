@@ -105,7 +105,8 @@ export interface RunRequest {
   input_sequence_length: number;
   output_sequence_length: number;
   dataset_name?: string;
-  run_type: string;
+  run_type?: string;
+  scenario_id?: string;
   max_model_len?: number;
   min_duration_seconds?: number;
   hf_token?: string;

@@ -36,7 +36,9 @@ fi
 
 # Read defaults.
 FW_VERSION=$(yq '.defaults.framework_version' "$MATRIX_FILE")
-DATASET=$(yq '.defaults.dataset_name' "$MATRIX_FILE")
+SCENARIO=$(yq '.defaults.scenario // "chatbot"' "$MATRIX_FILE")
+DATASET=$(yq '.defaults.dataset // "synthetic"' "$MATRIX_FILE")
+MIN_DURATION=$(yq '.defaults.min_duration_seconds // 180' "$MATRIX_FILE")
 
 NUM_MODELS=$(yq '.models | length' "$MATRIX_FILE")
 NUM_INSTANCES=$(yq '.instance_types | length' "$MATRIX_FILE")
@@ -132,6 +134,8 @@ for mi in $(seq 0 $((NUM_MODELS - 1))); do
       --argjson input_sequence_length "$INPUT_SEQ" \
       --argjson output_sequence_length "$OUTPUT_SEQ" \
       --arg dataset_name "$DATASET" \
+      --arg scenario_id "$SCENARIO" \
+      --argjson min_duration_seconds "$MIN_DURATION" \
       --argjson max_model_len "$MAX_MODEL_LEN" \
       --arg hf_token "$HF_TOKEN" \
       '{
@@ -145,6 +149,8 @@ for mi in $(seq 0 $((NUM_MODELS - 1))); do
         input_sequence_length: $input_sequence_length,
         output_sequence_length: $output_sequence_length,
         dataset_name: $dataset_name,
+        scenario_id: $scenario_id,
+        min_duration_seconds: $min_duration_seconds,
         run_type: "catalog",
         max_model_len: $max_model_len,
         hf_token: $hf_token

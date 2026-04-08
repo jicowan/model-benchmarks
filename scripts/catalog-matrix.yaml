@@ -4,8 +4,14 @@
 # optimal configuration, then submits the run via POST /api/v1/runs.
 
 defaults:
-  framework_version: "v0.7.3"
-  dataset_name: "sharegpt"
+  framework_version: "v0.19.0"
+  # Scenario defines the load pattern (chatbot, batch, stress, production, long-context)
+  scenario: "chatbot"
+  # Dataset type for inference-perf (synthetic, sharegpt, random, shared_prefix,
+  # cnn_dailymail, billsum_conversations, infinity_instruct)
+  dataset: "synthetic"
+  # Minimum benchmark duration in seconds
+  min_duration_seconds: 180
 
 # Models to benchmark. Parameter count is fetched from HuggingFace.
 models:

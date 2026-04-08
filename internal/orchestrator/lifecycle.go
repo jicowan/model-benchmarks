@@ -298,6 +298,12 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		}
 		inferencePerfConfig = s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
 		log.Printf("[%s] using scenario %q: %s", cfg.RunID[:8], s.ID, s.Name)
+
+		// Allow dataset override from request
+		if cfg.Request.DatasetName != "" {
+			inferencePerfConfig.DatasetType = cfg.Request.DatasetName
+			log.Printf("[%s] dataset override: %s", cfg.RunID[:8], cfg.Request.DatasetName)
+		}
 	} else {
 		// Fall back to computed defaults based on request parameters
 		inputMean := cfg.Request.InputSequenceLength
@@ -341,12 +347,18 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 			qps = 50
 		}
 
+		// Use dataset from request or default to synthetic
+		datasetType := cfg.Request.DatasetName
+		if datasetType == "" {
+			datasetType = "synthetic"
+		}
+
 		inferencePerfConfig = manifest.InferencePerfConfigParams{
 			ModelHfID:    cfg.Request.ModelHfID,
 			TargetHost:   modelSvc,
 			TargetPort:   8000,
 			Streaming:    true,
-			DatasetType:  "synthetic",
+			DatasetType:  datasetType,
 			InputMean:    inputMean,
 			InputStdDev:  inputStdDev,
 			InputMin:     inputMin,

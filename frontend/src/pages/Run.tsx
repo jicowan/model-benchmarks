@@ -39,6 +39,18 @@ export default function Run() {
   const [testSuites, setTestSuites] = useState<TestSuite[]>([]);
   const [selectedScenario, setSelectedScenario] = useState<string>("chatbot");
   const [selectedSuite, setSelectedSuite] = useState<string>("quick");
+  const [selectedDataset, setSelectedDataset] = useState<string>("synthetic");
+
+  // Supported inference-perf dataset types
+  const datasetOptions = [
+    { value: "synthetic", label: "Synthetic", description: "Controlled input/output distributions" },
+    { value: "sharegpt", label: "ShareGPT", description: "Real-world conversational data" },
+    { value: "random", label: "Random", description: "Random token data" },
+    { value: "shared_prefix", label: "Shared Prefix", description: "Prefix caching scenarios" },
+    { value: "cnn_dailymail", label: "CNN DailyMail", description: "Summarization use cases" },
+    { value: "billsum_conversations", label: "Billsum", description: "Long context prefill-heavy" },
+    { value: "infinity_instruct", label: "Infinity Instruct", description: "Long context decode-heavy" },
+  ];
 
   // Initialize form with URL params (from Estimate page) or defaults
   const [form, setForm] = useState(() => {
@@ -309,7 +321,9 @@ export default function Run() {
           max_model_len: form.max_model_len || undefined,
           min_duration_seconds: scenario?.duration_seconds || form.min_duration_seconds || undefined,
           hf_token: form.hf_token || undefined,
-          run_type: selectedScenario,
+          scenario_id: selectedScenario,
+          dataset_name: selectedDataset,
+          run_type: "on_demand",
         });
         navigate(`/results/${res.id}`);
       }
@@ -490,26 +504,49 @@ export default function Run() {
             </div>
 
             {runMode === "single" ? (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Scenario
-                </label>
-                <select
-                  value={selectedScenario}
-                  onChange={(e) => setSelectedScenario(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                >
-                  {scenarios.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({Math.round(s.duration_seconds / 60)}m)
-                    </option>
-                  ))}
-                </select>
-                {scenarios.find((s) => s.id === selectedScenario) && (
-                  <p className="mt-2 text-xs text-gray-500">
-                    {scenarios.find((s) => s.id === selectedScenario)?.description}
-                  </p>
-                )}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Scenario
+                  </label>
+                  <select
+                    value={selectedScenario}
+                    onChange={(e) => setSelectedScenario(e.target.value)}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    {scenarios.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({Math.round(s.duration_seconds / 60)}m)
+                      </option>
+                    ))}
+                  </select>
+                  {scenarios.find((s) => s.id === selectedScenario) && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      {scenarios.find((s) => s.id === selectedScenario)?.description}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Dataset
+                  </label>
+                  <select
+                    value={selectedDataset}
+                    onChange={(e) => setSelectedDataset(e.target.value)}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    {datasetOptions.map((d) => (
+                      <option key={d.value} value={d.value}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
+                  {datasetOptions.find((d) => d.value === selectedDataset) && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      {datasetOptions.find((d) => d.value === selectedDataset)?.description}
+                    </p>
+                  )}
+                </div>
               </div>
             ) : (
               <div>
