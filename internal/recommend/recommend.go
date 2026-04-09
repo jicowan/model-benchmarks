@@ -558,19 +558,8 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		maxModelLen = maxTokensKV
 	}
 	maxModelLen = roundDownContext(maxModelLen)
-	rec.MaxModelLen = maxModelLen
-
-	// Generate explanation for max_model_len, noting sliding window if applicable
-	if cfg.SlidingWindow > 0 {
-		rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens. Note: Model uses sliding window attention (%d tokens), so KV cache per sequence is capped.",
-			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen, cfg.SlidingWindow)
-	} else {
-		rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens.",
-			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen)
-	}
 
 	// Scale input/output sequence lengths based on available context.
-	// Longer sequences = more realistic workloads for large-context models.
 	switch {
 	case maxModelLen >= 16384:
 		rec.InputSequenceLength = 2048
@@ -582,31 +571,58 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		rec.InputSequenceLength = 512
 		rec.OutputSequenceLength = 256
 	default:
-		// For very small contexts, use 2/3 input, 1/3 output
 		rec.InputSequenceLength = maxModelLen * 2 / 3
 		rec.OutputSequenceLength = maxModelLen / 3
 	}
 
-	// Calculate concurrency.
-	// For models with sliding window attention, KV cache per sequence is capped
-	// at the window size, allowing much higher concurrency.
+	// Calculate concurrency based on average sequence length.
 	avgSeqLen := float64(rec.InputSequenceLength + rec.OutputSequenceLength)
 	effectiveSeqLen := float64(effectiveKVCacheLength(int(avgSeqLen), cfg.SlidingWindow))
 	memPerSeq := kvPerToken * effectiveSeqLen
+	maxConcurrent := 1
 	if memPerSeq > 0 {
-		maxConcurrent := int(remainingBytes / memPerSeq)
-		if maxConcurrent > 64 {
-			maxConcurrent = 64
-		}
-		if maxConcurrent < 1 {
-			maxConcurrent = 1
-		}
-		rec.Concurrency = maxConcurrent
-	} else {
-		rec.Concurrency = 1
+		maxConcurrent = int(remainingBytes / memPerSeq)
+	}
+	if maxConcurrent > 64 {
+		maxConcurrent = 64
+	}
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
 	}
 
-	// Generate explanation for concurrency, noting sliding window benefit
+	// Joint constraint: ensure max_model_len × concurrency fits within 90%
+	// of the KV cache budget. vLLM uses paged attention so not every slot is
+	// fully allocated, but we need headroom to prevent OOM under load.
+	kvBudgetTokens := int(0.9 * remainingBytes / kvPerToken)
+	if maxModelLen*maxConcurrent > kvBudgetTokens {
+		// Prefer keeping concurrency high, reduce max_model_len first.
+		safeMaxModelLen := roundDownContext(kvBudgetTokens / maxConcurrent)
+		minModelLen := roundDownContext((rec.InputSequenceLength + rec.OutputSequenceLength) * 2)
+		if safeMaxModelLen >= minModelLen {
+			maxModelLen = safeMaxModelLen
+		} else {
+			// max_model_len would be too small; keep minimum and reduce concurrency.
+			maxModelLen = minModelLen
+			maxConcurrent = kvBudgetTokens / maxModelLen
+			if maxConcurrent < 1 {
+				maxConcurrent = 1
+			}
+		}
+	}
+
+	rec.MaxModelLen = maxModelLen
+	rec.Concurrency = maxConcurrent
+
+	// Generate explanation for max_model_len
+	if cfg.SlidingWindow > 0 {
+		rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Set to %d tokens to safely support %d concurrent requests. Note: Model uses sliding window attention (%d tokens).",
+			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen, maxConcurrent, cfg.SlidingWindow)
+	} else {
+		rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Set to %d tokens to safely support %d concurrent requests.",
+			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen, maxConcurrent)
+	}
+
+	// Generate explanation for concurrency
 	if cfg.SlidingWindow > 0 && cfg.SlidingWindow < int(avgSeqLen) {
 		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory. Sliding window (%d tokens) caps KV per sequence, enabling higher concurrency.",
 			remainingBytes/gibBytes, cfg.SlidingWindow)

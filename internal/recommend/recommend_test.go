@@ -182,9 +182,10 @@ func TestRecommendMistral7B_G5_12xlarge(t *testing.T) {
 	if rec.TensorParallelDegree != 4 {
 		t.Errorf("TP = %d, want 4", rec.TensorParallelDegree)
 	}
-	// With 4 GPUs, we have more memory → large context should be possible.
-	if rec.MaxModelLen < 32768 {
-		t.Errorf("max_model_len = %d, want >= 32768", rec.MaxModelLen)
+	// With 4 GPUs and joint max_model_len×concurrency constraint, context is
+	// capped to fit safely alongside concurrent requests.
+	if rec.MaxModelLen < 4096 {
+		t.Errorf("max_model_len = %d, want >= 4096", rec.MaxModelLen)
 	}
 }
 
