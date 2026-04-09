@@ -230,7 +230,7 @@ func TestMarkFailed(t *testing.T) {
 	}
 	runID, _ := repo.CreateBenchmarkRun(context.Background(), run)
 
-	o.markFailed(context.Background(), runID)
+	o.markFailed(context.Background(), runID, "test error message")
 
 	if got := repo.GetRunStatus(runID); got != "failed" {
 		t.Errorf("status = %s, want failed", got)

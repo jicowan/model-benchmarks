@@ -107,14 +107,14 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	// Phase 2: Deploy model Deployment + Service.
 	log.Printf("[%s] deploying model %s on %s", cfg.RunID[:8], cfg.Request.ModelHfID, cfg.Request.InstanceTypeName)
 	if err := o.deployModel(ctx, ns, modelName, cfg); err != nil {
-		o.markFailed(ctx, cfg.RunID)
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("deploy model: %v", err))
 		return fmt.Errorf("deploy model: %w", err)
 	}
 
 	// Phase 3: Wait for readiness.
 	log.Printf("[%s] waiting for model readiness", cfg.RunID[:8])
 	if err := o.waitForReady(ctx, ns, modelName, cfg); err != nil {
-		o.markFailed(ctx, cfg.RunID)
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("model not ready: %v", err))
 		return fmt.Errorf("wait for readiness: %w", err)
 	}
 
@@ -141,7 +141,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		if gpuScraper != nil {
 			gpuScraper.Stop()
 		}
-		o.markFailed(ctx, cfg.RunID)
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("launch loadgen: %v", err))
 		return fmt.Errorf("launch loadgen: %w", err)
 	}
 
@@ -163,7 +163,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	}
 
 	if err != nil {
-		o.markFailed(ctx, cfg.RunID)
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("collect results: %v", err))
 		return fmt.Errorf("collect results: %w", err)
 	}
 
@@ -178,7 +178,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 			snippet = append(snippet, logData[len(logData)-250:]...)
 		}
 		log.Printf("[%s] parse failed: %v\nlog snippet:\n%s", cfg.RunID[:8], err, snippet)
-		o.markFailed(ctx, cfg.RunID)
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("parse loadgen output: %v", err))
 		return fmt.Errorf("parse loadgen output: %w", err)
 	}
 
@@ -204,7 +204,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	}
 
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {
-		o.markFailed(ctx, cfg.RunID)
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("persist metrics: %v", err))
 		return fmt.Errorf("persist metrics: %w", err)
 	}
 
@@ -537,8 +537,8 @@ func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, key, data 
 	return err
 }
 
-func (o *Orchestrator) markFailed(ctx context.Context, runID string) {
-	if err := o.repo.UpdateRunStatus(ctx, runID, "failed"); err != nil {
+func (o *Orchestrator) markFailed(ctx context.Context, runID, reason string) {
+	if err := o.repo.UpdateRunFailed(ctx, runID, reason); err != nil {
 		log.Printf("failed to mark run %s as failed: %v", runID, err)
 	}
 }
@@ -640,7 +640,7 @@ func (o *Orchestrator) RecoverOrphanedRuns(ctx context.Context) {
 	if bucket == "" {
 		log.Printf("[recovery] RESULTS_S3_BUCKET not set, marking runs as failed")
 		for _, run := range runs {
-			o.markFailed(ctx, run.ID)
+			o.markFailed(ctx, run.ID, "orphaned run: API restarted and no S3 bucket configured for recovery")
 			o.cleanupResources(ctx, run.ID)
 		}
 		return
@@ -660,7 +660,7 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 	data, err := o.readResultsFromS3(ctx, bucket, key)
 	if err != nil {
 		log.Printf("[recovery] %s: no S3 results found, marking as failed: %v", shortID, err)
-		o.markFailed(ctx, runID)
+		o.markFailed(ctx, runID, fmt.Sprintf("orphaned run: no S3 results found (%v)", err))
 		o.cleanupResources(ctx, runID)
 		return
 	}
@@ -671,7 +671,7 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 	output, err := metrics.ParseLoadgenOutput(data)
 	if err != nil {
 		log.Printf("[recovery] %s: failed to parse results: %v", shortID, err)
-		o.markFailed(ctx, runID)
+		o.markFailed(ctx, runID, fmt.Sprintf("orphaned run: failed to parse S3 results (%v)", err))
 		o.cleanupResources(ctx, runID)
 		return
 	}
@@ -682,7 +682,7 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 
 	if err := o.repo.PersistMetrics(ctx, runID, computed); err != nil {
 		log.Printf("[recovery] %s: failed to persist metrics: %v", shortID, err)
-		o.markFailed(ctx, runID)
+		o.markFailed(ctx, runID, fmt.Sprintf("orphaned run: failed to persist recovered metrics (%v)", err))
 		o.cleanupResources(ctx, runID)
 		return
 	}

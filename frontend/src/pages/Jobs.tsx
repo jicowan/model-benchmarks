@@ -10,6 +10,7 @@ interface JobItem {
   instance_type_name: string;
   framework_or_suite: string; // framework for runs, suite_id for suites
   status: string;
+  error_message?: string;
   created_at: string;
   started_at?: string;
   completed_at?: string;
@@ -75,6 +76,7 @@ export default function Jobs() {
         instance_type_name: r.instance_type_name,
         framework_or_suite: r.framework,
         status: r.status,
+        error_message: r.error_message,
         created_at: r.created_at,
         started_at: r.started_at,
         completed_at: r.completed_at,
@@ -253,9 +255,15 @@ export default function Jobs() {
                       className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
                         statusColor[job.status] ?? "bg-gray-100"
                       }`}
+                      title={job.status === "failed" && job.error_message ? job.error_message : undefined}
                     >
                       {job.status}
                     </span>
+                    {job.status === "failed" && job.error_message && (
+                      <p className="text-xs text-red-600 mt-1 max-w-xs truncate" title={job.error_message}>
+                        {job.error_message}
+                      </p>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span

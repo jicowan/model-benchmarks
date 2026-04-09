@@ -44,6 +44,7 @@ export interface BenchmarkRun {
   dataset_name: string;
   run_type: string;
   status: string;
+  error_message?: string;
   superseded: boolean;
   started_at?: string;
   completed_at?: string;
@@ -119,6 +120,7 @@ export interface RunListItem {
   framework: string;
   run_type: string;
   status: string;
+  error_message?: string;
   created_at: string;
   started_at?: string;
   completed_at?: string;

@@ -14,6 +14,7 @@ type Repo interface {
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)
 	UpdateRunStatus(ctx context.Context, runID, status string) error
+	UpdateRunFailed(ctx context.Context, runID, reason string) error
 	UpdateLoadgenConfig(ctx context.Context, runID, config string) error
 	SetLoadgenStartedAt(ctx context.Context, runID string) error
 	GetLoadgenStartedAt(ctx context.Context, runID string) (*time.Time, error)

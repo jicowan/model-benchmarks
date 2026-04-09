@@ -43,6 +43,7 @@ type BenchmarkRun struct {
 	ScenarioID            *string    `json:"scenario_id,omitempty"`    // scenario identifier (chatbot, batch, etc.)
 	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
 	Status                string     `json:"status"`
+	ErrorMessage          *string    `json:"error_message,omitempty"`
 	Superseded            bool       `json:"superseded"`
 	StartedAt             *time.Time `json:"started_at,omitempty"`
 	LoadgenStartedAt      *time.Time `json:"loadgen_started_at,omitempty"`

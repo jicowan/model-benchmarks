@@ -120,6 +120,20 @@ func (m *MockRepo) UpdateRunStatus(_ context.Context, runID, status string) erro
 	return nil
 }
 
+func (m *MockRepo) UpdateRunFailed(_ context.Context, runID, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	run.Status = "failed"
+	run.ErrorMessage = &reason
+	now := time.Now()
+	run.CompletedAt = &now
+	return nil
+}
+
 func (m *MockRepo) UpdateLoadgenConfig(_ context.Context, runID, config string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -236,6 +250,7 @@ func (m *MockRepo) ListRuns(_ context.Context, f RunFilter) ([]RunListItem, erro
 			Framework:        run.Framework,
 			RunType:          run.RunType,
 			Status:           run.Status,
+			ErrorMessage:     run.ErrorMessage,
 			CreatedAt:        run.CreatedAt,
 			StartedAt:        run.StartedAt,
 			CompletedAt:      run.CompletedAt,

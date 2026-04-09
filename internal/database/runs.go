@@ -23,6 +23,7 @@ type RunListItem struct {
 	Framework        string     `json:"framework"`
 	RunType          string     `json:"run_type"`
 	Status           string     `json:"status"`
+	ErrorMessage     *string    `json:"error_message,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	StartedAt        *time.Time `json:"started_at,omitempty"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
@@ -72,7 +73,7 @@ func (r *Repository) ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, 
 	query := fmt.Sprintf(`
 		SELECT
 			br.id, m.hf_id, it.name,
-			br.framework, br.run_type, br.status,
+			br.framework, br.run_type, br.status, br.error_message,
 			br.created_at, br.started_at, br.completed_at
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
@@ -93,7 +94,7 @@ func (r *Repository) ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, 
 		var item RunListItem
 		err := rows.Scan(
 			&item.ID, &item.ModelHfID, &item.InstanceTypeName,
-			&item.Framework, &item.RunType, &item.Status,
+			&item.Framework, &item.RunType, &item.Status, &item.ErrorMessage,
 			&item.CreatedAt, &item.StartedAt, &item.CompletedAt,
 		)
 		if err != nil {
