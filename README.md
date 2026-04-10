@@ -161,7 +161,7 @@ The Aurora master password is stored in AWS Secrets Manager. Fetch it and create
 
 ```bash
 # Get the Aurora secret ARN from Terraform
-SECRET_ARN=$(cd terraform && terraform output -raw aurora_master_user_secret | jq -r '.[0].secret_arn')
+SECRET_ARN=$(cd terraform && terraform output -json aurora_master_user_secret | jq -r '.[0].secret_arn')
 
 # Fetch the credentials from Secrets Manager
 DB_CREDS=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text)

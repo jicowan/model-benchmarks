@@ -52,3 +52,8 @@ output "results_s3_bucket" {
   description = "S3 bucket name for benchmark results"
   value       = aws_s3_bucket.results.id
 }
+
+output "update_kubeconfig_command" {
+  description = "AWS CLI command to update kubeconfig for the EKS cluster"
+  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name}"
+}

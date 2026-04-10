@@ -11,6 +11,15 @@ provider "aws" {
   region = var.region
 }
 
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
+data "aws_ecrpublic_authorization_token" "token" {
+  provider = aws.us_east_1
+}
+
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
@@ -21,6 +30,12 @@ provider "helm" {
       command     = "aws"
       args        = ["eks", "get-token", "--cluster-name", local.cluster_name]
     }
+  }
+
+  registry {
+    url      = "oci://public.ecr.aws"
+    username = data.aws_ecrpublic_authorization_token.token.user_name
+    password = data.aws_ecrpublic_authorization_token.token.password
   }
 }
 
