@@ -269,7 +269,6 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		MemoryRequest:        memReq,
 		ModelS3URI:           modelS3URI,
 		UseRunaiStreamer:     useRunai,
-		VllmRunaiImage:       os.Getenv("VLLM_RUNAI_IMAGE"),
 		ModelServiceAccount:  modelServiceAccount,
 		StreamerConcurrency:  16,
 	})

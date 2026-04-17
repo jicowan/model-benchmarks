@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { searchModels, getModelDetail } from "../hfApi";
 import type { HfModelSummary, HfModelDetail } from "../hfApi";
+import { listModelCache } from "../api";
+import type { ModelCache } from "../types";
 
 interface ModelComboboxProps {
   value: string;
   onChange: (modelId: string) => void;
   onModelSelect?: (detail: HfModelDetail) => void;
+  onCachedModelSelect?: (cached: ModelCache) => void;
   hfToken?: string;
 }
 
@@ -19,9 +22,12 @@ export default function ModelCombobox({
   value,
   onChange,
   onModelSelect,
+  onCachedModelSelect,
   hfToken,
 }: ModelComboboxProps) {
   const [results, setResults] = useState<HfModelSummary[]>([]);
+  const [cachedModels, setCachedModels] = useState<ModelCache[]>([]);
+  const [filteredCached, setFilteredCached] = useState<ModelCache[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [gatedWarning, setGatedWarning] = useState("");
@@ -29,27 +35,42 @@ export default function ModelCombobox({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
+  useEffect(() => {
+    listModelCache()
+      .then((items) => setCachedModels(items.filter((m) => m.status === "cached")))
+      .catch(() => {});
+  }, []);
+
   const doSearch = useCallback(
     async (query: string) => {
       if (query.length < 2) {
         setResults([]);
+        setFilteredCached([]);
         setIsOpen(false);
         return;
       }
       setLoading(true);
       try {
+        const q = query.toLowerCase();
+        const cached = cachedModels.filter(
+          (m) =>
+            m.display_name.toLowerCase().includes(q) ||
+            (m.hf_id && m.hf_id.toLowerCase().includes(q))
+        );
+        setFilteredCached(cached);
+
         const items = await searchModels(query, hfToken || undefined);
         setResults(items);
-        setIsOpen(items.length > 0);
+        setIsOpen(items.length > 0 || cached.length > 0);
         setActiveIndex(-1);
       } catch {
         setResults([]);
-        setIsOpen(false);
+        setIsOpen(filteredCached.length > 0);
       } finally {
         setLoading(false);
       }
     },
-    [hfToken]
+    [hfToken, cachedModels]
   );
 
   function handleInputChange(text: string) {
@@ -57,6 +78,13 @@ export default function ModelCombobox({
     setGatedWarning("");
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => doSearch(text), 300);
+  }
+
+  function handleSelectCached(model: ModelCache) {
+    onChange(model.hf_id || model.display_name);
+    setIsOpen(false);
+    setGatedWarning("");
+    onCachedModelSelect?.(model);
   }
 
   async function handleSelect(model: HfModelSummary) {
@@ -115,7 +143,7 @@ export default function ModelCombobox({
         value={value}
         onChange={(e) => handleInputChange(e.target.value)}
         onFocus={() => {
-          if (results.length > 0) setIsOpen(true);
+          if (results.length > 0 || filteredCached.length > 0) setIsOpen(true);
         }}
         onKeyDown={handleKeyDown}
         placeholder="Search models or type ID (e.g. meta-llama/Llama-3.1-70B-Instruct)"
@@ -147,27 +175,60 @@ export default function ModelCombobox({
         </div>
       )}
 
-      {isOpen && results.length > 0 && (
+      {isOpen && (filteredCached.length > 0 || results.length > 0) && (
         <ul className="absolute z-50 mt-1 w-full max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
-          {results.map((model, i) => (
-            <li
-              key={model.modelId}
-              onMouseDown={() => handleSelect(model)}
-              onMouseEnter={() => setActiveIndex(i)}
-              className={`px-3 py-2 cursor-pointer ${
-                i === activeIndex ? "bg-blue-50" : "hover:bg-gray-50"
-              }`}
-            >
-              <div className="text-sm font-medium text-gray-900">
-                {model.modelId}
-              </div>
-              <div className="text-xs text-gray-500 flex items-center gap-2">
-                <span>{formatCount(model.downloads)} downloads</span>
-                <span>&middot;</span>
-                <span>{formatCount(model.likes)} likes</span>
-              </div>
-            </li>
-          ))}
+          {filteredCached.length > 0 && (
+            <>
+              <li className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50">
+                Cached Models
+              </li>
+              {filteredCached.map((model) => (
+                <li
+                  key={`cached-${model.id}`}
+                  onMouseDown={() => handleSelectCached(model)}
+                  className="px-3 py-2 cursor-pointer hover:bg-green-50"
+                >
+                  <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                    {model.display_name}
+                    <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
+                      S3
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 font-mono truncate">
+                    {model.s3_uri}
+                  </div>
+                </li>
+              ))}
+            </>
+          )}
+          {results.length > 0 && (
+            <>
+              {filteredCached.length > 0 && (
+                <li className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50">
+                  HuggingFace
+                </li>
+              )}
+              {results.map((model, i) => (
+                <li
+                  key={model.modelId}
+                  onMouseDown={() => handleSelect(model)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`px-3 py-2 cursor-pointer ${
+                    i === activeIndex ? "bg-blue-50" : "hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="text-sm font-medium text-gray-900">
+                    {model.modelId}
+                  </div>
+                  <div className="text-xs text-gray-500 flex items-center gap-2">
+                    <span>{formatCount(model.downloads)} downloads</span>
+                    <span>&middot;</span>
+                    <span>{formatCount(model.likes)} likes</span>
+                  </div>
+                </li>
+              ))}
+            </>
+          )}
         </ul>
       )}
 

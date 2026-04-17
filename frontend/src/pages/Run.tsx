@@ -459,6 +459,11 @@ export default function Run() {
               setCachedModel(null);
             }}
             onModelSelect={handleModelSelect}
+            onCachedModelSelect={(cached) => {
+              setCachedModel(cached);
+              set("model_s3_uri", cached.s3_uri);
+              setUseS3Cache(true);
+            }}
             hfToken={form.hf_token}
           />
           {cachedModel && (
@@ -495,24 +500,23 @@ export default function Run() {
           />
         </div>
 
-        {/* S3 Model URI (optional) */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            S3 Model URI <span className="text-gray-400 font-normal">(optional)</span>
-          </label>
-          <input
-            type="text"
-            value={form.model_s3_uri}
-            onChange={(e) => set("model_s3_uri", e.target.value)}
-            placeholder="s3://bucket/models/org/model-name"
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-          />
-          {form.model_s3_uri && (
+        {/* S3 Model URI (read-only, populated from cached/registered models) */}
+        {form.model_s3_uri && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              S3 Model URI
+            </label>
+            <input
+              type="text"
+              value={form.model_s3_uri}
+              readOnly
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono bg-gray-50 text-gray-500"
+            />
             <p className="mt-1 text-xs text-blue-600">
               Model will be loaded from S3 using Run:ai Streamer instead of HuggingFace.
             </p>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Instance */}
         <div className="grid grid-cols-2 gap-4">

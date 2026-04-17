@@ -260,14 +260,6 @@ resource "aws_eks_pod_identity_association" "loadgen" {
   tags = local.tags
 }
 
-# ---------- ECR Repository for custom vLLM + Run:ai Streamer image ----------
-resource "aws_ecr_repository" "vllm_runai" {
-  name                 = "${var.project_name}-vllm-runai"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-  tags                 = local.tags
-}
-
 # ---------- S3 Bucket for Model Weights ----------
 resource "aws_s3_bucket" "models" {
   bucket        = "${var.project_name}-models-${data.aws_caller_identity.current.account_id}"

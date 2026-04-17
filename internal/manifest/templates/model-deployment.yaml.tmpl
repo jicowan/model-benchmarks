@@ -37,9 +37,7 @@ spec:
         node.kubernetes.io/instance-type: {{ .InstanceTypeName }}
       containers:
         - name: vllm
-{{- if and (eq .AcceleratorType "gpu") .UseRunaiStreamer }}
-          image: {{ .VllmRunaiImage }}
-{{- else if eq .AcceleratorType "gpu" }}
+{{- if eq .AcceleratorType "gpu" }}
           image: vllm/vllm-openai:{{ .FrameworkVersion }}
 {{- else }}
           image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04

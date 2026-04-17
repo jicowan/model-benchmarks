@@ -316,7 +316,6 @@ func TestRenderModelDeployment_S3Runai(t *testing.T) {
 		MemoryRequest:        "16Gi",
 		ModelS3URI:           "s3://accelbench-models-123/models/meta-llama/Llama-3.1-8B-Instruct",
 		UseRunaiStreamer:     true,
-		VllmRunaiImage:       "123.dkr.ecr.us-east-2.amazonaws.com/accelbench-vllm-runai:v0.8.5",
 		ModelServiceAccount:  "accelbench-model",
 		StreamerConcurrency:  16,
 	}
@@ -333,7 +332,7 @@ func TestRenderModelDeployment_S3Runai(t *testing.T) {
 		{"s3 model uri", "s3://accelbench-models-123/models/meta-llama/Llama-3.1-8B-Instruct"},
 		{"runai streamer", "runai_streamer"},
 		{"concurrency config", `"concurrency":16`},
-		{"custom vllm image", "accelbench-vllm-runai:v0.8.5"},
+		{"standard vllm image", "vllm/vllm-openai:v0.8.5"},
 		{"service account", "serviceAccountName: accelbench-model"},
 	}
 	for _, c := range checks {
@@ -342,10 +341,6 @@ func TestRenderModelDeployment_S3Runai(t *testing.T) {
 		}
 	}
 
-	// Should NOT contain standard vLLM image
-	if strings.Contains(out, "vllm/vllm-openai:") {
-		t.Error("S3 deployment should use custom vllm-runai image, not standard vllm-openai")
-	}
 }
 
 func TestRenderModelDeployment_S3NoBitsandbytes(t *testing.T) {
@@ -365,7 +360,6 @@ func TestRenderModelDeployment_S3NoBitsandbytes(t *testing.T) {
 		MemoryRequest:        "32Gi",
 		ModelS3URI:           "s3://bucket/models/llama-70b",
 		UseRunaiStreamer:     true,
-		VllmRunaiImage:       "123.dkr.ecr.us-east-2.amazonaws.com/accelbench-vllm-runai:v0.8.5",
 		ModelServiceAccount:  "accelbench-model",
 		StreamerConcurrency:  16,
 	}

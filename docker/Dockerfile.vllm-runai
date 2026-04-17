@@ -1,2 +1,0 @@
-FROM vllm/vllm-openai:v0.8.5
-RUN pip install --no-cache-dir runai-model-streamer runai-model-streamer-s3

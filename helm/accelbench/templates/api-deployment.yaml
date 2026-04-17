@@ -57,10 +57,6 @@ spec:
             - name: MODELS_S3_BUCKET
               value: "{{ .Values.models.s3Bucket }}"
             {{- end }}
-            {{- if .Values.image.vllmRunai.repository }}
-            - name: VLLM_RUNAI_IMAGE
-              value: "{{ .Values.image.vllmRunai.repository }}:{{ .Values.image.vllmRunai.tag }}"
-            {{- end }}
             {{- if .Values.image.cacheJob.repository }}
             - name: CACHE_JOB_IMAGE
               value: "{{ .Values.image.cacheJob.repository }}:{{ .Values.image.cacheJob.tag }}"

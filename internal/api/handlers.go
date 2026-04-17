@@ -134,6 +134,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// For S3-only models, derive model_hf_id from the S3 URI if not provided
+	if req.ModelHfID == "" && req.ModelS3URI != "" {
+		req.ModelHfID = req.ModelS3URI
+	}
+
+	if req.ModelHfID == "" {
+		writeError(w, http.StatusBadRequest, "model_hf_id or model_s3_uri is required")
+		return
+	}
+
 	// Look up or auto-register model.
 	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
 	if err != nil {
@@ -784,9 +794,14 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For S3-only models, derive model_hf_id from the S3 URI if not provided
+	if req.ModelHfID == "" && req.ModelS3URI != "" {
+		req.ModelHfID = req.ModelS3URI
+	}
+
 	// Validate required fields
 	if req.ModelHfID == "" || req.InstanceTypeName == "" {
-		writeError(w, http.StatusBadRequest, "model_hf_id and instance_type_name are required")
+		writeError(w, http.StatusBadRequest, "model_hf_id (or model_s3_uri) and instance_type_name are required")
 		return
 	}
 
