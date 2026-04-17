@@ -124,6 +124,7 @@ type RunRequest struct {
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
 	MinDurationSeconds   int     `json:"min_duration_seconds,omitempty"`
 	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
+	ModelS3URI           string  `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string  `json:"hf_token,omitempty"`
 }
 
@@ -183,5 +184,6 @@ type SuiteRunRequest struct {
 	TensorParallelDegree int      `json:"tensor_parallel_degree"`
 	Quantization         *string  `json:"quantization,omitempty"`
 	MaxModelLen          int      `json:"max_model_len,omitempty"`
+	ModelS3URI           string   `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string   `json:"hf_token,omitempty"`
 }

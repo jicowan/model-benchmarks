@@ -20,6 +20,9 @@ spec:
         accelbench/role: model
     spec:
       terminationGracePeriodSeconds: 30
+{{- if .ModelServiceAccount }}
+      serviceAccountName: {{ .ModelServiceAccount }}
+{{- end }}
       tolerations:
 {{- if eq .AcceleratorType "gpu" }}
         - key: nvidia.com/gpu
@@ -34,7 +37,9 @@ spec:
         node.kubernetes.io/instance-type: {{ .InstanceTypeName }}
       containers:
         - name: vllm
-{{- if eq .AcceleratorType "gpu" }}
+{{- if and (eq .AcceleratorType "gpu") .UseRunaiStreamer }}
+          image: {{ .VllmRunaiImage }}
+{{- else if eq .AcceleratorType "gpu" }}
           image: vllm/vllm-openai:{{ .FrameworkVersion }}
 {{- else }}
           image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
@@ -54,13 +59,23 @@ spec:
 {{- end }}
 {{- if eq .AcceleratorType "gpu" }}
           args:
+{{- if .ModelS3URI }}
+            - "--model"
+            - "{{ .ModelS3URI }}"
+            - "--load-format"
+            - "runai_streamer"
+            - "--model-loader-extra-config"
+            - '{"concurrency":{{ if gt .StreamerConcurrency 0 }}{{ .StreamerConcurrency }}{{ else }}16{{ end }}}'
+{{- else }}
             - "--model"
             - "{{ .ModelHfID }}"
+{{- end }}
             - "--port"
             - "8000"
             - "--tensor-parallel-size"
             - "{{ .TensorParallelDegree }}"
             - "--trust-remote-code"
+{{- if not .UseRunaiStreamer }}
 {{- if eq .Quantization "fp16" }}
             - "--dtype"
             - "float16"
@@ -74,6 +89,7 @@ spec:
             - "bitsandbytes"
             - "--load-format"
             - "bitsandbytes"
+{{- end }}
 {{- end }}
 {{- if gt .MaxModelLen 0 }}
             - "--max-model-len"

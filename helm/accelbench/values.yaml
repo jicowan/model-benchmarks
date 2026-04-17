@@ -24,6 +24,9 @@ image:
     repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-migration
     tag: "latest"
     pullPolicy: IfNotPresent
+  vllmRunai:
+    repository: ""  # Optional: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-vllm-runai
+    tag: "v0.8.5"
 
 imagePullSecrets: []
 
@@ -130,4 +133,10 @@ huggingface:
 results:
   # -- S3 bucket name for storing loadgen results (avoids log truncation)
   # Set from Terraform output: accelbench-results-<account-id>
+  s3Bucket: ""
+
+# -- Model weights storage (S3)
+models:
+  # -- S3 bucket name for cached/custom model weights (Run:ai Streamer)
+  # Set from Terraform output: accelbench-models-<account-id>
   s3Bucket: ""

@@ -53,6 +53,14 @@ spec:
             - name: RESULTS_S3_BUCKET
               value: "{{ .Values.results.s3Bucket }}"
             {{- end }}
+            {{- if .Values.models.s3Bucket }}
+            - name: MODELS_S3_BUCKET
+              value: "{{ .Values.models.s3Bucket }}"
+            {{- end }}
+            {{- if .Values.image.vllmRunai.repository }}
+            - name: VLLM_RUNAI_IMAGE
+              value: "{{ .Values.image.vllmRunai.repository }}:{{ .Values.image.vllmRunai.tag }}"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

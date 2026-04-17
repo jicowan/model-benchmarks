@@ -300,6 +300,90 @@ func TestRenderInferencePerfConfig_MultiStage(t *testing.T) {
 	}
 }
 
+func TestRenderModelDeployment_S3Runai(t *testing.T) {
+	params := ModelDeploymentParams{
+		Name:                 "bench-s3",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "vllm",
+		FrameworkVersion:     "v0.8.5",
+		TensorParallelDegree: 1,
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     1,
+		InstanceTypeName:     "g6e.xlarge",
+		InstanceFamily:       "g6e",
+		CPURequest:           "4",
+		MemoryRequest:        "16Gi",
+		ModelS3URI:           "s3://accelbench-models-123/models/meta-llama/Llama-3.1-8B-Instruct",
+		UseRunaiStreamer:     true,
+		VllmRunaiImage:       "123.dkr.ecr.us-east-2.amazonaws.com/accelbench-vllm-runai:v0.8.5",
+		ModelServiceAccount:  "accelbench-model",
+		StreamerConcurrency:  16,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"s3 model uri", "s3://accelbench-models-123/models/meta-llama/Llama-3.1-8B-Instruct"},
+		{"runai streamer", "runai_streamer"},
+		{"concurrency config", `"concurrency":16`},
+		{"custom vllm image", "accelbench-vllm-runai:v0.8.5"},
+		{"service account", "serviceAccountName: accelbench-model"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output does not contain %q", c.name, c.want)
+		}
+	}
+
+	// Should NOT contain standard vLLM image
+	if strings.Contains(out, "vllm/vllm-openai:") {
+		t.Error("S3 deployment should use custom vllm-runai image, not standard vllm-openai")
+	}
+}
+
+func TestRenderModelDeployment_S3NoBitsandbytes(t *testing.T) {
+	params := ModelDeploymentParams{
+		Name:                 "bench-s3-quant",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-70B-Instruct",
+		Framework:            "vllm",
+		FrameworkVersion:     "v0.8.5",
+		TensorParallelDegree: 4,
+		Quantization:         "int8",
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     4,
+		InstanceTypeName:     "g5.12xlarge",
+		InstanceFamily:       "g5",
+		CPURequest:           "8",
+		MemoryRequest:        "32Gi",
+		ModelS3URI:           "s3://bucket/models/llama-70b",
+		UseRunaiStreamer:     true,
+		VllmRunaiImage:       "123.dkr.ecr.us-east-2.amazonaws.com/accelbench-vllm-runai:v0.8.5",
+		ModelServiceAccount:  "accelbench-model",
+		StreamerConcurrency:  16,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	// Should use runai_streamer, not bitsandbytes
+	if !strings.Contains(out, "runai_streamer") {
+		t.Error("expected runai_streamer in output")
+	}
+	if strings.Contains(out, "bitsandbytes") {
+		t.Error("bitsandbytes should be omitted when UseRunaiStreamer is true")
+	}
+}
+
 func TestRenderModelDeployment_MultiDocument(t *testing.T) {
 	params := ModelDeploymentParams{
 		Name:                 "bench-multi",

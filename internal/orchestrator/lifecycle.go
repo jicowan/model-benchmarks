@@ -224,6 +224,19 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 	cpuReq := fmt.Sprintf("%d", max(1, vcpus*3/4))
 	memReq := fmt.Sprintf("%dGi", max(1, memGiB*85/100))
 
+	var modelS3URI string
+	var useRunai bool
+	if cfg.Request.ModelS3URI != "" {
+		modelS3URI = cfg.Request.ModelS3URI
+		useRunai = true
+		log.Printf("[%s] using S3 model: %s", cfg.RunID[:8], modelS3URI)
+	}
+
+	var modelServiceAccount string
+	if useRunai {
+		modelServiceAccount = "accelbench-model"
+	}
+
 	yamlStr, err := manifest.RenderModelDeployment(manifest.ModelDeploymentParams{
 		Name:                 name,
 		Namespace:            ns,
@@ -241,6 +254,11 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		MaxModelLen:          cfg.Request.MaxModelLen,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
+		ModelS3URI:           modelS3URI,
+		UseRunaiStreamer:     useRunai,
+		VllmRunaiImage:       os.Getenv("VLLM_RUNAI_IMAGE"),
+		ModelServiceAccount:  modelServiceAccount,
+		StreamerConcurrency:  16,
 	})
 	if err != nil {
 		return err

@@ -41,6 +41,11 @@ type ModelDeploymentParams struct {
 	MaxModelLen          int    // 0 = auto-detect from model config
 	CPURequest           string
 	MemoryRequest        string
+	ModelS3URI           string // s3://bucket/models/org/model (empty = use HF)
+	UseRunaiStreamer      bool   // true = --load-format runai_streamer
+	VllmRunaiImage        string // Custom vLLM image with runai pre-installed
+	ModelServiceAccount   string // K8s service account for S3 access
+	StreamerConcurrency   int    // runai_streamer concurrency (default 16)
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.

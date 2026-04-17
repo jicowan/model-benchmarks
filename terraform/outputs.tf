@@ -57,3 +57,13 @@ output "update_kubeconfig_command" {
   description = "AWS CLI command to update kubeconfig for the EKS cluster"
   value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name}"
 }
+
+output "models_s3_bucket" {
+  description = "S3 bucket name for model weights"
+  value       = aws_s3_bucket.models.id
+}
+
+output "ecr_vllm_runai_url" {
+  description = "ECR repository URL for the vLLM + Run:ai Streamer image"
+  value       = aws_ecr_repository.vllm_runai.repository_url
+}

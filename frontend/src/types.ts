@@ -109,6 +109,7 @@ export interface RunRequest {
   run_type?: string;
   scenario_id?: string;
   max_model_len?: number;
+  model_s3_uri?: string;
   min_duration_seconds?: number;
   hf_token?: string;
 }
@@ -367,6 +368,7 @@ export interface SuiteRunRequest {
   tensor_parallel_degree?: number;
   quantization?: string;
   max_model_len?: number;
+  model_s3_uri?: string;
   hf_token?: string;
 }
 

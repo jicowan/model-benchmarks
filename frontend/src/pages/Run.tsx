@@ -72,6 +72,7 @@ export default function Run() {
       min_duration_seconds: 180,
       hf_token: searchParams.get("hf_token") || "",
       overhead_gib: 0, // 0 = auto-calculated
+      model_s3_uri: searchParams.get("model_s3_uri") || "",
     };
   });
 
@@ -343,6 +344,7 @@ export default function Run() {
           tensor_parallel_degree: form.tensor_parallel_degree,
           quantization: form.quantization || undefined,
           max_model_len: form.max_model_len || undefined,
+          model_s3_uri: form.model_s3_uri || undefined,
           hf_token: form.hf_token || undefined,
         });
         navigate(`/suite-runs/${res.id}`);
@@ -451,6 +453,25 @@ export default function Run() {
             onChange={(e) => set("model_hf_revision", e.target.value)}
             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
           />
+        </div>
+
+        {/* S3 Model URI (optional) */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            S3 Model URI <span className="text-gray-400 font-normal">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={form.model_s3_uri}
+            onChange={(e) => set("model_s3_uri", e.target.value)}
+            placeholder="s3://bucket/models/org/model-name"
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
+          />
+          {form.model_s3_uri && (
+            <p className="mt-1 text-xs text-blue-600">
+              Model will be loaded from S3 using Run:ai Streamer instead of HuggingFace.
+            </p>
+          )}
         </div>
 
         {/* Instance */}

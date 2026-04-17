@@ -93,6 +93,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 			TensorParallelDegree: req.TensorParallelDegree,
 			Quantization:         req.Quantization,
 			MaxModelLen:          req.MaxModelLen,
+			ModelS3URI:           req.ModelS3URI,
 			HfToken:              req.HfToken,
 		},
 	}
