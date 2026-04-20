@@ -85,26 +85,40 @@ export default function Estimate() {
 
   function getFeasibilityBadge(row: EstimateRow) {
     if (!row.feasible) {
-      return <span className="text-red-600 font-medium">Infeasible</span>;
+      return <span className="font-mono text-[11px] tracking-widemech uppercase text-danger">Infeasible</span>;
     }
     if (row.requires_quantization) {
-      return <span className="text-amber-600 font-medium">Quantized</span>;
+      return <span className="font-mono text-[11px] tracking-widemech uppercase text-warn">Quantized</span>;
     }
-    return <span className="text-green-600 font-medium">Native</span>;
+    return <span className="font-mono text-[11px] tracking-widemech uppercase text-signal">Native</span>;
   }
 
   return (
-    <div className="max-w-6xl">
-      <h1 className="text-2xl font-bold mb-2">Quick Estimate</h1>
-      <p className="text-gray-600 mb-6">
-        Enter a model to instantly see which instances can run it, with recommended configurations and costs.
-      </p>
+    <>
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">estimate</span>
+        </div>
+      </div>
+      <div className="p-6 max-w-6xl mx-auto animate-enter">
+      <div className="mb-8">
+        <div className="eyebrow mb-3">INSTANCE SIZING</div>
+        <h1 className="font-sans text-[28px] leading-tight tracking-[-0.01em] text-balance">
+          Which instances can run this model?
+        </h1>
+        <p className="meta mt-3 max-w-xl">
+          Memory fit, recommended configuration, and on-demand cost — computed from
+          model architecture and GPU specs. No benchmark required.
+        </p>
+      </div>
 
       {/* Input Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+      <div className="panel p-4 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               HF Token (optional, for gated models)
             </label>
             <div className="flex items-center gap-2">
@@ -114,24 +128,24 @@ export default function Estimate() {
                 onChange={(e) => setHfToken(e.target.value)}
                 onBlur={handleTokenBlur}
                 placeholder="hf_..."
-                className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="input flex-1"
               />
               {tokenStatus === "valid" && (
-                <span className="text-green-600 text-sm">Valid</span>
+                <span className="font-mono text-[11px] tracking-mech uppercase text-signal">Valid</span>
               )}
               {tokenStatus === "invalid" && (
-                <span className="text-red-600 text-sm">Invalid</span>
+                <span className="font-mono text-[11px] tracking-mech uppercase text-danger">Invalid</span>
               )}
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Accelerator Type
             </label>
             <select
               value={filters.accelerator_type}
               onChange={(e) => setFilters({ ...filters, accelerator_type: e.target.value })}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             >
               <option value="">All</option>
               <option value="gpu">GPU only</option>
@@ -141,7 +155,7 @@ export default function Estimate() {
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="eyebrow block mb-1.5">
             Model (HuggingFace ID)
           </label>
           <ModelCombobox
@@ -155,13 +169,13 @@ export default function Estimate() {
         <button
           onClick={handleEstimate}
           disabled={!model.trim() || loading}
-          className="rounded-md bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn btn-primary h-10 px-6 text-[13px]"
         >
           {loading ? "Analyzing..." : "Get Estimates"}
         </button>
 
         {error && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 rounded-md px-3 py-2">
+          <p className="mt-3 font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">
             {error}
           </p>
         )}
@@ -171,25 +185,25 @@ export default function Estimate() {
       {result && (
         <>
           {/* Model Info */}
-          <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 mb-4">
-            <div className="flex flex-wrap gap-4 text-sm">
-              <span>
-                <span className="text-gray-500">Model:</span>{" "}
-                <span className="font-medium">{result.model_info.hf_id}</span>
+          <div className="panel-inset p-4 mb-4">
+            <div className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-[12.5px]">
+              <span className="flex items-baseline gap-2">
+                <span className="eyebrow">MODEL</span>
+                <span className="text-ink-0">{result.model_info.hf_id}</span>
               </span>
-              <span>
-                <span className="text-gray-500">Params:</span>{" "}
-                <span className="font-medium">
+              <span className="flex items-baseline gap-2">
+                <span className="eyebrow">PARAMS</span>
+                <span className="text-ink-0 tabular">
                   {(result.model_info.parameter_count / 1e9).toFixed(1)}B
                 </span>
               </span>
-              <span>
-                <span className="text-gray-500">Dtype:</span>{" "}
-                <span className="font-medium">{result.model_info.native_dtype || "bfloat16"}</span>
+              <span className="flex items-baseline gap-2">
+                <span className="eyebrow">DTYPE</span>
+                <span className="text-ink-0">{result.model_info.native_dtype || "bfloat16"}</span>
               </span>
-              <span>
-                <span className="text-gray-500">Max Context:</span>{" "}
-                <span className="font-medium">
+              <span className="flex items-baseline gap-2">
+                <span className="eyebrow">MAX CTX</span>
+                <span className="text-ink-0 tabular">
                   {result.model_info.max_position_embeddings.toLocaleString()}
                 </span>
               </span>
@@ -198,66 +212,66 @@ export default function Estimate() {
 
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-            <div className="bg-green-50 rounded-lg p-3 border border-green-200">
-              <div className="text-2xl font-bold text-green-700">
+            <div className="border border-signal/40 bg-signal/5 p-3">
+              <div className="font-mono text-[22px] tabular text-signal">
                 {result.summary.feasible_native}
               </div>
-              <div className="text-sm text-green-600">Native precision</div>
+              <div className="caption text-signal mt-1">NATIVE PRECISION</div>
             </div>
-            <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
-              <div className="text-2xl font-bold text-amber-700">
+            <div className="border border-warn/40 bg-warn/5 p-3">
+              <div className="font-mono text-[22px] tabular text-warn">
                 {result.summary.feasible_quantized}
               </div>
-              <div className="text-sm text-amber-600">With quantization</div>
+              <div className="caption text-warn mt-1">WITH QUANTIZATION</div>
             </div>
-            <div className="bg-red-50 rounded-lg p-3 border border-red-200">
-              <div className="text-2xl font-bold text-red-700">
+            <div className="border border-danger/40 bg-danger/5 p-3">
+              <div className="font-mono text-[22px] tabular text-danger">
                 {result.summary.infeasible}
               </div>
-              <div className="text-sm text-red-600">Infeasible</div>
+              <div className="caption text-danger mt-1">INFEASIBLE</div>
             </div>
-            <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
-              <div className="text-sm font-medium text-blue-700 truncate">
+            <div className="border border-info/40 bg-info/5 p-3">
+              <div className="font-mono text-[13px] text-info truncate">
                 {result.summary.cheapest_feasible || "-"}
               </div>
-              <div className="text-sm text-blue-600">Cheapest option</div>
+              <div className="caption text-info mt-1">CHEAPEST OPTION</div>
             </div>
           </div>
 
           {/* Results Table */}
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+          <div className="panel overflow-x-auto">
+            <table className="data-table min-w-full">
+              <thead className="bg-surface-1">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     Instance
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     Accelerator
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     Status
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     Quant
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     Context
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     $/hr
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                     Action
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200">
+              <tbody>
                 {result.estimates.map((row) => (
                   <>
                     <tr
                       key={row.instance_type}
-                      className={`hover:bg-gray-50 cursor-pointer ${
+                      className={`hover:bg-surface-1 cursor-pointer ${
                         !row.feasible ? "opacity-60" : ""
                       }`}
                       onClick={() =>
@@ -266,32 +280,32 @@ export default function Estimate() {
                         )
                       }
                     >
-                      <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      <td className="py-2.5 px-3 border-b border-line/60 text-ink-0 font-mono text-[12.5px]">
                         {row.instance_type}
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-600">
+                      <td className="py-2.5 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
                         {row.accelerator_count}x {row.accelerator_name}
                       </td>
-                      <td className="px-4 py-3 text-sm">{getFeasibilityBadge(row)}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">
+                      <td className="py-2.5 px-3 border-b border-line/60">{getFeasibilityBadge(row)}</td>
+                      <td className="py-2.5 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
                         {row.config?.quantization || "None"}
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-600">
+                      <td className="py-2.5 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
                         {row.config?.max_model_len
                           ? `${(row.config.max_model_len / 1000).toFixed(0)}K`
                           : "-"}
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-600">
+                      <td className="py-2.5 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
                         {row.cost ? `$${row.cost.hourly_usd.toFixed(2)}` : "-"}
                       </td>
-                      <td className="px-4 py-3 text-sm">
+                      <td className="py-2.5 px-3 border-b border-line/60">
                         {row.feasible && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               handleRunBenchmark(row);
                             }}
-                            className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                            className="btn btn-primary h-7 px-3 text-[11px]"
                           >
                             Run
                           </button>
@@ -300,19 +314,19 @@ export default function Estimate() {
                     </tr>
                     {expandedRow === row.instance_type && (
                       <tr key={`${row.instance_type}-expanded`}>
-                        <td colSpan={7} className="px-4 py-3 bg-gray-50">
+                        <td colSpan={7} className="p-4 bg-surface-2 border-b border-line">
                           {row.feasible && row.config ? (
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                               <div>
-                                <span className="text-gray-500">Tensor Parallel:</span>{" "}
+                                <span className="eyebrow mr-1.5">TP</span>{" "}
                                 <span className="font-medium">{row.config.tensor_parallel_degree}</span>
                               </div>
                               <div>
-                                <span className="text-gray-500">Concurrency:</span>{" "}
+                                <span className="eyebrow mr-1.5">CONCURRENCY</span>{" "}
                                 <span className="font-medium">{row.config.concurrency}</span>
                               </div>
                               <div>
-                                <span className="text-gray-500">Memory:</span>{" "}
+                                <span className="eyebrow mr-1.5">MEMORY</span>{" "}
                                 <span className="font-medium">
                                   {row.memory
                                     ? `${row.memory.model_weights_gib.toFixed(0)} / ${row.memory.available_gib.toFixed(0)} GiB (${row.memory.utilization_pct.toFixed(0)}%)`
@@ -320,14 +334,14 @@ export default function Estimate() {
                                 </span>
                               </div>
                               <div>
-                                <span className="text-gray-500">Benchmark:</span>{" "}
+                                <span className="eyebrow mr-1.5">BENCHMARK</span>{" "}
                                 <span className="font-medium">
                                   {row.has_benchmark_data ? "Available" : "Not yet run"}
                                 </span>
                               </div>
                             </div>
                           ) : (
-                            <p className="text-sm text-red-600">{row.explanation}</p>
+                            <p className="font-mono text-[12px] text-danger">{row.explanation}</p>
                           )}
                         </td>
                       </tr>
@@ -339,6 +353,7 @@ export default function Estimate() {
           </div>
         </>
       )}
-    </div>
+      </div>
+    </>
   );
 }

@@ -432,6 +432,18 @@ export interface TestSuiteRun {
   scenario_definitions?: ScenarioDefinition[];
 }
 
+export interface ComponentStatus {
+  status: "ok" | "down";
+  latency_ms?: number;
+  error?: string;
+}
+
+export interface StatusResponse {
+  status: "ok" | "degraded" | "down";
+  components: Record<string, ComponentStatus>;
+  checked_at: string;
+}
+
 // PRD-21: Model Cache
 export interface ModelCache {
   id: string;

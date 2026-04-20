@@ -1,3 +1,251 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ============================================================
+   AccelBench — Industrial Technical theme
+   ============================================================ */
+
+@layer base {
+  :root {
+    /* Light theme */
+    --surface-0: 246 247 248;
+    --surface-1: 255 255 255;
+    --surface-2: 236 238 240;
+    --line: 216 219 223;
+    --line-strong: 183 188 194;
+    --ink-0: 10 11 13;
+    --ink-1: 75 80 86;
+    --ink-2: 128 134 139;
+    --signal: 10 138 74;
+    --warn: 184 106 0;
+    --danger: 201 48 44;
+    --info: 25 103 210;
+    color-scheme: light;
+  }
+
+  .dark {
+    /* Dark theme — default */
+    --surface-0: 10 11 13;
+    --surface-1: 17 19 23;
+    --surface-2: 26 29 34;
+    --line: 35 39 46;
+    --line-strong: 58 64 73;
+    --ink-0: 232 234 237;
+    --ink-1: 154 160 166;
+    --ink-2: 95 99 104;
+    --signal: 57 255 136;
+    --warn: 255 176 32;
+    --danger: 255 71 87;
+    --info: 94 181 255;
+    color-scheme: dark;
+  }
+
+  html {
+    font-family: theme("fontFamily.sans");
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-surface-0 text-ink-0;
+    min-height: 100vh;
+  }
+
+  /* Tabular figures everywhere by default for data density */
+  table,
+  .tabular,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Subtle grain overlay on dark mode for depth */
+  .dark body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.025;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='120' height='120' filter='url(%23n)'/></svg>");
+  }
+
+  /* Selection */
+  ::selection {
+    background-color: rgb(var(--signal) / 0.25);
+    color: rgb(var(--ink-0));
+  }
+
+  /* Scrollbars — subtle, industrial */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--line-strong) / 0.6);
+    border-radius: 0;
+    border: 2px solid rgb(var(--surface-0));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--line-strong));
+  }
+}
+
+@layer components {
+  /* ---- Surfaces ---- */
+  .panel {
+    @apply bg-surface-1 border border-line;
+  }
+  .panel-inset {
+    @apply bg-surface-2 border border-line;
+  }
+
+  /* ---- Hairline divider ---- */
+  .hairline {
+    border-top: 1px solid rgb(var(--line));
+  }
+  .hairline-y {
+    border-left: 1px solid rgb(var(--line));
+  }
+
+  /* ---- Text scales ---- */
+  .eyebrow {
+    @apply font-mono text-[11px] tracking-widemech uppercase text-ink-2;
+  }
+  .meta {
+    @apply font-mono text-[12px] text-ink-2;
+  }
+  .caption {
+    @apply font-mono text-[11px] text-ink-2 tracking-mech;
+  }
+
+  /* ---- Buttons ---- */
+  .btn {
+    @apply inline-flex items-center gap-1.5 font-mono text-[12px] tracking-mech
+      h-8 px-3 border border-line bg-surface-1 text-ink-0
+      hover:bg-surface-2 hover:border-line-strong
+      disabled:opacity-40 disabled:cursor-not-allowed
+      transition-colors duration-150
+      focus:outline-none focus:ring-1 focus:ring-signal/60 focus:border-signal/60;
+  }
+  .btn-primary {
+    @apply border-signal/70 bg-signal/10 text-signal
+      hover:bg-signal/15 hover:border-signal
+      focus:ring-signal focus:border-signal;
+  }
+  .btn-danger {
+    @apply border-danger/60 text-danger hover:bg-danger/10 hover:border-danger;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-1 hover:text-ink-0 hover:bg-surface-2;
+  }
+
+  /* ---- Inputs ---- */
+  .input {
+    @apply h-9 px-2.5 bg-surface-0 border border-line text-ink-0
+      font-mono text-[12.5px] tracking-mech
+      placeholder:text-ink-2
+      focus:outline-none focus:border-signal/60 focus:ring-1 focus:ring-signal/40
+      disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .input-sm {
+    @apply h-7 px-2 text-[11.5px];
+  }
+
+  /* Style native select elements that use .input — add custom chevron + remove
+     browser chrome. The chevron color encodes the ink-2 variable via SVG stroke. */
+  select.input {
+    @apply pr-8 cursor-pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235F6368' stroke-width='2.5' stroke-linecap='square'><path d='M6 9l6 6 6-6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 10px 10px;
+  }
+  .dark select.input {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%239AA0A6' stroke-width='2.5' stroke-linecap='square'><path d='M6 9l6 6 6-6'/></svg>");
+  }
+
+  /* Dropdown option list — browser limits are significant but we can style
+     the options' colors in most browsers. */
+  select.input option {
+    background-color: rgb(var(--surface-1));
+    color: rgb(var(--ink-0));
+    font-family: theme("fontFamily.mono");
+  }
+
+  /* ---- Status dot + label ---- */
+  .status-dot {
+    @apply inline-block w-[6px] h-[6px] mr-1.5 align-middle;
+  }
+  .status-running {
+    @apply bg-signal animate-pulse_signal;
+  }
+  .status-pending {
+    @apply bg-warn;
+  }
+  .status-completed {
+    @apply bg-ink-1;
+  }
+  .status-cached {
+    @apply bg-signal;
+  }
+  .status-failed {
+    @apply bg-danger;
+  }
+  .status-deleting {
+    @apply bg-ink-2;
+  }
+
+  /* ---- Tables ---- */
+  .data-table {
+    @apply w-full border-collapse font-mono text-[12.5px];
+  }
+  .data-table thead th {
+    @apply eyebrow text-left py-2 px-3 border-b border-line bg-surface-1;
+    font-weight: 500;
+  }
+  .data-table tbody td {
+    @apply py-2.5 px-3 border-b border-line/60 text-ink-0;
+  }
+  .data-table tbody tr:hover td {
+    @apply bg-surface-1;
+  }
+  .data-table .num {
+    @apply text-right;
+  }
+
+  /* ---- Code / Path ---- */
+  .path {
+    @apply font-mono text-[12px] text-ink-1;
+  }
+
+  /* ---- Kbd ---- */
+  kbd {
+    @apply font-mono text-[10.5px] px-1.5 py-0.5 border border-line bg-surface-2 text-ink-1 rounded-none;
+  }
+}
+
+@layer utilities {
+  .grid-lines {
+    background-image: linear-gradient(
+        to right,
+        rgb(var(--line) / 0.5) 1px,
+        transparent 1px
+      ),
+      linear-gradient(to bottom, rgb(var(--line) / 0.5) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

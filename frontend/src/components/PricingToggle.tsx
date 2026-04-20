@@ -13,18 +13,16 @@ interface Props {
 
 export default function PricingToggle({ value, onChange }: Props) {
   return (
-    <div className="inline-flex rounded-md shadow-sm" role="group">
+    <div className="inline-flex border border-line divide-x divide-line" role="group">
       {tiers.map((tier) => (
         <button
           key={tier.value}
           type="button"
           onClick={() => onChange(tier.value)}
-          className={`px-4 py-2 text-sm font-medium border ${
+          className={`h-8 px-3 font-mono text-[11px] tracking-mech uppercase transition-colors ${
             value === tier.value
-              ? "bg-blue-600 text-white border-blue-600"
-              : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-          } ${tier.value === "on_demand" ? "rounded-l-md" : ""} ${
-            tier.value === "reserved_3yr" ? "rounded-r-md" : ""
+              ? "bg-signal/10 text-signal"
+              : "bg-surface-1 text-ink-1 hover:bg-surface-2 hover:text-ink-0"
           }`}
         >
           {tier.label}

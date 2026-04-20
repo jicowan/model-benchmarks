@@ -9,6 +9,7 @@ import (
 // The concrete *Repository satisfies this interface. Use this interface
 // as a dependency in consumers to enable testing with mocks.
 type Repo interface {
+	Ping(ctx context.Context) error
 	GetModelByHfID(ctx context.Context, hfID, hfRevision string) (*Model, error)
 	EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error)
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)

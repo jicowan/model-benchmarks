@@ -35,7 +35,7 @@ export default function FilterBar({ onFilter }: Props) {
       className="flex flex-wrap items-end gap-3 mb-6"
     >
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">
+        <label className="eyebrow block mb-1.5">
           Model
         </label>
         <input
@@ -43,17 +43,17 @@ export default function FilterBar({ onFilter }: Props) {
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder="e.g. meta-llama/Llama-3.1-8B"
-          className="block w-64 rounded-md border border-gray-300 px-3 py-2 text-sm"
+          className="input w-64"
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">
+        <label className="eyebrow block mb-1.5">
           Model Family
         </label>
         <select
           value={modelFamily}
           onChange={(e) => setModelFamily(e.target.value)}
-          className="block rounded-md border border-gray-300 px-3 py-2 text-sm"
+          className="input"
         >
           <option value="">All</option>
           <option value="llama">Llama</option>
@@ -65,13 +65,13 @@ export default function FilterBar({ onFilter }: Props) {
         </select>
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">
+        <label className="eyebrow block mb-1.5">
           Instance Family
         </label>
         <select
           value={instanceFamily}
           onChange={(e) => setInstanceFamily(e.target.value)}
-          className="block rounded-md border border-gray-300 px-3 py-2 text-sm"
+          className="input"
         >
           <option value="">All</option>
           <option value="g5">g5</option>
@@ -86,13 +86,13 @@ export default function FilterBar({ onFilter }: Props) {
         </select>
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">
+        <label className="eyebrow block mb-1.5">
           Accelerator
         </label>
         <select
           value={acceleratorType}
           onChange={(e) => setAcceleratorType(e.target.value)}
-          className="block rounded-md border border-gray-300 px-3 py-2 text-sm"
+          className="input"
         >
           <option value="">All</option>
           <option value="gpu">GPU</option>
@@ -101,14 +101,14 @@ export default function FilterBar({ onFilter }: Props) {
       </div>
       <button
         type="submit"
-        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        className="btn btn-primary"
       >
         Filter
       </button>
       <button
         type="button"
         onClick={handleClear}
-        className="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50"
+        className="btn"
       >
         Clear
       </button>

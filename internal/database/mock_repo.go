@@ -62,6 +62,10 @@ func (m *MockRepo) GetRunStatus(runID string) string {
 	return ""
 }
 
+func (m *MockRepo) Ping(_ context.Context) error {
+	return nil
+}
+
 func (m *MockRepo) GetModelByHfID(_ context.Context, hfID, hfRevision string) (*Model, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

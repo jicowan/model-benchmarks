@@ -30,11 +30,11 @@ export default function MemoryBreakdown({ breakdown, loading }: Props) {
   ].filter(s => s.value > 0.01); // Filter out negligible segments
 
   return (
-    <div className="rounded-md border border-gray-200 bg-white p-4">
+    <div className="panel p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-700">Memory Breakdown</h3>
+        <h3 className="eyebrow">MEMORY BREAKDOWN</h3>
         {loading && (
-          <svg className="animate-spin h-4 w-4 text-gray-400" viewBox="0 0 24 24">
+          <svg className="animate-spin h-4 w-4 text-ink-2" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
@@ -42,7 +42,7 @@ export default function MemoryBreakdown({ breakdown, loading }: Props) {
       </div>
 
       {/* Stacked bar visualization */}
-      <div className="relative h-8 rounded-md overflow-hidden bg-gray-100 mb-3">
+      <div className="relative h-8 border border-line overflow-hidden bg-surface-2 mb-3">
         {segments.map((seg, i) => {
           const pct = (seg.value / total) * 100;
           const offset = segments.slice(0, i).reduce((acc, s) => acc + (s.value / total) * 100, 0);
@@ -62,32 +62,32 @@ export default function MemoryBreakdown({ breakdown, loading }: Props) {
       </div>
 
       {/* Legend */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11.5px]">
         {segments.map((seg) => (
           <div key={seg.label} className="flex items-center gap-2">
             <span
-              className="w-3 h-3 rounded-sm flex-shrink-0"
+              className="w-2.5 h-2.5 flex-shrink-0"
               style={{ backgroundColor: seg.color }}
             />
-            <span className="text-gray-600">{seg.label}:</span>
-            <span className="text-gray-900 font-medium">{seg.value.toFixed(2)} GiB</span>
+            <span className="text-ink-2">{seg.label}:</span>
+            <span className="text-ink-0 tabular">{seg.value.toFixed(2)} GiB</span>
           </div>
         ))}
       </div>
 
       {/* Summary */}
-      <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-xs">
-        <span className="text-gray-500">
-          Total Used: <span className="font-medium text-gray-700">{breakdown.total_used_gib.toFixed(2)} GiB</span>
+      <div className="mt-3 pt-3 border-t border-line flex justify-between caption">
+        <span>
+          TOTAL USED: <span className="text-ink-0 tabular">{breakdown.total_used_gib.toFixed(2)} GiB</span>
         </span>
-        <span className="text-gray-500">
-          Available: <span className="font-medium text-gray-700">{breakdown.total_available_gib.toFixed(2)} GiB</span>
+        <span>
+          AVAILABLE: <span className="text-ink-0 tabular">{breakdown.total_available_gib.toFixed(2)} GiB</span>
         </span>
       </div>
 
       {/* Warning */}
       {breakdown.warning_message && (
-        <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+        <div className="mt-3 p-2 bg-warn/5 border border-warn/40 font-mono text-[11.5px] text-warn">
           {breakdown.warning_message}
         </div>
       )}
