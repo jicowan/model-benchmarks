@@ -32,16 +32,17 @@ spec:
       containers:
         - name: cache
           image: {{ .CacheImage }}
-          command: ["/bin/bash", "-c"]
+          # Streams each file from HF straight to S3 via multipart upload.
+          # Only ~8 MiB is held in memory at a time; no local disk is used
+          # for model weights.
           args:
-            - |
-              set -euo pipefail
-              echo "Downloading {{ .ModelHfID }} revision {{ .HfRevision }}..."
-              hf download {{ .ModelHfID }} --revision {{ .HfRevision }} --local-dir /models/{{ .ModelPath }}
-              echo "Uploading to s3://{{ .S3Bucket }}/models/{{ .ModelPath }}..."
-              aws s3 sync /models/{{ .ModelPath }} s3://{{ .S3Bucket }}/models/{{ .ModelPath }} --no-progress
-              SIZE=$(du -sb /models/{{ .ModelPath }} | cut -f1)
-              echo "CACHE_COMPLETE size_bytes=${SIZE}"
+            - "{{ .ModelHfID }}"
+            - "--revision"
+            - "{{ .HfRevision }}"
+            - "--bucket"
+            - "{{ .S3Bucket }}"
+            - "--prefix"
+            - "models/{{ .ModelPath }}"
           env:
 {{- if .HfToken }}
             - name: HF_TOKEN
@@ -51,15 +52,10 @@ spec:
               value: "{{ .AWSRegion }}"
           resources:
             requests:
-              cpu: "2"
-              memory: "8Gi"
+              cpu: "500m"
+              memory: "512Mi"
+              ephemeral-storage: "1Gi"
             limits:
-              cpu: "4"
-              memory: "16Gi"
-          volumeMounts:
-            - name: model-storage
-              mountPath: /models
-      volumes:
-        - name: model-storage
-          emptyDir:
-            sizeLimit: 500Gi
+              cpu: "2"
+              memory: "2Gi"
+              ephemeral-storage: "5Gi"

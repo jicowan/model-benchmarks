@@ -1,4 +1,5 @@
 FROM python:3.12-slim
-RUN pip install --no-cache-dir huggingface_hub[cli] && \
-    apt-get update && apt-get install -y --no-install-recommends awscli && \
-    rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir huggingface_hub requests boto3
+COPY docker/hf_to_s3.py /usr/local/bin/hf_to_s3
+RUN chmod +x /usr/local/bin/hf_to_s3
+ENTRYPOINT ["/usr/local/bin/hf_to_s3"]
