@@ -96,16 +96,27 @@ export default function SuiteResults() {
   const progressPct = progress ? Math.round((progress.completed / progress.total) * 100) : 0;
 
   return (
-    <div>
-      <div className="flex items-center gap-4 mb-6">
-        <h1 className="text-2xl font-bold">Test Suite Run</h1>
-        <span
-          className={`px-2 py-1 rounded-full text-xs font-medium ${
-            statusColor[suiteRun.status] || "bg-gray-100 text-gray-800"
-          }`}
-        >
+    <>
+      <div className="h-14 border-b border-line flex items-center justify-between px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <a href="/runs" className="text-ink-1 hover:text-ink-0">runs</a>
+          <span className="text-ink-2">/</span>
+          <span className="text-info">suite</span>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">{suiteRun.id.slice(0, 8)}</span>
+        </div>
+        <span className="flex items-center font-mono text-[11px] tracking-mech uppercase">
+          <span className={`status-dot status-${suiteRun.status === "pending" ? "pending" : suiteRun.status}`} />
           {suiteRun.status}
         </span>
+      </div>
+      <div className="p-6 max-w-6xl mx-auto animate-enter">
+      <div className="mb-6 flex items-baseline gap-4">
+        <div className="eyebrow">[ SUITE ]</div>
+        <div className="font-mono text-[18px] text-ink-0">{suiteRun.id.slice(0, 8)}</div>
+        <div className="caption">{suiteRun.suite_id}</div>
       </div>
 
       {/* Suite Info */}
@@ -205,6 +216,7 @@ export default function SuiteResults() {
           definitions={suiteRun.scenario_definitions}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }

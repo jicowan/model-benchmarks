@@ -390,10 +390,28 @@ export default function Run() {
   }
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="text-2xl font-bold mb-6">Run On-Demand Benchmark</h1>
+    <>
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">new benchmark</span>
+        </div>
+      </div>
 
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <div className="p-6 max-w-3xl mx-auto animate-enter">
+        <div className="mb-8">
+          <div className="eyebrow mb-3">CONFIGURE RUN</div>
+          <h1 className="font-sans text-[28px] leading-tight tracking-[-0.01em] text-balance">
+            Benchmark a model on a target instance.
+          </h1>
+          <p className="meta mt-3">
+            Select a model (HuggingFace or cached/registered S3), pick an instance type,
+            and launch. Recommendations auto-populate based on model size and available memory.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
         {/* HF Token — above model so search can use it */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -921,6 +939,7 @@ export default function Run() {
             : "Start Benchmark"}
         </button>
       </form>
-    </div>
+      </div>
+    </>
   );
 }

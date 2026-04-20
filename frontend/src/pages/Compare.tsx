@@ -153,9 +153,22 @@ export default function Compare() {
   });
 
   return (
-    <div>
+    <>
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <a href="/runs" className="text-ink-1 hover:text-ink-0">runs</a>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">compare ({entries.length})</span>
+        </div>
+      </div>
+      <div className="p-6 max-w-[1600px] mx-auto animate-enter">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Compare ({entries.length})</h1>
+        <div>
+          <div className="eyebrow mb-2">SIDE-BY-SIDE</div>
+          <h1 className="font-sans text-[22px] leading-tight tracking-[-0.01em]">Compare runs</h1>
+        </div>
         <div className="flex items-center gap-4">
           <select
             value={region}
@@ -362,6 +375,7 @@ export default function Compare() {
           Export CSV
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

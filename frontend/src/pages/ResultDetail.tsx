@@ -55,13 +55,6 @@ export default function ResultDetail() {
     return <p className="text-gray-500">Loading...</p>;
   }
 
-  const statusColor: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800",
-    running: "bg-blue-100 text-blue-800",
-    completed: "bg-green-100 text-green-800",
-    failed: "bg-red-100 text-red-800",
-  };
-
   // High latency metrics (request-level): TTFT, E2E
   const highLatencyBars = metrics
     ? [
@@ -103,14 +96,25 @@ export default function ResultDetail() {
     : [];
 
   return (
-    <div>
-      <div className="flex items-center gap-4 mb-6">
-        <h1 className="text-2xl font-bold">Run {run.id.slice(0, 8)}</h1>
-        <span
-          className={`px-3 py-1 rounded-full text-sm font-medium ${statusColor[run.status] ?? "bg-gray-100"}`}
-        >
+    <>
+      <div className="h-14 border-b border-line flex items-center justify-between px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <a href="/runs" className="text-ink-1 hover:text-ink-0">runs</a>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">{run.id.slice(0, 8)}</span>
+        </div>
+        <span className="flex items-center font-mono text-[11px] tracking-mech uppercase">
+          <span className={`status-dot status-${run.status === "pending" ? "pending" : run.status}`} />
           {run.status}
         </span>
+      </div>
+      <div className="p-6 max-w-6xl mx-auto animate-enter">
+      <div className="mb-6 flex items-baseline gap-4">
+        <div className="eyebrow">[ RUN ]</div>
+        <div className="font-mono text-[18px] text-ink-0">{run.id.slice(0, 8)}</div>
+        <div className="caption">{run.id}</div>
       </div>
 
       {/* Run configuration */}
@@ -370,6 +374,7 @@ export default function ResultDetail() {
           </div>
         </>
       )}
-    </div>
+      </div>
+    </>
   );
 }

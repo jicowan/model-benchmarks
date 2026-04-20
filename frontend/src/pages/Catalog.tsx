@@ -199,9 +199,20 @@ export default function Catalog() {
   });
 
   return (
-    <div>
+    <>
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">catalog</span>
+        </div>
+      </div>
+      <div className="p-6 max-w-[1600px] mx-auto animate-enter">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Benchmark Catalog</h1>
+        <div>
+          <div className="eyebrow mb-2">BENCHMARK RESULTS INDEX</div>
+          <h1 className="font-sans text-[22px] leading-tight tracking-[-0.01em]">Catalog</h1>
+        </div>
         <div className="flex items-center gap-3">
           {seedFlash && (
             <span className="text-sm text-green-600 font-medium">Seed complete</span>
@@ -304,6 +315,7 @@ export default function Catalog() {
           )}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

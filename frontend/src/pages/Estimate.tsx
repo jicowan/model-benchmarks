@@ -94,11 +94,25 @@ export default function Estimate() {
   }
 
   return (
-    <div className="max-w-6xl">
-      <h1 className="text-2xl font-bold mb-2">Quick Estimate</h1>
-      <p className="text-gray-600 mb-6">
-        Enter a model to instantly see which instances can run it, with recommended configurations and costs.
-      </p>
+    <>
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
+        <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">estimate</span>
+        </div>
+      </div>
+      <div className="p-6 max-w-6xl mx-auto animate-enter">
+      <div className="mb-8">
+        <div className="eyebrow mb-3">INSTANCE SIZING</div>
+        <h1 className="font-sans text-[28px] leading-tight tracking-[-0.01em] text-balance">
+          Which instances can run this model?
+        </h1>
+        <p className="meta mt-3 max-w-xl">
+          Memory fit, recommended configuration, and on-demand cost — computed from
+          model architecture and GPU specs. No benchmark required.
+        </p>
+      </div>
 
       {/* Input Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-4 mb-6">
@@ -339,6 +353,7 @@ export default function Estimate() {
           </div>
         </>
       )}
-    </div>
+      </div>
+    </>
   );
 }
