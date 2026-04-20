@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import Catalog from "./pages/Catalog";
 import Compare from "./pages/Compare";
@@ -14,14 +14,21 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
+          {/* New IA */}
           <Route path="/" element={<Catalog />} />
-          <Route path="/estimate" element={<Estimate />} />
-          <Route path="/compare" element={<Compare />} />
           <Route path="/run" element={<Run />} />
+          <Route path="/runs" element={<Jobs />} />
+          <Route path="/models" element={<ModelCachePage />} />
+          <Route path="/estimate" element={<Estimate />} />
+
+          {/* Contextual routes */}
+          <Route path="/compare" element={<Compare />} />
           <Route path="/results/:id" element={<ResultDetail />} />
           <Route path="/suite-runs/:id" element={<SuiteResults />} />
-          <Route path="/jobs" element={<Jobs />} />
-          <Route path="/model-cache" element={<ModelCachePage />} />
+
+          {/* Back-compat redirects for old paths */}
+          <Route path="/jobs" element={<Navigate to="/runs" replace />} />
+          <Route path="/model-cache" element={<Navigate to="/models" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
