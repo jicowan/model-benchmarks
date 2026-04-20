@@ -15,23 +15,25 @@ import {
   ZAxis,
 } from "recharts";
 import type { ScenarioResult, ScenarioDefinition } from "../types";
+import {
+  useChartTheme,
+  seriesPalette,
+  axisStyle,
+  gridProps,
+  ChartTooltip,
+  ChartLegend,
+} from "./ChartTheme";
 
 interface SuiteChartsProps {
   results: ScenarioResult[];
   definitions: ScenarioDefinition[];
 }
 
-const COLORS = {
-  ttft_p50: "#2563eb",
-  ttft_p99: "#93c5fd",
-  e2e_p50: "#dc2626",
-  e2e_p99: "#fca5a5",
-  itl_p50: "#059669",
-  throughput: "#d97706",
-};
-
 export default function SuiteCharts({ results, definitions }: SuiteChartsProps) {
   const [expanded, setExpanded] = useState(true);
+  const theme = useChartTheme();
+  const palette = seriesPalette();
+  const axis = axisStyle(theme);
 
   // Merge scenario definitions with results and sort by QPS
   const chartData = useMemo(() => {
@@ -55,12 +57,8 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
       .sort((a, b) => a.qps - b.qps);
   }, [results, definitions]);
 
-  // Need at least 2 completed scenarios to show meaningful charts
-  if (chartData.length < 2) {
-    return null;
-  }
+  if (chartData.length < 2) return null;
 
-  // Data for bar chart comparison
   const comparisonData = [
     {
       metric: "TTFT p50",
@@ -77,173 +75,222 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
   ];
 
   const scenarioNames = chartData.map((d) => d.name);
-  const barColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"];
+
+  // Per-series colors derived from the palette
+  const seriesColors = {
+    ttft_p50: palette[0],
+    ttft_p99: "rgb(var(--signal) / 0.4)",
+    e2e_p50: palette[1],
+    throughput: palette[2],
+  };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4 mt-6">
+    <div className="panel mt-6">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between w-full text-left"
+        className="flex items-center justify-between w-full text-left px-4 h-11 border-b border-line hover:bg-surface-2 transition-colors"
       >
-        <h2 className="text-lg font-semibold">Performance Charts</h2>
-        <span className="text-gray-500">{expanded ? "▼" : "▶"}</span>
+        <div className="flex items-baseline gap-3">
+          <span className="eyebrow">[ CHARTS ]</span>
+          <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0">
+            Performance visualizations
+          </h2>
+        </div>
+        <span className="text-ink-2 font-mono text-[11px]">{expanded ? "▼ HIDE" : "▶ SHOW"}</span>
       </button>
 
       {expanded && (
-        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-0 border-l border-t border-line">
           {/* QPS vs Latency */}
-          <div className="border border-gray-100 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">
-              QPS vs Latency (ms)
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 25 }}>
-                <CartesianGrid strokeDasharray="3 3" />
+          <ChartPanel title="QPS → LATENCY" unit="ms">
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+                <CartesianGrid {...gridProps} stroke={theme.grid} />
                 <XAxis
                   dataKey="qps"
-                  label={{ value: "Target QPS", position: "insideBottom", offset: -15 }}
+                  tickLine={false}
+                  axisLine={{ stroke: theme.grid }}
+                  tick={axis}
+                  label={{
+                    value: "TARGET QPS",
+                    position: "insideBottom",
+                    offset: -6,
+                    style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
+                  }}
                 />
-                <YAxis width={50} />
-                <Tooltip
-                  formatter={(value: number) => `${value.toFixed(1)} ms`}
-                  labelFormatter={(qps) => `QPS: ${qps}`}
-                />
-                <Legend verticalAlign="top" height={36} />
+                <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
+                <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ stroke: theme.grid, strokeWidth: 1 }} />
+                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
                 <Line
                   type="monotone"
                   dataKey="ttft_p50"
                   name="TTFT p50"
-                  stroke={COLORS.ttft_p50}
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
+                  stroke={seriesColors.ttft_p50}
+                  strokeWidth={1.5}
+                  dot={{ r: 2.5, strokeWidth: 0, fill: seriesColors.ttft_p50 }}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
                 />
                 <Line
                   type="monotone"
                   dataKey="ttft_p99"
                   name="TTFT p99"
-                  stroke={COLORS.ttft_p99}
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
+                  stroke={seriesColors.ttft_p99}
+                  strokeWidth={1.5}
+                  strokeDasharray="4 2"
+                  dot={{ r: 2.5, strokeWidth: 0, fill: seriesColors.ttft_p99 }}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
                 />
                 <Line
                   type="monotone"
                   dataKey="e2e_p50"
                   name="E2E p50"
-                  stroke={COLORS.e2e_p50}
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
+                  stroke={seriesColors.e2e_p50}
+                  strokeWidth={1.5}
+                  dot={{ r: 2.5, strokeWidth: 0, fill: seriesColors.e2e_p50 }}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
                 />
               </LineChart>
             </ResponsiveContainer>
-          </div>
+          </ChartPanel>
 
           {/* QPS vs Throughput */}
-          <div className="border border-gray-100 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">
-              QPS vs Throughput (tok/s)
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 25 }}>
-                <CartesianGrid strokeDasharray="3 3" />
+          <ChartPanel title="QPS → THROUGHPUT" unit="tok/s">
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+                <CartesianGrid {...gridProps} stroke={theme.grid} />
                 <XAxis
                   dataKey="qps"
-                  label={{ value: "Target QPS", position: "insideBottom", offset: -15 }}
+                  tickLine={false}
+                  axisLine={{ stroke: theme.grid }}
+                  tick={axis}
+                  label={{
+                    value: "TARGET QPS",
+                    position: "insideBottom",
+                    offset: -6,
+                    style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
+                  }}
                 />
-                <YAxis width={50} />
-                <Tooltip
-                  formatter={(value: number) => `${value.toFixed(0)} tok/s`}
-                  labelFormatter={(qps) => `QPS: ${qps}`}
-                />
-                <Legend verticalAlign="top" height={36} />
+                <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
+                <Tooltip content={<ChartTooltip unit="tok/s" />} cursor={{ stroke: theme.grid, strokeWidth: 1 }} />
+                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
                 <Line
                   type="monotone"
                   dataKey="throughput"
-                  name="Output Throughput"
-                  stroke={COLORS.throughput}
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
+                  name="Output tok/s"
+                  stroke={seriesColors.throughput}
+                  strokeWidth={1.5}
+                  dot={{ r: 2.5, strokeWidth: 0, fill: seriesColors.throughput }}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
                 />
               </LineChart>
             </ResponsiveContainer>
-          </div>
+          </ChartPanel>
 
           {/* Latency vs Throughput Scatter */}
-          <div className="border border-gray-100 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">
-              TTFT p50 (ms) vs Throughput (tok/s)
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <ScatterChart margin={{ top: 5, right: 20, left: 10, bottom: 25 }}>
-                <CartesianGrid strokeDasharray="3 3" />
+          <ChartPanel title="LATENCY ↔ THROUGHPUT" unit="">
+            <ResponsiveContainer width="100%" height={260}>
+              <ScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+                <CartesianGrid {...gridProps} stroke={theme.grid} />
                 <XAxis
                   dataKey="throughput"
                   name="Throughput"
                   type="number"
+                  tickLine={false}
+                  axisLine={{ stroke: theme.grid }}
+                  tick={axis}
                   label={{
-                    value: "Throughput",
+                    value: "THROUGHPUT (TOK/S)",
                     position: "insideBottom",
-                    offset: -15,
+                    offset: -6,
+                    style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
                   }}
                 />
                 <YAxis
                   dataKey="ttft_p50"
                   name="TTFT p50"
                   type="number"
-                  width={50}
+                  tickLine={false}
+                  axisLine={false}
+                  tick={axis}
+                  width={44}
                 />
                 <ZAxis dataKey="name" name="Scenario" />
                 <Tooltip
-                  cursor={{ strokeDasharray: "3 3" }}
-                  formatter={(value: number, name: string) => {
-                    if (name === "Throughput") return `${value.toFixed(0)} tok/s`;
-                    if (name === "TTFT p50") return `${value.toFixed(1)} ms`;
-                    return value;
+                  cursor={{ strokeDasharray: "2 2", stroke: theme.grid }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const d = payload[0]?.payload as typeof chartData[number];
+                    return (
+                      <div className="font-mono text-[11px] bg-surface-1 border border-line-strong shadow-card-strong px-2.5 py-2 min-w-[140px]">
+                        <div className="eyebrow mb-1.5">{d.name}</div>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex justify-between gap-3">
+                            <span className="text-ink-1 text-[10px] uppercase tracking-mech">TTFT p50</span>
+                            <span className="text-ink-0 tabular">{d.ttft_p50.toFixed(1)}<span className="text-ink-2 text-[10px] ml-0.5">ms</span></span>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <span className="text-ink-1 text-[10px] uppercase tracking-mech">Throughput</span>
+                            <span className="text-ink-0 tabular">{d.throughput.toFixed(0)}<span className="text-ink-2 text-[10px] ml-0.5">tok/s</span></span>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <span className="text-ink-1 text-[10px] uppercase tracking-mech">Target QPS</span>
+                            <span className="text-ink-0 tabular">{d.qps}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
                   }}
                 />
-                <Scatter
-                  data={chartData}
-                  fill={COLORS.ttft_p50}
-                  name="Scenarios"
-                />
+                <Scatter data={chartData} fill={theme.signal} shape="square" />
               </ScatterChart>
             </ResponsiveContainer>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-600">
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] tracking-widemech uppercase text-ink-1">
               {chartData.map((d) => (
                 <span key={d.name} className="flex items-center gap-1">
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: COLORS.ttft_p50 }}
-                  />
+                  <span className="w-2 h-2" style={{ backgroundColor: theme.signal }} />
                   {d.name}
                 </span>
               ))}
             </div>
-          </div>
+          </ChartPanel>
 
           {/* Scenario Comparison Bar Chart */}
-          <div className="border border-gray-100 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">
-              Scenario Comparison (ms)
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={comparisonData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="metric" />
-                <YAxis width={50} />
-                <Tooltip formatter={(value: number) => `${value.toFixed(1)} ms`} />
-                <Legend verticalAlign="top" height={36} />
+          <ChartPanel title="SCENARIO COMPARISON" unit="ms">
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={comparisonData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid {...gridProps} stroke={theme.grid} />
+                <XAxis dataKey="metric" tickLine={false} axisLine={{ stroke: theme.grid }} tick={axis} />
+                <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
+                <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
+                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
                 {scenarioNames.map((name, i) => (
-                  <Bar
-                    key={name}
-                    dataKey={name}
-                    fill={barColors[i % barColors.length]}
-                  />
+                  <Bar key={name} dataKey={name} fill={palette[i % palette.length]} />
                 ))}
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </ChartPanel>
         </div>
       )}
+    </div>
+  );
+}
+
+function ChartPanel({
+  title,
+  unit,
+  children,
+}: {
+  title: string;
+  unit: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="p-4 border-r border-b border-line">
+      <div className="flex items-baseline justify-between mb-3">
+        <span className="eyebrow">{title}</span>
+        {unit && <span className="caption">{unit}</span>}
+      </div>
+      {children}
     </div>
   );
 }

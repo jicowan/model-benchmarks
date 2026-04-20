@@ -60,6 +60,11 @@ func (r *Repository) Close() {
 	r.pool.Close()
 }
 
+// Ping verifies the database connection is healthy.
+func (r *Repository) Ping(ctx context.Context) error {
+	return r.pool.Ping(ctx)
+}
+
 // GetModelByHfID returns a model by its Hugging Face ID and revision, or nil if not found.
 func (r *Repository) GetModelByHfID(ctx context.Context, hfID, hfRevision string) (*Model, error) {
 	var m Model

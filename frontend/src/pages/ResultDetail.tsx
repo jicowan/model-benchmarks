@@ -12,12 +12,23 @@ import {
 import { getRun, getMetrics, getExportManifestUrl, getExportReportUrl } from "../api";
 import type { BenchmarkRun, BenchmarkMetrics } from "../types";
 import MetricCard from "../components/MetricCard";
+import {
+  useChartTheme,
+  percentileRamp,
+  axisStyle,
+  gridProps,
+  ChartTooltip,
+  ChartLegend,
+} from "../components/ChartTheme";
+import { Legend } from "recharts";
 
 export default function ResultDetail() {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<BenchmarkRun | null>(null);
   const [metrics, setMetrics] = useState<BenchmarkMetrics | null>(null);
   const [error, setError] = useState("");
+  const chartTheme = useChartTheme();
+  const ramp = percentileRamp();
 
   useEffect(() => {
     if (!id) return;
@@ -49,10 +60,10 @@ export default function ResultDetail() {
   }, [run]);
 
   if (error) {
-    return <p className="text-red-600">{error}</p>;
+    return <div className="p-6"><p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">{error}</p></div>;
   }
   if (!run) {
-    return <p className="text-gray-500">Loading...</p>;
+    return <div className="p-6 caption">LOADING…</div>;
   }
 
   // High latency metrics (request-level): TTFT, E2E
@@ -118,8 +129,8 @@ export default function ResultDetail() {
       </div>
 
       {/* Run configuration */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
-        <h2 className="text-lg font-semibold mb-4">Configuration</h2>
+      <div className="panel p-6 mb-8">
+        <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Configuration</h2>
         <dl className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           {[
             ["Framework", `${run.framework} ${run.framework_version}`],
@@ -132,7 +143,7 @@ export default function ResultDetail() {
             ["Type", run.run_type],
           ].map(([label, value]) => (
             <div key={label}>
-              <dt className="text-gray-500">{label}</dt>
+              <dt className="eyebrow">{label}</dt>
               <dd className="font-medium">{value}</dd>
             </div>
           ))}
@@ -140,15 +151,16 @@ export default function ResultDetail() {
       </div>
 
       {run.status === "running" && (
-        <p className="text-blue-600 mb-6">
-          Benchmark is running. Results will appear when complete...
+        <p className="meta text-info mb-6 flex items-center gap-2">
+          <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
+          BENCHMARK IS RUNNING · RESULTS WILL APPEAR WHEN COMPLETE
         </p>
       )}
 
       {run.status === "failed" && run.error_message && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-          <p className="text-red-800 font-medium">Run Failed</p>
-          <p className="text-red-700 text-sm mt-1">{run.error_message}</p>
+        <div className="border border-danger/40 bg-danger/5 p-4 mb-6">
+          <p className="eyebrow text-danger mb-1.5">[ RUN FAILED ]</p>
+          <p className="font-mono text-[12.5px] text-danger">{run.error_message}</p>
         </div>
       )}
 
@@ -213,8 +225,8 @@ export default function ResultDetail() {
 
           {/* Latency Breakdown section */}
           {(metrics.tpot_p50_ms || metrics.prefill_time_p50_ms || metrics.decode_time_p50_ms) && (
-            <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-lg font-semibold mb-4">Latency Breakdown</h2>
+            <div className="panel p-6 mb-8">
+              <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Latency Breakdown</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <MetricCard
                   label="TPOT p50"
@@ -242,8 +254,8 @@ export default function ResultDetail() {
 
           {/* Cache & Memory section */}
           {(metrics.kv_cache_utilization_avg_pct || metrics.prefix_cache_hit_rate !== undefined || metrics.preemption_count !== undefined) && (
-            <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-lg font-semibold mb-4">Cache & Memory</h2>
+            <div className="panel p-6 mb-8">
+              <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Cache & Memory</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <MetricCard
                   label="KV Cache Avg"
@@ -275,8 +287,8 @@ export default function ResultDetail() {
 
           {/* Throughput Breakdown section */}
           {(metrics.prompt_throughput_tps || metrics.generation_throughput_tps || metrics.output_length_mean) && (
-            <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-lg font-semibold mb-4">Throughput Breakdown</h2>
+            <div className="panel p-6 mb-8">
+              <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Throughput Breakdown</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <MetricCard
                   label="Input Throughput"
@@ -307,50 +319,54 @@ export default function ResultDetail() {
           )}
 
           {/* Request-level latency chart (TTFT, E2E) */}
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-4">
-              Request Latency Percentiles (ms)
-            </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={highLatencyBars}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="p50" fill="#2563eb" name="p50" />
-                <Bar dataKey="p90" fill="#60a5fa" name="p90" />
-                <Bar dataKey="p95" fill="#93c5fd" name="p95" />
-                <Bar dataKey="p99" fill="#bfdbfe" name="p99" />
+          <div className="panel p-4">
+            <div className="flex items-baseline justify-between mb-4">
+              <h3 className="eyebrow">REQUEST LATENCY — PERCENTILES</h3>
+              <span className="caption">ms</span>
+            </div>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={highLatencyBars} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                <CartesianGrid {...gridProps} stroke={chartTheme.grid} />
+                <XAxis dataKey="name" tickLine={false} axisLine={{ stroke: chartTheme.grid }} tick={axisStyle(chartTheme)} />
+                <YAxis tickLine={false} axisLine={false} tick={axisStyle(chartTheme)} width={44} />
+                <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
+                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 8 }} />
+                <Bar dataKey="p50" fill={ramp[0]} name="p50" />
+                <Bar dataKey="p90" fill={ramp[1]} name="p90" />
+                <Bar dataKey="p95" fill={ramp[2]} name="p95" />
+                <Bar dataKey="p99" fill={ramp[3]} name="p99" />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
           {/* Token-level latency chart (ITL, TPOT) */}
-          <div className="bg-white border border-gray-200 rounded-lg p-4 mt-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-4">
-              Token Latency Percentiles (ms)
-            </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={lowLatencyBars}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="p50" fill="#2563eb" name="p50" />
-                <Bar dataKey="p90" fill="#60a5fa" name="p90" />
-                <Bar dataKey="p95" fill="#93c5fd" name="p95" />
-                <Bar dataKey="p99" fill="#bfdbfe" name="p99" />
+          <div className="panel p-4 mt-4">
+            <div className="flex items-baseline justify-between mb-4">
+              <h3 className="eyebrow">TOKEN LATENCY — PERCENTILES</h3>
+              <span className="caption">ms</span>
+            </div>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={lowLatencyBars} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                <CartesianGrid {...gridProps} stroke={chartTheme.grid} />
+                <XAxis dataKey="name" tickLine={false} axisLine={{ stroke: chartTheme.grid }} tick={axisStyle(chartTheme)} />
+                <YAxis tickLine={false} axisLine={false} tick={axisStyle(chartTheme)} width={44} />
+                <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
+                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 8 }} />
+                <Bar dataKey="p50" fill={ramp[0]} name="p50" />
+                <Bar dataKey="p90" fill={ramp[1]} name="p90" />
+                <Bar dataKey="p95" fill={ramp[2]} name="p95" />
+                <Bar dataKey="p99" fill={ramp[3]} name="p99" />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
           {/* Export buttons */}
-          <div className="mt-8 pt-6 border-t border-gray-200">
+          <div className="mt-8 pt-6 hairline">
             <div className="flex gap-4">
               <a
                 href={getExportReportUrl(run.id)}
                 download
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                className="btn btn-primary"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -360,7 +376,7 @@ export default function ResultDetail() {
               <a
                 href={getExportManifestUrl(run.id)}
                 download
-                className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                className="btn"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -368,7 +384,7 @@ export default function ResultDetail() {
                 Export K8s Manifest
               </a>
             </div>
-            <p className="mt-2 text-sm text-gray-500">
+            <p className="mt-2 caption">
               Download HTML report for sharing or K8s manifest to deploy this configuration
             </p>
           </div>

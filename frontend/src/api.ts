@@ -21,9 +21,14 @@ import type {
   ModelCache,
   CacheModelRequest,
   RegisterCustomModelRequest,
+  StatusResponse,
 } from "./types";
 
 const BASE = "/api/v1";
+
+export async function getStatus(): Promise<StatusResponse> {
+  return fetchJSON<StatusResponse>(`${BASE}/status`);
+}
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);

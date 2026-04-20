@@ -147,14 +147,14 @@ export default function ModelCombobox({
         }}
         onKeyDown={handleKeyDown}
         placeholder="Search models or type ID (e.g. meta-llama/Llama-3.1-70B-Instruct)"
-        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+        className="input w-full"
         autoComplete="off"
       />
 
       {loading && (
         <div className="absolute right-3 top-2.5">
           <svg
-            className="animate-spin h-4 w-4 text-gray-400"
+            className="animate-spin h-4 w-4 text-ink-2"
             viewBox="0 0 24 24"
           >
             <circle
@@ -176,10 +176,10 @@ export default function ModelCombobox({
       )}
 
       {isOpen && (filteredCached.length > 0 || results.length > 0) && (
-        <ul className="absolute z-50 mt-1 w-full max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
+        <ul className="absolute z-50 mt-1 w-full max-h-80 overflow-y-auto bg-surface-1 border border-line shadow-card-strong">
           {filteredCached.length > 0 && (
             <>
-              <li className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50">
+              <li className="px-3 py-1.5 eyebrow bg-surface-2 border-b border-line">
                 Cached Models
               </li>
               {filteredCached.map((model) => (
@@ -188,13 +188,13 @@ export default function ModelCombobox({
                   onMouseDown={() => handleSelectCached(model)}
                   className="px-3 py-2 cursor-pointer hover:bg-green-50"
                 >
-                  <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                  <div className="font-mono text-[12.5px] text-ink-0 flex items-center gap-2">
                     {model.display_name}
                     <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
                       S3
                     </span>
                   </div>
-                  <div className="text-xs text-gray-500 font-mono truncate">
+                  <div className="caption font-mono truncate">
                     {model.s3_uri}
                   </div>
                 </li>
@@ -204,7 +204,7 @@ export default function ModelCombobox({
           {results.length > 0 && (
             <>
               {filteredCached.length > 0 && (
-                <li className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50">
+                <li className="px-3 py-1.5 eyebrow bg-surface-2 border-b border-line">
                   HuggingFace
                 </li>
               )}
@@ -214,13 +214,13 @@ export default function ModelCombobox({
                   onMouseDown={() => handleSelect(model)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`px-3 py-2 cursor-pointer ${
-                    i === activeIndex ? "bg-blue-50" : "hover:bg-gray-50"
+                    i === activeIndex ? "bg-signal/10" : "hover:bg-surface-2"
                   }`}
                 >
-                  <div className="text-sm font-medium text-gray-900">
+                  <div className="font-mono text-[12.5px] text-ink-0">
                     {model.modelId}
                   </div>
-                  <div className="text-xs text-gray-500 flex items-center gap-2">
+                  <div className="caption flex items-center gap-2">
                     <span>{formatCount(model.downloads)} downloads</span>
                     <span>&middot;</span>
                     <span>{formatCount(model.likes)} likes</span>
@@ -233,7 +233,7 @@ export default function ModelCombobox({
       )}
 
       {gatedWarning && (
-        <p className="mt-1 text-xs text-amber-600">{gatedWarning}</p>
+        <p className="mt-1 font-mono text-[11px] text-warn">{gatedWarning}</p>
       )}
     </div>
   );

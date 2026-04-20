@@ -158,6 +158,30 @@
     @apply h-7 px-2 text-[11.5px];
   }
 
+  /* Style native select elements that use .input — add custom chevron + remove
+     browser chrome. The chevron color encodes the ink-2 variable via SVG stroke. */
+  select.input {
+    @apply pr-8 cursor-pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235F6368' stroke-width='2.5' stroke-linecap='square'><path d='M6 9l6 6 6-6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 10px 10px;
+  }
+  .dark select.input {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%239AA0A6' stroke-width='2.5' stroke-linecap='square'><path d='M6 9l6 6 6-6'/></svg>");
+  }
+
+  /* Dropdown option list — browser limits are significant but we can style
+     the options' colors in most browsers. */
+  select.input option {
+    background-color: rgb(var(--surface-1));
+    color: rgb(var(--ink-0));
+    font-family: theme("fontFamily.mono");
+  }
+
   /* ---- Status dot + label ---- */
   .status-dot {
     @apply inline-block w-[6px] h-[6px] mr-1.5 align-middle;

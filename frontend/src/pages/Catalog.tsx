@@ -102,6 +102,8 @@ export default function Catalog() {
           <input
             type="checkbox"
             checked={selected.has(row.original.run_id)}
+            className="accent-signal"
+            onClick={(e) => e.stopPropagation()}
             onChange={() => {
               setSelected((prev) => {
                 const next = new Set(prev);
@@ -215,15 +217,15 @@ export default function Catalog() {
         </div>
         <div className="flex items-center gap-3">
           {seedFlash && (
-            <span className="text-sm text-green-600 font-medium">Seed complete</span>
+            <span className="font-mono text-[11.5px] tracking-mech uppercase text-signal">Seed complete</span>
           )}
           {seedError && (
-            <span className="text-sm text-red-600">{seedError}</span>
+            <span className="font-mono text-[11.5px] text-danger">{seedError}</span>
           )}
           <button
             onClick={handleSeed}
             disabled={seedStatus === "active"}
-            className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-primary"
           >
             {seedStatus === "active" ? (
               <span className="flex items-center gap-2">
@@ -237,34 +239,53 @@ export default function Catalog() {
               "Seed Catalog"
             )}
           </button>
-          {selected.size > 0 && (
-            <button
-              onClick={() =>
-                navigate(`/compare?ids=${Array.from(selected).join(",")}`)
-              }
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              Compare ({selected.size})
-            </button>
-          )}
         </div>
       </div>
 
       <FilterBar onFilter={fetchData} />
 
+      {/* Selection bar — appears when rows are selected */}
+      {selected.size > 0 && (
+        <div className="panel mb-4">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-signal/5 border-signal/30">
+            <div className="flex items-center gap-3 font-mono text-[12px]">
+              <span className="text-signal">{selected.size} SELECTED</span>
+              <button
+                onClick={() => setSelected(new Set())}
+                className="btn-ghost text-[11px] tracking-mech px-2 py-1 uppercase"
+              >
+                clear
+              </button>
+              <span className="caption">(up to 4)</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() =>
+                  navigate(`/compare?ids=${Array.from(selected).join(",")}`)
+                }
+                disabled={selected.size < 2}
+                className="btn btn-primary"
+              >
+                COMPARE ({selected.size})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
-        <p className="text-gray-500">Loading...</p>
+        <p className="caption">LOADING…</p>
       ) : (
-        <div className="overflow-x-auto border border-gray-200 rounded-lg">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+        <div className="panel overflow-x-auto">
+          <table className="data-table min-w-full">
+            <thead className="bg-surface-1">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
                   {hg.headers.map((header) => (
                     <th
                       key={header.id}
                       onClick={header.column.getToggleSortingHandler()}
-                      className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none"
+                      className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1 cursor-pointer select-none hover:text-ink-0 transition-colors"
                       style={{ width: header.getSize() }}
                     >
                       <div className="flex items-center gap-1">
@@ -281,17 +302,17 @@ export default function Catalog() {
                 </tr>
               ))}
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody>
               {table.getRowModel().rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="hover:bg-gray-50 cursor-pointer"
+                  className="hover:bg-surface-1 cursor-pointer"
                   onClick={() => navigate(`/results/${row.original.run_id}`)}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td
                       key={cell.id}
-                      className="px-3 py-3 whitespace-nowrap text-sm text-gray-700"
+                      className="py-2.5 px-3 border-b border-line/60 whitespace-nowrap text-ink-0 font-mono text-[12.5px]"
                       onClick={
                         cell.column.id === "select"
                           ? (e) => e.stopPropagation()
@@ -309,7 +330,7 @@ export default function Catalog() {
             </tbody>
           </table>
           {data.length === 0 && (
-            <p className="text-center py-8 text-gray-500">
+            <p className="text-center py-8 caption">
               No results found. Adjust filters or seed the catalog.
             </p>
           )}

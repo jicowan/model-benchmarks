@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { listRuns, listSuiteRuns, listModelCache, listCatalog } from "../api";
 import type { RunListItem, ModelCache, CatalogEntry } from "../types";
 import type { SuiteRunListItem } from "../api";
+import { useStatus } from "../hooks/useStatus";
 
 /* ----------------------------- PageHeader ----------------------------- */
 
@@ -44,27 +45,65 @@ function SectionHeader({ index, label, action }: { index: string; label: string;
 // Generates a tiny bar chart from run timestamps (last N days).
 function ActivityPulse({ runs }: { runs: RunListItem[] }) {
   const DAYS = 14;
-  const now = Date.now();
+  const CHART_HEIGHT = 48;
+  const [hovered, setHovered] = useState<number | null>(null);
+
+  // Align bucket boundaries to local midnight so same-day runs land in the same bucket.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
   const buckets = Array(DAYS).fill(0);
   runs.forEach((r) => {
     const t = new Date(r.created_at).getTime();
-    const daysAgo = Math.floor((now - t) / (1000 * 60 * 60 * 24));
-    if (daysAgo >= 0 && daysAgo < DAYS) buckets[DAYS - 1 - daysAgo]++;
+    const daysAgo = Math.floor((todayStart.getTime() - t) / (1000 * 60 * 60 * 24));
+    const idx = DAYS - 1 - Math.max(0, daysAgo);
+    if (idx >= 0 && idx < DAYS) buckets[idx]++;
   });
   const max = Math.max(1, ...buckets);
+  const total = buckets.reduce((a, b) => a + b, 0);
+
+  const hoveredLabel = (() => {
+    if (hovered === null) return null;
+    const daysAgo = DAYS - 1 - hovered;
+    if (daysAgo === 0) return "TODAY";
+    if (daysAgo === 1) return "1 DAY AGO";
+    return `${daysAgo} DAYS AGO`;
+  })();
+
   return (
-    <div className="flex items-end gap-[3px] h-10">
-      {buckets.map((b, i) => {
-        const h = Math.max(2, (b / max) * 40);
-        return (
-          <div
-            key={i}
-            className="flex-1 bg-signal/60 hover:bg-signal transition-colors"
-            style={{ height: `${h}px` }}
-            title={`${b} runs`}
-          />
-        );
-      })}
+    <div>
+      <div className="flex items-end gap-[3px]" style={{ height: `${CHART_HEIGHT}px` }}>
+        {buckets.map((b, i) => {
+          const isEmpty = b === 0;
+          const h = isEmpty ? 2 : Math.max(4, (b / max) * CHART_HEIGHT);
+          const isHovered = hovered === i;
+          return (
+            <div
+              key={i}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered((prev) => (prev === i ? null : prev))}
+              className={`flex-1 transition-colors cursor-default ${
+                isEmpty
+                  ? isHovered ? "bg-line-strong" : "bg-line"
+                  : isHovered ? "bg-signal" : "bg-signal/60"
+              }`}
+              style={{ height: `${h}px` }}
+            />
+          );
+        })}
+      </div>
+      <div className="mt-2 flex justify-between items-center">
+        <span className="caption">
+          {hovered !== null ? (
+            <>
+              <span className="text-ink-0 font-mono tabular">{buckets[hovered]}</span>{" "}
+              RUN{buckets[hovered] === 1 ? "" : "S"} · {hoveredLabel}
+            </>
+          ) : (
+            <>{total} RUNS · PEAK {max}/DAY</>
+          )}
+        </span>
+        <span className="caption">-{DAYS - 1}d ← today</span>
+      </div>
     </div>
   );
 }
@@ -98,12 +137,27 @@ function statusClass(s: string): string {
 
 /* ------------------------------ Dashboard ----------------------------- */
 
+function heroFor(state: "ok" | "degraded" | "down" | "unknown") {
+  switch (state) {
+    case "ok":
+      return { word: "ready", color: "text-ink-0", cursor: "text-signal", pulse: true };
+    case "degraded":
+      return { word: "degraded", color: "text-warn", cursor: "text-warn", pulse: true };
+    case "down":
+      return { word: "offline", color: "text-danger", cursor: "text-danger", pulse: false };
+    default:
+      return { word: "…", color: "text-ink-2", cursor: "text-ink-2", pulse: false };
+  }
+}
+
 export default function Dashboard() {
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<SuiteRunListItem[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [models, setModels] = useState<ModelCache[]>([]);
   const [loading, setLoading] = useState(true);
+  const { state: healthState, detail: healthDetail } = useStatus();
+  const hero = heroFor(healthState);
 
   useEffect(() => {
     Promise.all([
@@ -139,10 +193,30 @@ export default function Dashboard() {
             <div className="eyebrow mb-3">SYSTEM STATE</div>
             <h1 className="font-sans text-[44px] leading-[1] tracking-[-0.02em] text-balance">
               <span className="text-ink-2">&gt;</span>{" "}
-              <span className="text-ink-0">ready</span>
-              <span className="text-signal animate-pulse_signal">_</span>
+              <span className={hero.color}>{hero.word}</span>
+              <span className={`${hero.cursor} ${hero.pulse ? "animate-pulse_signal" : ""}`}>_</span>
             </h1>
-            <p className="meta mt-4 max-w-md">
+            {healthDetail && (
+              <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] tracking-mech uppercase">
+                {Object.entries(healthDetail.components).map(([name, c]) => (
+                  <span key={name} className="flex items-center gap-1.5">
+                    <span
+                      className={`w-1.5 h-1.5 ${
+                        c.status === "ok" ? "bg-signal" : "bg-danger"
+                      }`}
+                    />
+                    <span className="text-ink-2">{name}</span>
+                    <span className={c.status === "ok" ? "text-ink-0" : "text-danger"}>
+                      {c.status}
+                    </span>
+                    {c.latency_ms !== undefined && (
+                      <span className="text-ink-2 tabular">{c.latency_ms}ms</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="meta mt-3 max-w-md">
               {loading
                 ? "Loading system state…"
                 : `${runs.length} runs recorded · ${activeRuns.length} active · ${cachedCount} models in S3 cache`}
@@ -208,14 +282,10 @@ export default function Dashboard() {
           />
           <div className="panel p-5">
             {loading ? (
-              <div className="h-10 flex items-center caption">Loading…</div>
+              <div className="h-12 flex items-center caption">Loading…</div>
             ) : (
               <ActivityPulse runs={runs} />
             )}
-            <div className="flex justify-between caption mt-2">
-              <span>-14d</span>
-              <span>today</span>
-            </div>
           </div>
         </section>
 
@@ -279,26 +349,59 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Sidebar: catalog snapshot + active suite runs */}
+          {/* Sidebar: catalog + test suites, stacked and filling column */}
           <aside className="flex flex-col gap-6">
-            <section>
-              <SectionHeader index="C" label="Catalog" />
-              <div className="panel p-4">
-                <div className="flex items-baseline gap-3 mb-3">
-                  <span className="font-mono text-[24px] tabular text-ink-0">{loading ? "—" : catalog.length}</span>
-                  <span className="caption">benchmark results indexed</span>
+            <section className="flex flex-col flex-1 min-h-0">
+              <SectionHeader
+                index="C"
+                label="Catalog"
+                action={
+                  <Link to="/catalog" className="btn btn-ghost">
+                    OPEN →
+                  </Link>
+                }
+              />
+              <div className="panel p-4 flex-1 flex flex-col">
+                <div className="flex items-baseline gap-3 mb-4">
+                  <span className="font-mono text-[28px] tabular text-ink-0 leading-none">
+                    {loading ? "—" : catalog.length}
+                  </span>
+                  <span className="caption">results indexed</span>
                 </div>
-                <Link to="/" className="btn w-full justify-center">
-                  OPEN CATALOG
-                </Link>
+                <div className="caption mb-3">TOP MODELS</div>
+                <div className="flex-1 flex flex-col gap-1 -mx-4">
+                  {loading ? (
+                    <div className="caption px-4">Loading…</div>
+                  ) : (
+                    Object.entries(
+                      catalog.reduce<Record<string, number>>((acc, c) => {
+                        acc[c.model_hf_id] = (acc[c.model_hf_id] ?? 0) + 1;
+                        return acc;
+                      }, {})
+                    )
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 5)
+                      .map(([model, count]) => (
+                        <div
+                          key={model}
+                          className="flex items-center justify-between py-1 px-4 hover:bg-surface-2"
+                        >
+                          <span className="path truncate pr-2">{model}</span>
+                          <span className="caption tabular shrink-0">{count}×</span>
+                        </div>
+                      ))
+                  )}
+                </div>
               </div>
             </section>
 
-            <section>
+            <section className="flex flex-col">
               <SectionHeader index="D" label="Test suites" />
               <div className="panel p-4">
                 <div className="flex items-baseline gap-3 mb-3">
-                  <span className="font-mono text-[24px] tabular text-ink-0">{loading ? "—" : suiteRuns.length}</span>
+                  <span className="font-mono text-[28px] tabular text-ink-0 leading-none">
+                    {loading ? "—" : suiteRuns.length}
+                  </span>
                   <span className="caption">suite runs</span>
                 </div>
                 {suiteRuns.slice(0, 3).map((s) => (
@@ -311,12 +414,15 @@ export default function Dashboard() {
                       <div className="path truncate">{s.model_hf_id}</div>
                       <div className="caption">{s.suite_id}</div>
                     </div>
-                    <span className="caption shrink-0 ml-2">
+                    <span className="caption shrink-0 ml-2 flex items-center">
                       <span className={`status-dot ${statusClass(s.status)}`} />
                       {s.status}
                     </span>
                   </Link>
                 ))}
+                {!loading && suiteRuns.length === 0 && (
+                  <div className="caption">No suite runs yet</div>
+                )}
               </div>
             </section>
           </aside>

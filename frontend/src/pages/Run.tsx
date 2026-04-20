@@ -414,7 +414,7 @@ export default function Run() {
         <form onSubmit={handleSubmit} className="space-y-5">
         {/* HF Token — above model so search can use it */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="eyebrow block mb-1.5">
             HF Token (optional, for gated models)
           </label>
           <div className="flex items-center gap-2">
@@ -424,11 +424,11 @@ export default function Run() {
               onChange={(e) => set("hf_token", e.target.value)}
               onBlur={handleTokenBlur}
               placeholder="hf_..."
-              className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input flex-1"
             />
             {tokenStatus === "validating" && (
               <svg
-                className="animate-spin h-4 w-4 text-gray-400"
+                className="animate-spin h-4 w-4 text-ink-2"
                 viewBox="0 0 24 24"
               >
                 <circle
@@ -448,7 +448,7 @@ export default function Run() {
               </svg>
             )}
             {tokenStatus === "valid" && (
-              <span className="text-green-600 text-sm font-medium flex items-center gap-1">
+              <span className="text-signal font-mono text-[11.5px] tracking-mech uppercase flex items-center gap-1">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
@@ -456,7 +456,7 @@ export default function Run() {
               </span>
             )}
             {tokenStatus === "invalid" && (
-              <span className="text-red-600 text-sm font-medium flex items-center gap-1">
+              <span className="text-danger font-mono text-[11.5px] tracking-mech uppercase flex items-center gap-1">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -468,7 +468,7 @@ export default function Run() {
 
         {/* Model */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="eyebrow block mb-1.5">
             Model (HuggingFace ID)
           </label>
           <ModelCombobox
@@ -487,10 +487,11 @@ export default function Run() {
           />
           {cachedModel && (
             <div className="mt-2 flex items-center gap-2">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                S3 Cached
+              <span className="inline-flex items-center gap-1.5 font-mono text-[10.5px] tracking-widemech uppercase px-2 py-1 border border-signal/50 text-signal bg-signal/5">
+                <span className="w-1.5 h-1.5 bg-signal" />
+                S3 CACHED
               </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600">
+              <label className="flex items-center gap-1.5 font-mono text-[11.5px] tracking-mech text-ink-1">
                 <input
                   type="checkbox"
                   checked={useS3Cache}
@@ -498,9 +499,9 @@ export default function Run() {
                     setUseS3Cache(e.target.checked);
                     set("model_s3_uri", e.target.checked ? cachedModel.s3_uri : "");
                   }}
-                  className="rounded border-gray-300"
+                  className="accent-signal"
                 />
-                Load from S3 (faster)
+                LOAD FROM S3 (FASTER)
               </label>
             </div>
           )}
@@ -508,30 +509,30 @@ export default function Run() {
 
         {/* Revision */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="eyebrow block mb-1.5">
             Revision
           </label>
           <input
             type="text"
             value={form.model_hf_revision}
             onChange={(e) => set("model_hf_revision", e.target.value)}
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
+            className="input w-full"
           />
         </div>
 
         {/* S3 Model URI (read-only, populated from cached/registered models) */}
         {form.model_s3_uri && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               S3 Model URI
             </label>
             <input
               type="text"
               value={form.model_s3_uri}
               readOnly
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono bg-gray-50 text-gray-500"
+              className="input w-full bg-surface-2 text-ink-1 cursor-not-allowed"
             />
-            <p className="mt-1 text-xs text-blue-600">
+            <p className="mt-1.5 caption text-signal">
               Model will be loaded from S3 using Run:ai Streamer instead of HuggingFace.
             </p>
           </div>
@@ -540,7 +541,7 @@ export default function Run() {
         {/* Instance */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Instance Type
             </label>
             <select
@@ -554,7 +555,7 @@ export default function Run() {
                 setMemoryBreakdown(null);
                 setOOMHistory(null);
               }}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             >
               <option value="">Select...</option>
               <optgroup label="GPU">
@@ -578,22 +579,22 @@ export default function Run() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Framework
             </label>
             <input
               type="text"
               value={form.framework}
               readOnly
-              className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
+              className="input w-full bg-surface-2 text-ink-1"
             />
           </div>
         </div>
 
         {/* PRD-12/13: Run Mode and Scenario/Suite Selection */}
         {scenarios.length > 0 && testSuites.length > 0 && (
-          <div className="border rounded-lg p-4 bg-gray-50">
-            <label className="block text-sm font-medium text-gray-700 mb-3">
+          <div className="panel-inset p-4">
+            <label className="eyebrow block mb-2">
               Benchmark Type
             </label>
             <div className="flex gap-4 mb-4">
@@ -604,9 +605,9 @@ export default function Run() {
                   value="single"
                   checked={runMode === "single"}
                   onChange={() => setRunMode("single")}
-                  className="h-4 w-4 text-blue-600"
+                  className="h-4 w-4 accent-signal"
                 />
-                <span className="text-sm font-medium">Single Scenario</span>
+                <span className="font-mono text-[12.5px] tracking-mech uppercase">Single Scenario</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -615,22 +616,22 @@ export default function Run() {
                   value="suite"
                   checked={runMode === "suite"}
                   onChange={() => setRunMode("suite")}
-                  className="h-4 w-4 text-blue-600"
+                  className="h-4 w-4 accent-signal"
                 />
-                <span className="text-sm font-medium">Test Suite</span>
+                <span className="font-mono text-[12.5px] tracking-mech uppercase">Test Suite</span>
               </label>
             </div>
 
             {runMode === "single" ? (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="eyebrow block mb-1.5">
                     Scenario
                   </label>
                   <select
                     value={selectedScenario}
                     onChange={(e) => setSelectedScenario(e.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    className="input w-full"
                   >
                     {scenarios.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -639,19 +640,19 @@ export default function Run() {
                     ))}
                   </select>
                   {scenarios.find((s) => s.id === selectedScenario) && (
-                    <p className="mt-2 text-xs text-gray-500">
+                    <p className="mt-2 caption">
                       {scenarios.find((s) => s.id === selectedScenario)?.description}
                     </p>
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="eyebrow block mb-1.5">
                     Dataset
                   </label>
                   <select
                     value={selectedDataset}
                     onChange={(e) => setSelectedDataset(e.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    className="input w-full"
                   >
                     {datasetOptions.map((d) => (
                       <option key={d.value} value={d.value}>
@@ -660,7 +661,7 @@ export default function Run() {
                     ))}
                   </select>
                   {datasetOptions.find((d) => d.value === selectedDataset) && (
-                    <p className="mt-2 text-xs text-gray-500">
+                    <p className="mt-2 caption">
                       {datasetOptions.find((d) => d.value === selectedDataset)?.description}
                     </p>
                   )}
@@ -668,13 +669,13 @@ export default function Run() {
               </div>
             ) : (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="eyebrow block mb-1.5">
                   Test Suite
                 </label>
                 <select
                   value={selectedSuite}
                   onChange={(e) => setSelectedSuite(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  className="input w-full"
                 >
                   {testSuites.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -684,10 +685,10 @@ export default function Run() {
                 </select>
                 {testSuites.find((s) => s.id === selectedSuite) && (
                   <div className="mt-2">
-                    <p className="text-xs text-gray-500 mb-1">
+                    <p className="caption mb-1">
                       {testSuites.find((s) => s.id === selectedSuite)?.description}
                     </p>
-                    <p className="text-xs text-gray-400">
+                    <p className="caption text-ink-2">
                       Scenarios: {testSuites.find((s) => s.id === selectedSuite)?.scenarios.join(", ")}
                     </p>
                   </div>
@@ -699,7 +700,7 @@ export default function Run() {
 
         {/* Auto-recommend status */}
         {suggesting && (
-          <div className="flex items-center gap-2 text-sm text-gray-500">
+          <div className="flex items-center gap-2 meta">
             <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -708,7 +709,7 @@ export default function Run() {
           </div>
         )}
         {suggestError && (
-          <p className="text-sm text-red-600 bg-red-50 rounded-md px-3 py-2">{suggestError}</p>
+          <p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">{suggestError}</p>
         )}
 
         {/* PRD-15: OOM Warning */}
@@ -721,52 +722,71 @@ export default function Run() {
 
         {/* Production note when max_model_len was reduced for benchmarking */}
         {recommendation?.explanation?.feasible && recommendation.explanation.production_note && (
-          <div className="rounded-md border border-blue-200 bg-blue-50 p-4 text-sm">
-            <p className="font-medium text-blue-800 mb-1">Production deployment note</p>
-            <p className="text-blue-700">{recommendation.explanation.production_note}</p>
+          <div className="border border-info/40 bg-info/5 p-4">
+            <p className="eyebrow mb-1.5 text-info">PRODUCTION DEPLOYMENT NOTE</p>
+            <p className="font-mono text-[12.5px] text-ink-0">{recommendation.explanation.production_note}</p>
           </div>
         )}
 
         {/* Infeasibility warning with alternatives */}
         {recommendation?.explanation && !recommendation.explanation.feasible && (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm">
-            <p className="font-medium text-amber-800 mb-2">
-              Model does not fit on this instance
-            </p>
-            <p className="text-amber-700 mb-3">
+          <div className="border border-warn/40 bg-warn/5 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" className="text-warn shrink-0">
+                <path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              </svg>
+              <span className="eyebrow text-warn">[ MODEL DOES NOT FIT ON THIS INSTANCE ]</span>
+            </div>
+            <p className="font-mono text-[12.5px] text-ink-0 mb-4">
               {recommendation.explanation.reason}
             </p>
-            {recommendation.alternatives?.quantization_option && (
-              <div className="mb-2">
-                <p className="text-amber-800 font-medium">
-                  Option A: Use{" "}
-                  {recommendation.alternatives.quantization_option.quantization.toUpperCase()}{" "}
-                  quantization on {form.instance_type_name}
-                </p>
-                <p className="text-amber-700">
-                  Estimated memory:{" "}
-                  {recommendation.alternatives.quantization_option.estimated_mem_gib.toFixed(
-                    1
-                  )}{" "}
-                  GiB
-                </p>
-              </div>
-            )}
-            {recommendation.alternatives?.larger_instance && (
-              <div>
-                <p className="text-amber-800 font-medium">
-                  Option{" "}
-                  {recommendation.alternatives?.quantization_option
-                    ? "B"
-                    : "A"}
-                  : Switch to {recommendation.alternatives.larger_instance}
-                </p>
-                <p className="text-amber-700">
-                  Full {recommendation.model_info.native_dtype} precision, no
-                  quality trade-off
-                </p>
-              </div>
-            )}
+            {(() => {
+              const hasQuant = !!recommendation.alternatives?.quantization_option;
+              const hasLarger = !!recommendation.alternatives?.larger_instance;
+              if (!hasQuant && !hasLarger) return null;
+              const gridCols = hasQuant && hasLarger ? "md:grid-cols-2" : "grid-cols-1";
+              return (
+                <div className="mt-4 pt-3 border-t border-warn/30">
+                  <div className="eyebrow text-warn mb-2">ALTERNATIVES</div>
+                  <div className={`grid grid-cols-1 ${gridCols} gap-3`}>
+                    {hasQuant && recommendation.alternatives?.quantization_option && (
+                      <div className="p-3 border border-warn/30 bg-warn/5">
+                        <div className="caption text-warn mb-1">OPTION A</div>
+                        <div className="font-mono text-[12.5px] text-ink-0 mb-1">
+                          Use{" "}
+                          <span className="text-warn">
+                            {recommendation.alternatives.quantization_option.quantization.toUpperCase()}
+                          </span>{" "}
+                          quantization on {form.instance_type_name}
+                        </div>
+                        <div className="caption">
+                          est. memory{" "}
+                          <span className="tabular text-ink-0">
+                            {recommendation.alternatives.quantization_option.estimated_mem_gib.toFixed(1)} GiB
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {hasLarger && recommendation.alternatives?.larger_instance && (
+                      <div className="p-3 border border-warn/30 bg-warn/5">
+                        <div className="caption text-warn mb-1">
+                          OPTION {hasQuant ? "B" : "A"}
+                        </div>
+                        <div className="font-mono text-[12.5px] text-ink-0 mb-1">
+                          Switch to{" "}
+                          <span className="text-warn">
+                            {recommendation.alternatives.larger_instance}
+                          </span>
+                        </div>
+                        <div className="caption">
+                          full {recommendation.model_info.native_dtype} precision · no quality trade-off
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -778,14 +798,14 @@ export default function Run() {
         {/* Config */}
         <div className="grid grid-cols-4 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Tensor Parallel
             </label>
             {validTPOptions.length > 0 ? (
               <select
                 value={form.tensor_parallel_degree}
                 onChange={(e) => handleTPChange(Number(e.target.value))}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="input w-full"
               >
                 {validTPOptions.map((tp) => (
                   <option key={tp} value={tp}>
@@ -802,12 +822,12 @@ export default function Run() {
                 onChange={(e) =>
                   set("tensor_parallel_degree", Number(e.target.value))
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="input w-full"
               />
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Concurrency
             </label>
             <input
@@ -816,17 +836,17 @@ export default function Run() {
               max={256}
               value={form.concurrency}
               onChange={(e) => set("concurrency", Number(e.target.value))}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Quantization
             </label>
             <select
               value={form.quantization}
               onChange={(e) => set("quantization", e.target.value)}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             >
               <option value="">None (default)</option>
               <option value="fp16">FP16</option>
@@ -835,7 +855,7 @@ export default function Run() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Max Model Len
             </label>
             <input
@@ -844,14 +864,14 @@ export default function Run() {
               value={form.max_model_len}
               onChange={(e) => handleMaxModelLenChange(Number(e.target.value))}
               placeholder="0 = auto"
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             />
           </div>
         </div>
 
         {/* Runtime Overhead Slider */}
-        <div className="border-t border-gray-200 pt-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+        <div className="hairline pt-4">
+          <label className="eyebrow block mb-2">
             Runtime Overhead: {form.overhead_gib || 0} GiB
           </label>
           <input
@@ -861,20 +881,20 @@ export default function Run() {
             step={0.5}
             value={form.overhead_gib || 0}
             onChange={(e) => handleOverheadChange(Number(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            className="w-full h-1 bg-surface-2 appearance-none cursor-pointer accent-signal"
           />
-          <div className="flex justify-between text-xs text-gray-400 mt-1">
+          <div className="flex justify-between caption text-ink-2 mt-1">
             <span>0</span>
             <span>5</span>
             <span>10</span>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
+          <p className="caption mt-2">
             Increase if model fails with OOM. Qwen/Mistral often need 4-5 GiB.
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="eyebrow block mb-1.5">
             Min Duration (s)
           </label>
           <input
@@ -883,16 +903,16 @@ export default function Run() {
             value={form.min_duration_seconds}
             onChange={(e) => set("min_duration_seconds", Number(e.target.value))}
             placeholder="0 = no minimum"
-            className="w-48 rounded-md border border-gray-300 px-3 py-2 text-sm"
+            className="input w-48"
           />
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 caption">
             Minimum benchmark duration to ensure enough GPU samples. 0 disables.
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Input Seq Length
             </label>
             <input
@@ -902,11 +922,11 @@ export default function Run() {
               onChange={(e) =>
                 set("input_sequence_length", Number(e.target.value))
               }
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="eyebrow block mb-1.5">
               Output Seq Length
             </label>
             <input
@@ -916,13 +936,13 @@ export default function Run() {
               onChange={(e) =>
                 set("output_sequence_length", Number(e.target.value))
               }
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              className="input w-full"
             />
           </div>
         </div>
 
         {error && (
-          <p className="text-sm text-red-600 bg-red-50 rounded-md px-3 py-2">
+          <p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">
             {error}
           </p>
         )}
@@ -930,7 +950,7 @@ export default function Run() {
         <button
           type="submit"
           disabled={submitting}
-          className="rounded-md bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="btn btn-primary h-10 px-6 text-[13px]"
         >
           {submitting
             ? "Submitting..."

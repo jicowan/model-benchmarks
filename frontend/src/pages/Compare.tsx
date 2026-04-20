@@ -18,8 +18,15 @@ import {
 import { listCatalog, listPricing } from "../api";
 import type { CatalogEntry, PricingTier, PricingRow } from "../types";
 import PricingToggle from "../components/PricingToggle";
-
-const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706"];
+import {
+  useChartTheme,
+  seriesPalette,
+  percentileRamp,
+  axisStyle,
+  gridProps,
+  ChartTooltip,
+  ChartLegend,
+} from "../components/ChartTheme";
 
 const AWS_REGIONS = [
   "us-east-1",
@@ -58,6 +65,10 @@ export default function Compare() {
   const [pricingMap, setPricingMap] = useState<Map<string, PricingRow>>(
     new Map()
   );
+  const theme = useChartTheme();
+  const palette = seriesPalette();
+  const ramp = percentileRamp();
+  const axis = axisStyle(theme);
 
   useEffect(() => {
     const ids = searchParams.get("ids")?.split(",") ?? [];
@@ -83,7 +94,7 @@ export default function Compare() {
     return (
       <div>
         <h1 className="text-2xl font-bold mb-4">Compare</h1>
-        <p className="text-gray-500">
+        <p className="meta">
           Select up to 4 entries from the Catalog to compare.
         </p>
       </div>
@@ -173,7 +184,7 @@ export default function Compare() {
           <select
             value={region}
             onChange={(e) => setRegion(e.target.value)}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            className="input"
           >
             {AWS_REGIONS.map((r) => (
               <option key={r} value={r}>
@@ -186,17 +197,17 @@ export default function Compare() {
       </div>
 
       {/* Comparison table */}
-      <div className="overflow-x-auto border border-gray-200 rounded-lg mb-8">
+      <div className="panel overflow-x-auto mb-8">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50">
+          <thead className="bg-surface-1">
             <tr>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">
+              <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
                 Metric
               </th>
               {labels.map((l) => (
                 <th
                   key={l}
-                  className="px-4 py-3 text-right font-medium text-gray-500"
+                  className="eyebrow text-right py-2 px-3 border-b border-line bg-surface-1"
                 >
                   {l}
                 </th>
@@ -215,13 +226,13 @@ export default function Compare() {
               ["GPU Util %", "accelerator_utilization_pct"],
             ].map(([label, key]) => (
               <tr key={key}>
-                <td className="px-4 py-2 font-medium text-gray-700">
+                <td className="py-2 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
                   {label}
                 </td>
                 {entries.map((e) => (
                   <td
                     key={e.run_id}
-                    className="px-4 py-2 text-right text-gray-700"
+                    className="py-2 px-3 border-b border-line/60 text-right text-ink-0 font-mono text-[12.5px] tabular"
                   >
                     {(
                       e[key as keyof CatalogEntry] as number | undefined
@@ -231,27 +242,27 @@ export default function Compare() {
               </tr>
             ))}
             {/* Cost rows */}
-            <tr className="bg-blue-50">
-              <td className="px-4 py-2 font-medium text-gray-700">
+            <tr className="bg-info/5">
+              <td className="py-2 px-3 border-b border-line/60 text-ink-0 font-mono text-[12.5px]">
                 Hourly Cost (USD)
               </td>
               {costRows.map((c) => (
                 <td
                   key={c.label}
-                  className="px-4 py-2 text-right text-gray-700"
+                  className="py-2 px-3 border-b border-line/60 text-right text-ink-0 font-mono text-[12.5px] tabular"
                 >
                   {c.hourly != null ? `$${c.hourly.toFixed(2)}` : "--"}
                 </td>
               ))}
             </tr>
-            <tr className="bg-blue-50">
-              <td className="px-4 py-2 font-medium text-gray-700">
+            <tr className="bg-info/5">
+              <td className="py-2 px-3 border-b border-line/60 text-ink-0 font-mono text-[12.5px]">
                 Cost/Request (USD)
               </td>
               {costRows.map((c) => (
                 <td
                   key={c.label}
-                  className="px-4 py-2 text-right text-gray-700"
+                  className="py-2 px-3 border-b border-line/60 text-right text-ink-0 font-mono text-[12.5px] tabular"
                 >
                   {c.costPerRequest != null
                     ? `$${c.costPerRequest.toFixed(6)}`
@@ -259,14 +270,14 @@ export default function Compare() {
                 </td>
               ))}
             </tr>
-            <tr className="bg-blue-50">
-              <td className="px-4 py-2 font-medium text-gray-700">
+            <tr className="bg-info/5">
+              <td className="py-2 px-3 border-b border-line/60 text-ink-0 font-mono text-[12.5px]">
                 Cost/1M Tokens (USD)
               </td>
               {costRows.map((c) => (
                 <td
                   key={c.label}
-                  className="px-4 py-2 text-right text-gray-700"
+                  className="py-2 px-3 border-b border-line/60 text-right text-ink-0 font-mono text-[12.5px] tabular"
                 >
                   {c.costPer1MTokens != null
                     ? `$${c.costPer1MTokens.toFixed(2)}`
@@ -279,63 +290,68 @@ export default function Compare() {
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-700 mb-4">
-            Latency (ms)
-          </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={latencyData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="TTFT p50" fill="#2563eb" />
-              <Bar dataKey="TTFT p99" fill="#93c5fd" />
-              <Bar dataKey="E2E p50" fill="#dc2626" />
-              <Bar dataKey="E2E p99" fill="#fca5a5" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 border-l border-t border-line mb-8">
+        <div className="p-4 border-r border-b border-line bg-surface-1">
+          <div className="flex items-baseline justify-between mb-3">
+            <span className="eyebrow">LATENCY</span>
+            <span className="caption">ms</span>
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={latencyData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} stroke={theme.grid} />
+              <XAxis dataKey="name" tickLine={false} axisLine={{ stroke: theme.grid }} tick={axis} />
+              <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
+              <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
+              <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
+              <Bar dataKey="TTFT p50" fill={ramp[0]} />
+              <Bar dataKey="TTFT p99" fill={ramp[2]} />
+              <Bar dataKey="E2E p50" fill={palette[1]} />
+              <Bar dataKey="E2E p99" fill="rgb(var(--info) / 0.45)" />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-700 mb-4">
-            Throughput
-          </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={throughputData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="Tokens/s" fill="#059669" />
-              <Bar dataKey="RPS" fill="#d97706" />
+        <div className="p-4 border-r border-b border-line bg-surface-1">
+          <div className="flex items-baseline justify-between mb-3">
+            <span className="eyebrow">THROUGHPUT</span>
+            <span className="caption">tok/s · rps</span>
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={throughputData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} stroke={theme.grid} />
+              <XAxis dataKey="name" tickLine={false} axisLine={{ stroke: theme.grid }} tick={axis} />
+              <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
+              <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
+              <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
+              <Bar dataKey="Tokens/s" fill={palette[0]} />
+              <Bar dataKey="RPS" fill={palette[2]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-4 lg:col-span-2">
-          <h3 className="text-sm font-medium text-gray-700 mb-4">
-            Performance Radar (higher = better)
-          </h3>
-          <ResponsiveContainer width="100%" height={350}>
+        <div className="p-4 border-r border-b border-line bg-surface-1 lg:col-span-2">
+          <div className="flex items-baseline justify-between mb-3">
+            <span className="eyebrow">PERFORMANCE PROFILE</span>
+            <span className="caption">normalized · higher = better</span>
+          </div>
+          <ResponsiveContainer width="100%" height={340}>
             <RadarChart data={radarData}>
-              <PolarGrid />
-              <PolarAngleAxis dataKey="metric" tick={{ fontSize: 12 }} />
-              <PolarRadiusAxis domain={[0, 100]} tick={false} />
+              <PolarGrid stroke={theme.grid} strokeDasharray="2 4" />
+              <PolarAngleAxis dataKey="metric" tick={{ ...axis, fill: theme.axis }} stroke={theme.grid} />
+              <PolarRadiusAxis domain={[0, 100]} tick={false} stroke={theme.grid} axisLine={false} />
               {entries.map((_, i) => (
                 <Radar
                   key={labels[i]}
                   name={labels[i]}
                   dataKey={labels[i]}
-                  stroke={COLORS[i]}
-                  fill={COLORS[i]}
-                  fillOpacity={0.15}
+                  stroke={palette[i % palette.length]}
+                  fill={palette[i % palette.length]}
+                  fillOpacity={0.18}
+                  strokeWidth={1.5}
                 />
               ))}
-              <Legend />
+              <Tooltip content={<ChartTooltip />} />
+              <Legend content={<ChartLegend />} wrapperStyle={{ paddingTop: 8 }} />
             </RadarChart>
           </ResponsiveContainer>
         </div>
@@ -354,7 +370,7 @@ export default function Compare() {
             a.download = "accelbench-comparison.json";
             a.click();
           }}
-          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50"
+          className="btn"
         >
           Export JSON
         </button>
@@ -370,7 +386,7 @@ export default function Compare() {
             a.download = "accelbench-comparison.csv";
             a.click();
           }}
-          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50"
+          className="btn"
         >
           Export CSV
         </button>

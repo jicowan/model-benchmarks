@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import ThemeToggle from "./ThemeToggle";
+import { useStatus } from "../hooks/useStatus";
 
 type NavItem = {
   to: string;
@@ -25,22 +26,12 @@ const navItems: NavItem[] = [
     ),
   },
   {
-    to: "/run",
-    label: "New Benchmark",
-    shortcut: "N",
+    to: "/catalog",
+    label: "Catalog",
+    shortcut: "C",
     icon: (
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
-        <path d="M5 3v18l7-5 7 5V3z" />
-      </svg>
-    ),
-  },
-  {
-    to: "/runs",
-    label: "Runs",
-    shortcut: "R",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
-        <path d="M3 6h18M3 12h18M3 18h18" />
+        <path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z" />
       </svg>
     ),
   },
@@ -67,6 +58,26 @@ const navItems: NavItem[] = [
       </svg>
     ),
   },
+  {
+    to: "/run",
+    label: "New Benchmark",
+    shortcut: "N",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
+        <path d="M5 3v18l7-5 7 5V3z" />
+      </svg>
+    ),
+  },
+  {
+    to: "/runs",
+    label: "Runs",
+    shortcut: "R",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
+        <path d="M3 6h18M3 12h18M3 18h18" />
+      </svg>
+    ),
+  },
 ];
 
 const COLLAPSED_KEY = "accelbench.nav.collapsed";
@@ -76,6 +87,7 @@ export default function Layout() {
     if (typeof window === "undefined") return false;
     return localStorage.getItem(COLLAPSED_KEY) === "1";
   });
+  const { state: healthState, detail: healthDetail } = useStatus();
 
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
@@ -186,10 +198,7 @@ export default function Layout() {
           {!collapsed && (
             <div className="caption pt-1 flex items-center justify-between">
               <span>v0.19.0</span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
-                ONLINE
-              </span>
+              <StatusPill state={healthState} detail={healthDetail} />
             </div>
           )}
         </div>
@@ -200,5 +209,39 @@ export default function Layout() {
         <Outlet />
       </main>
     </div>
+  );
+}
+
+function StatusPill({
+  state,
+  detail,
+}: {
+  state: "ok" | "degraded" | "down" | "unknown";
+  detail: import("../types").StatusResponse | null;
+}) {
+  const { dot, label } = (() => {
+    switch (state) {
+      case "ok":
+        return { dot: "bg-signal animate-pulse_signal", label: "ONLINE" };
+      case "degraded":
+        return { dot: "bg-warn animate-pulse_signal", label: "DEGRADED" };
+      case "down":
+        return { dot: "bg-danger", label: "OFFLINE" };
+      default:
+        return { dot: "bg-ink-2", label: "…" };
+    }
+  })();
+
+  const tooltip = detail
+    ? Object.entries(detail.components)
+        .map(([k, c]) => `${k}: ${c.status}${c.latency_ms ? ` (${c.latency_ms}ms)` : ""}${c.error ? ` — ${c.error}` : ""}`)
+        .join("\n")
+    : "Status check failed";
+
+  return (
+    <span className="flex items-center gap-1.5" title={tooltip}>
+      <span className={`w-1.5 h-1.5 ${dot}`} />
+      {label}
+    </span>
   );
 }

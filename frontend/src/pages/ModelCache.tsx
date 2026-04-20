@@ -231,7 +231,7 @@ export default function Models() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-baseline gap-3">
                 <span className="eyebrow">[ NEW CACHE JOB ]</span>
-                <h3 className="font-sans text-[15px] text-ink-0">Download a HuggingFace model to S3</h3>
+                <h3 className="font-mono text-[13px] tracking-mech text-ink-0">Download a HuggingFace model to S3</h3>
               </div>
               <button onClick={() => setFormMode("none")} className="btn btn-ghost">✕ CLOSE</button>
             </div>
@@ -282,7 +282,7 @@ export default function Models() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-baseline gap-3">
                 <span className="eyebrow">[ REGISTER ]</span>
-                <h3 className="font-sans text-[15px] text-ink-0">Register an existing S3 model</h3>
+                <h3 className="font-mono text-[13px] tracking-mech text-ink-0">Register an existing S3 model</h3>
               </div>
               <button onClick={() => setFormMode("none")} className="btn btn-ghost">✕ CLOSE</button>
             </div>

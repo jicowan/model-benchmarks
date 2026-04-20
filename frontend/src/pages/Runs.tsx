@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { listRuns, listSuiteRuns, cancelRun, deleteRun } from "../api";
 
 /* ----------------------------- Types ----------------------------- */
@@ -80,14 +80,12 @@ function PageHeader({
 /* ----------------------------- Runs ----------------------------- */
 
 export default function Runs() {
-  const navigate = useNavigate();
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [modelSearch, setModelSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "run" | "suite">("all");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [offset, setOffset] = useState(0);
 
   const fetchJobs = useCallback(async () => {
@@ -171,17 +169,6 @@ export default function Runs() {
     return { all, running, pending, completed, failed };
   }, [jobs]);
 
-  const toggleSelected = (id: string) => {
-    setSelected((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  };
-
-  const clearSelection = () => setSelected(new Set());
-
   const handleCancel = async (id: string) => {
     if (!window.confirm(`Cancel job ${id.slice(0, 8)}?`)) return;
     try {
@@ -200,12 +187,6 @@ export default function Runs() {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Unknown error");
     }
-  };
-
-  const handleCompare = () => {
-    if (selected.size < 2) return;
-    const ids = Array.from(selected).join(",");
-    navigate(`/compare?runs=${ids}`);
   };
 
   return (
@@ -283,26 +264,6 @@ export default function Runs() {
             </div>
           </div>
 
-          {/* Selection bar */}
-          {selected.size > 0 && (
-            <div className="flex items-center justify-between px-4 py-2.5 bg-signal/5 border-b border-signal/30">
-              <div className="flex items-center gap-3 font-mono text-[12px]">
-                <span className="text-signal">{selected.size} selected</span>
-                <button onClick={clearSelection} className="btn-ghost text-[11px] tracking-mech px-2 py-1 uppercase">
-                  clear
-                </button>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCompare}
-                  disabled={selected.size < 2}
-                  className="btn btn-primary"
-                >
-                  COMPARE ({selected.size})
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {error && (
@@ -316,7 +277,6 @@ export default function Runs() {
           <table className="data-table">
             <thead>
               <tr>
-                <th className="w-10"></th>
                 <th className="w-28">STATUS</th>
                 <th className="w-14">TYPE</th>
                 <th className="w-20">ID</th>
@@ -330,7 +290,7 @@ export default function Runs() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-12 caption">
+                  <td colSpan={8} className="text-center py-12 caption">
                     <span className="inline-flex items-center gap-2">
                       <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
                       LOADING…
@@ -339,7 +299,7 @@ export default function Runs() {
                 </tr>
               ) : filteredJobs.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-16 caption">
+                  <td colSpan={8} className="text-center py-16 caption">
                     NO RUNS MATCH CURRENT FILTERS
                   </td>
                 </tr>
@@ -348,15 +308,6 @@ export default function Runs() {
                   const target = j.type === "suite" ? `/suite-runs/${j.id}` : `/results/${j.id}`;
                   return (
                     <tr key={`${j.type}-${j.id}`}>
-                      <td className="pl-3 pr-0">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(j.id)}
-                          onChange={() => toggleSelected(j.id)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="accent-signal"
-                        />
-                      </td>
                       <td>
                         <Link to={target} className="flex items-center" title={j.error_message}>
                           <span className={`status-dot ${statusDotClass(j.status)}`} />
