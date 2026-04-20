@@ -7,7 +7,7 @@ import Estimate from "./pages/Estimate";
 import Run from "./pages/Run";
 import ResultDetail from "./pages/ResultDetail";
 import SuiteResults from "./pages/SuiteResults";
-import Jobs from "./pages/Jobs";
+import Runs from "./pages/Runs";
 import ModelCachePage from "./pages/ModelCache";
 
 export default function App() {
@@ -18,7 +18,7 @@ export default function App() {
           {/* New IA */}
           <Route path="/" element={<Dashboard />} />
           <Route path="/run" element={<Run />} />
-          <Route path="/runs" element={<Jobs />} />
+          <Route path="/runs" element={<Runs />} />
           <Route path="/models" element={<ModelCachePage />} />
           <Route path="/estimate" element={<Estimate />} />
           <Route path="/catalog" element={<Catalog />} />
