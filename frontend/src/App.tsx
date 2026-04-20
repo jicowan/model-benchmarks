@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
+import Dashboard from "./pages/Dashboard";
 import Catalog from "./pages/Catalog";
 import Compare from "./pages/Compare";
 import Estimate from "./pages/Estimate";
@@ -15,11 +16,12 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           {/* New IA */}
-          <Route path="/" element={<Catalog />} />
+          <Route path="/" element={<Dashboard />} />
           <Route path="/run" element={<Run />} />
           <Route path="/runs" element={<Jobs />} />
           <Route path="/models" element={<ModelCachePage />} />
           <Route path="/estimate" element={<Estimate />} />
+          <Route path="/catalog" element={<Catalog />} />
 
           {/* Contextual routes */}
           <Route path="/compare" element={<Compare />} />
