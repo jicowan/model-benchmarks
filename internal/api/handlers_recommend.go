@@ -51,8 +51,8 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	fmt.Sscanf(q.Get("overhead_gib"), "%f", &overheadGiB)
 	quant = q.Get("quantization")
 
-	// Fetch model config
-	modelCfg, err := s.hfClient.FetchModelConfig(modelID, hfToken)
+	// Fetch model config (from S3 cache if available, else HuggingFace).
+	modelCfg, err := s.fetchModelConfig(r.Context(), modelID, hfToken)
 	if err != nil {
 		var hfErr *recommend.HFError
 		if errors.As(err, &hfErr) {

@@ -114,8 +114,8 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 	hfToken := r.Header.Get("X-HF-Token")
 	ctx := r.Context()
 
-	// Fetch model config from HuggingFace
-	modelCfg, err := s.hfClient.FetchModelConfig(modelID, hfToken)
+	// Fetch model config (from S3 cache if available, else HuggingFace).
+	modelCfg, err := s.fetchModelConfig(ctx, modelID, hfToken)
 	if err != nil {
 		var hfErr *recommend.HFError
 		if errors.As(err, &hfErr) {

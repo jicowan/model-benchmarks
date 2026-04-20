@@ -60,6 +60,20 @@ func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
 	s.orch.RecoverOrphanedRuns(ctx)
 }
 
+// fetchModelConfig returns a ModelConfig for modelID. If the model is already
+// cached in S3 (status=cached with a matching hf_id), it reads config.json
+// from S3 — this avoids requiring an HF token for gated models. Otherwise it
+// falls back to the HuggingFace API.
+func (s *Server) fetchModelConfig(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
+	if mc, _ := s.repo.GetModelCacheByHfID(ctx, modelID, "main"); mc != nil && mc.Status == "cached" {
+		if cfg, err := recommend.FetchModelConfigFromS3(ctx, mc.S3URI); err == nil {
+			return cfg, nil
+		}
+		// Fall through to HF on S3 read failure.
+	}
+	return s.hfClient.FetchModelConfig(modelID, hfToken)
+}
+
 // RegisterRoutes registers all API routes on the given mux.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/status", s.handleStatus)
@@ -426,8 +440,8 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch model config from HuggingFace.
-	modelCfg, err := s.hfClient.FetchModelConfig(modelID, hfToken)
+	// Fetch model config (from S3 cache if available, else HuggingFace).
+	modelCfg, err := s.fetchModelConfig(r.Context(), modelID, hfToken)
 	if err != nil {
 		var hfErr *recommend.HFError
 		if errors.As(err, &hfErr) {
