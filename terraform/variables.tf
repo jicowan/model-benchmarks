@@ -45,3 +45,55 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# ----------------------------------------------------------------------------
+# Auth (Cognito + ALB OIDC) — optional. Defaults are no-ops.
+# ----------------------------------------------------------------------------
+
+variable "auth_enabled" {
+  description = "Deploy Cognito + external-dns for ALB authentication. When false the remaining auth_* variables are ignored."
+  type        = bool
+  default     = false
+}
+
+variable "domain_name" {
+  description = "FQDN the UI will be served on (must match the ACM certificate)."
+  type        = string
+  default     = ""
+}
+
+variable "hosted_zone_id" {
+  description = "Route53 public hosted zone ID containing domain_name. Used by external-dns."
+  type        = string
+  default     = ""
+}
+
+variable "acm_certificate_arn" {
+  description = "Pre-existing ACM certificate ARN (us-west-2) covering domain_name. Must be passed through to Helm as ingress.certificateArn."
+  type        = string
+  default     = ""
+}
+
+variable "cognito_domain_prefix" {
+  description = "Globally-unique prefix for the Cognito hosted-UI domain (e.g. 'accelbench-auth')."
+  type        = string
+  default     = ""
+}
+
+variable "mfa_configuration" {
+  description = "Cognito MFA policy: OFF, OPTIONAL, or ON."
+  type        = string
+  default     = "OFF"
+}
+
+variable "session_timeout_seconds" {
+  description = "ALB session cookie lifetime in seconds."
+  type        = number
+  default     = 28800
+}
+
+variable "allowed_email_domains" {
+  description = "Email domains permitted to self-sign up via the Cognito Hosted UI (e.g. [\"amazon.com\"]). Empty list (default) keeps the pool admin-provisioned only — self-signup is disabled."
+  type        = list(string)
+  default     = []
+}

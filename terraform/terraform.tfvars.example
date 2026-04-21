@@ -1,0 +1,53 @@
+# ============================================================================
+# Example Terraform variables
+# ============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — DO NOT commit it.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#   # edit terraform.tfvars
+#   terraform apply
+# ============================================================================
+
+# Core settings (safe defaults provided — override if needed)
+region          = "us-west-2"
+project_name    = "accelbench"
+cluster_version = "1.31"
+
+# ----------------------------------------------------------------------------
+# Auth (optional)
+# ----------------------------------------------------------------------------
+# Set auth_enabled = true to provision Cognito + external-dns and gate the UI
+# behind ALB OIDC authentication. When false, the rest of this section is
+# ignored and the cluster deploys as before.
+
+auth_enabled = false
+
+# Required when auth_enabled = true:
+#
+# domain_name
+#   FQDN where the UI will be served. MUST match the ACM certificate below.
+# hosted_zone_id
+#   Route53 public hosted zone ID that contains domain_name. external-dns
+#   will create an A-alias record here pointing at the ALB.
+# acm_certificate_arn
+#   Pre-existing ACM cert ARN. Must be in the same region as the cluster
+#   (us-west-2) and must cover domain_name (exact match or wildcard).
+# cognito_domain_prefix
+#   Globally-unique prefix for the Cognito hosted-UI domain. Final URL is
+#   "<prefix>.auth.<region>.amazoncognito.com". Must be [a-z0-9-], 3-63 chars.
+# mfa_configuration
+#   OFF | OPTIONAL | ON. Applies to all users in the pool.
+
+# domain_name           = "accelbench.example.com"
+# hosted_zone_id        = "<ROUTE53_HOSTED_ZONE_ID>"
+# acm_certificate_arn   = "<ACM_CERTIFICATE_ARN>"
+# cognito_domain_prefix = "accelbench-auth"
+# mfa_configuration     = "OFF"
+
+# Optional: allow self-signup restricted to specific email domains.
+# Empty list (default) = admin-provisioned users only.
+# Non-empty = Cognito Hosted UI shows a "Sign up" link, and a pre-signup
+# Lambda trigger rejects any email that does NOT end in one of these domains.
+# Matching users are auto-confirmed (no confirmation email needed).
+# allowed_email_domains = ["amazon.com"]

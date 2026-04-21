@@ -67,3 +67,37 @@ output "ecr_cache_job_url" {
   description = "ECR repository URL for the cache job image"
   value       = aws_ecr_repository.cache_job.repository_url
 }
+
+# ----------------------------------------------------------------------------
+# Auth outputs (populated only when auth_enabled = true)
+# ----------------------------------------------------------------------------
+
+output "cognito_user_pool_id" {
+  description = "Cognito User Pool ID (pass to aws cognito-idp admin-create-user)"
+  value       = try(module.auth[0].user_pool_id, "")
+}
+
+output "cognito_user_pool_arn" {
+  description = "Cognito User Pool ARN (pass to Helm as auth.userPoolArn)"
+  value       = try(module.auth[0].user_pool_arn, "")
+}
+
+output "cognito_user_pool_client_id" {
+  description = "Cognito app client ID (Helm: auth.userPoolClientId)"
+  value       = try(module.auth[0].user_pool_client_id, "")
+}
+
+output "cognito_user_pool_domain" {
+  description = "Cognito hosted-UI domain (Helm: auth.userPoolDomain)"
+  value       = try(module.auth[0].user_pool_domain, "")
+}
+
+output "acm_certificate_arn" {
+  description = "ACM certificate ARN (echoed from input for convenience)"
+  value       = var.acm_certificate_arn
+}
+
+output "ingress_host" {
+  description = "Domain name for the UI ingress (Helm: ingress.host)"
+  value       = var.domain_name
+}

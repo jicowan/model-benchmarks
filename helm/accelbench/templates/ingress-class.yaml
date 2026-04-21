@@ -1,0 +1,30 @@
+{{- if and .Values.ingress.enabled .Values.ingress.createIngressClass }}
+# IngressClass + IngressClassParams for EKS Auto Mode.
+# Required so the managed ALB controller (controller: eks.amazonaws.com/alb)
+# reconciles our Ingress objects. Without these, ingresses sit pending.
+#
+# Set ingress.createIngressClass=false if your cluster already ships an "alb"
+# IngressClass (e.g. an installation of the AWS Load Balancer Controller that
+# created its own).
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ .Values.ingress.className }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+spec:
+  scheme: internet-facing
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ .Values.ingress.className }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+spec:
+  controller: eks.amazonaws.com/alb
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    name: {{ .Values.ingress.className }}
+{{- end }}
