@@ -72,38 +72,13 @@ web:
 ingress:
   enabled: true
   className: alb
-  # -- Create the IngressClass + IngressClassParams for EKS Auto Mode.
-  # Set to false if the cluster already has an "alb" IngressClass installed
-  # (e.g. via the AWS Load Balancer Controller chart).
-  createIngressClass: true
   annotations:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
   host: ""  # Set to your domain, e.g. accelbench.example.com
-  # -- ACM certificate ARN for the HTTPS listener. Required when auth.enabled=true.
-  # From Terraform: terraform output -raw acm_certificate_arn
-  certificateArn: ""
   tls: []
-
-# -- Authentication (Cognito via ALB OIDC) — disabled by default
-# When enabled, the ALB requires Cognito login before routing to the web pod.
-# Populate the values below from `terraform output` after running Terraform
-# with auth_enabled=true.
-auth:
-  enabled: false
-  # Cognito User Pool ARN (terraform output -raw cognito_user_pool_arn)
-  userPoolArn: ""
-  # Cognito app client ID (terraform output -raw cognito_user_pool_client_id)
-  userPoolClientId: ""
-  # Cognito hosted-UI domain, e.g. accelbench-auth.auth.us-west-2.amazoncognito.com
-  # (terraform output -raw cognito_user_pool_domain)
-  userPoolDomain: ""
-  # ALB session cookie lifetime (seconds). 8h default.
-  sessionTimeoutSeconds: 28800
-  # Scope requested from Cognito. "openid" is the minimum required by ALB.
-  scope: "openid"
 
 # -- Database (Aurora PostgreSQL)
 database:

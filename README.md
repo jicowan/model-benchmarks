@@ -206,55 +206,6 @@ The Helm chart deploys:
 
 > **Note:** IAM roles and Pod Identity associations for the API server (pricing access) and load generator (S3 access) are created automatically by Terraform in step 1.
 
-### 5. Authentication (optional)
-
-AccelBench can be placed behind ALB OIDC authentication backed by Amazon
-Cognito, so users log in with a username and password before reaching the UI.
-Disabled by default. See [`docs/auth.md`](docs/auth.md) for the full guide,
-troubleshooting, and user-management commands.
-
-Quick start:
-
-```bash
-# 1. Configure tfvars (not checked in — terraform.tfvars is gitignored)
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# edit: auth_enabled=true, domain_name, hosted_zone_id, acm_certificate_arn,
-#       cognito_domain_prefix
-
-# 2. Apply — creates Cognito pool + client + hosted-UI domain, deploys external-dns
-terraform apply
-
-# 3. Upgrade Helm release with auth wired up
-helm upgrade accelbench helm/accelbench -n accelbench \
-  --set auth.enabled=true \
-  --set auth.userPoolArn=$(terraform -chdir=terraform output -raw cognito_user_pool_arn) \
-  --set auth.userPoolClientId=$(terraform -chdir=terraform output -raw cognito_user_pool_client_id) \
-  --set auth.userPoolDomain=$(terraform -chdir=terraform output -raw cognito_user_pool_domain) \
-  --set ingress.certificateArn=$(terraform -chdir=terraform output -raw acm_certificate_arn) \
-  --set ingress.host=$(terraform -chdir=terraform output -raw ingress_host)
-
-# 4. Create the first user (password is NOT stored in Terraform state)
-USER_POOL_ID=$(terraform -chdir=terraform output -raw cognito_user_pool_id)
-
-aws cognito-idp admin-create-user \
-  --user-pool-id "$USER_POOL_ID" \
-  --username you@example.com \
-  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true \
-  --temporary-password 'TempPass123!' \
-  --message-action SUPPRESS
-
-aws cognito-idp admin-set-user-password \
-  --user-pool-id "$USER_POOL_ID" \
-  --username you@example.com \
-  --password 'YourRealPassword!' --permanent
-```
-
-Visit `https://<domain_name>` → Cognito login → Dashboard.
-
-To disable without destroying Cognito: `helm upgrade ... --set auth.enabled=false`.
-To remove all auth resources: `terraform destroy -target=module.external_dns -target=module.auth`.
-
 ## API Endpoints
 
 | Method | Path | Description |
