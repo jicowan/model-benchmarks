@@ -13,6 +13,7 @@ import {
   ScatterChart,
   Scatter,
   ZAxis,
+  Cell,
 } from "recharts";
 import type { ScenarioResult, ScenarioDefinition } from "../types";
 import {
@@ -103,8 +104,8 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
         <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-0 border-l border-t border-line">
           {/* QPS vs Latency */}
           <ChartPanel title="QPS → LATENCY" unit="ms">
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 28 }}>
                 <CartesianGrid {...gridProps} stroke={theme.grid} />
                 <XAxis
                   dataKey="qps"
@@ -114,13 +115,13 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                   label={{
                     value: "TARGET QPS",
                     position: "insideBottom",
-                    offset: -6,
+                    offset: -18,
                     style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
                   }}
                 />
                 <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
                 <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ stroke: theme.grid, strokeWidth: 1 }} />
-                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
+                <Legend content={<ChartLegend />} verticalAlign="top" wrapperStyle={{ paddingBottom: 8 }} />
                 <Line
                   type="monotone"
                   dataKey="ttft_p50"
@@ -155,8 +156,8 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
 
           {/* QPS vs Throughput */}
           <ChartPanel title="QPS → THROUGHPUT" unit="tok/s">
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 28 }}>
                 <CartesianGrid {...gridProps} stroke={theme.grid} />
                 <XAxis
                   dataKey="qps"
@@ -166,13 +167,13 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                   label={{
                     value: "TARGET QPS",
                     position: "insideBottom",
-                    offset: -6,
+                    offset: -18,
                     style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
                   }}
                 />
                 <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
                 <Tooltip content={<ChartTooltip unit="tok/s" />} cursor={{ stroke: theme.grid, strokeWidth: 1 }} />
-                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 4 }} />
+                <Legend content={<ChartLegend />} verticalAlign="top" wrapperStyle={{ paddingBottom: 8 }} />
                 <Line
                   type="monotone"
                   dataKey="throughput"
@@ -188,8 +189,8 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
 
           {/* Latency vs Throughput Scatter */}
           <ChartPanel title="LATENCY ↔ THROUGHPUT" unit="">
-            <ResponsiveContainer width="100%" height={260}>
-              <ScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <ScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 28 }}>
                 <CartesianGrid {...gridProps} stroke={theme.grid} />
                 <XAxis
                   dataKey="throughput"
@@ -201,7 +202,7 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                   label={{
                     value: "THROUGHPUT (TOK/S)",
                     position: "insideBottom",
-                    offset: -6,
+                    offset: -18,
                     style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
                   }}
                 />
@@ -241,13 +242,17 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                     );
                   }}
                 />
-                <Scatter data={chartData} fill={theme.signal} shape="square" />
+                <Scatter data={chartData} shape="square">
+                  {chartData.map((_, i) => (
+                    <Cell key={i} fill={palette[i % palette.length]} />
+                  ))}
+                </Scatter>
               </ScatterChart>
             </ResponsiveContainer>
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] tracking-widemech uppercase text-ink-1">
-              {chartData.map((d) => (
+              {chartData.map((d, i) => (
                 <span key={d.name} className="flex items-center gap-1">
-                  <span className="w-2 h-2" style={{ backgroundColor: theme.signal }} />
+                  <span className="w-2 h-2" style={{ backgroundColor: palette[i % palette.length] }} />
                   {d.name}
                 </span>
               ))}

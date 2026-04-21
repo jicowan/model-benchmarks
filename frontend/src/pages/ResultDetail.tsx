@@ -190,8 +190,8 @@ export default function ResultDetail() {
               precision={2}
             />
             <MetricCard
-              label="GPU Utilization"
-              value={metrics.accelerator_utilization_pct}
+              label="GPU Utilization (avg)"
+              value={metrics.accelerator_utilization_avg_pct ?? metrics.accelerator_utilization_pct}
               unit="%"
               precision={0}
             />
