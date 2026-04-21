@@ -288,7 +288,8 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		     e2e_latency_p50_ms, e2e_latency_p90_ms, e2e_latency_p95_ms, e2e_latency_p99_ms,
 		     itl_p50_ms, itl_p90_ms, itl_p95_ms, itl_p99_ms,
 		     throughput_per_request_tps, throughput_aggregate_tps, requests_per_second,
-		     accelerator_utilization_pct, accelerator_utilization_avg_pct, accelerator_memory_peak_gib,
+		     accelerator_utilization_pct, accelerator_utilization_avg_pct,
+		     accelerator_memory_peak_gib, accelerator_memory_avg_gib,
 		     waiting_requests_max,
 		     successful_requests, failed_requests, total_duration_seconds,
 		     tpot_p50_ms, tpot_p90_ms, tpot_p99_ms,
@@ -296,16 +297,20 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		     prompt_throughput_tps, generation_throughput_tps,
 		     kv_cache_utilization_avg_pct, kv_cache_utilization_peak_pct,
 		     prefix_cache_hit_rate, preemption_count,
-		     running_requests_avg, running_requests_max, output_length_mean)
+		     running_requests_avg, running_requests_max, output_length_mean,
+		     sm_active_avg_pct, sm_active_peak_pct,
+		     tensor_active_avg_pct, tensor_active_peak_pct,
+		     dram_active_avg_pct, dram_active_peak_pct)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
 		 RETURNING id`,
 		runID,
 		m.TTFTP50Ms, m.TTFTP90Ms, m.TTFTP95Ms, m.TTFTP99Ms,
 		m.E2ELatencyP50Ms, m.E2ELatencyP90Ms, m.E2ELatencyP95Ms, m.E2ELatencyP99Ms,
 		m.ITLP50Ms, m.ITLP90Ms, m.ITLP95Ms, m.ITLP99Ms,
 		m.ThroughputPerRequestTPS, m.ThroughputAggregateTPS, m.RequestsPerSecond,
-		m.AcceleratorUtilizationPct, m.AcceleratorUtilizationAvgPct, m.AcceleratorMemoryPeakGiB,
+		m.AcceleratorUtilizationPct, m.AcceleratorUtilizationAvgPct,
+		m.AcceleratorMemoryPeakGiB, m.AcceleratorMemoryAvgGiB,
 		m.WaitingRequestsMax,
 		m.SuccessfulRequests, m.FailedRequests, m.TotalDurationSeconds,
 		m.TPOTP50Ms, m.TPOTP90Ms, m.TPOTP99Ms,
@@ -314,6 +319,9 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		m.KVCacheUtilizationAvgPct, m.KVCacheUtilizationPeakPct,
 		m.PrefixCacheHitRate, m.PreemptionCount,
 		m.RunningRequestsAvg, m.RunningRequestsMax, m.OutputLengthMean,
+		m.SMActiveAvgPct, m.SMActivePeakPct,
+		m.TensorActiveAvgPct, m.TensorActivePeakPct,
+		m.DRAMActiveAvgPct, m.DRAMActivePeakPct,
 	).Scan(&metricsID)
 	if err != nil {
 		return fmt.Errorf("insert metrics: %w", err)
@@ -417,7 +425,8 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		        e2e_latency_p50_ms, e2e_latency_p90_ms, e2e_latency_p95_ms, e2e_latency_p99_ms,
 		        itl_p50_ms, itl_p90_ms, itl_p95_ms, itl_p99_ms,
 		        throughput_per_request_tps, throughput_aggregate_tps, requests_per_second,
-		        accelerator_utilization_pct, accelerator_utilization_avg_pct, accelerator_memory_peak_gib,
+		        accelerator_utilization_pct, accelerator_utilization_avg_pct,
+		        accelerator_memory_peak_gib, accelerator_memory_avg_gib,
 		        waiting_requests_max,
 		        successful_requests, failed_requests, total_duration_seconds, created_at,
 		        tpot_p50_ms, tpot_p90_ms, tpot_p99_ms,
@@ -425,14 +434,18 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		        prompt_throughput_tps, generation_throughput_tps,
 		        kv_cache_utilization_avg_pct, kv_cache_utilization_peak_pct,
 		        prefix_cache_hit_rate, preemption_count,
-		        running_requests_avg, running_requests_max, output_length_mean
+		        running_requests_avg, running_requests_max, output_length_mean,
+		        sm_active_avg_pct, sm_active_peak_pct,
+		        tensor_active_avg_pct, tensor_active_peak_pct,
+		        dram_active_avg_pct, dram_active_peak_pct
 		 FROM benchmark_metrics WHERE run_id = $1`, runID,
 	).Scan(&m.ID, &m.RunID,
 		&m.TTFTP50Ms, &m.TTFTP90Ms, &m.TTFTP95Ms, &m.TTFTP99Ms,
 		&m.E2ELatencyP50Ms, &m.E2ELatencyP90Ms, &m.E2ELatencyP95Ms, &m.E2ELatencyP99Ms,
 		&m.ITLP50Ms, &m.ITLP90Ms, &m.ITLP95Ms, &m.ITLP99Ms,
 		&m.ThroughputPerRequestTPS, &m.ThroughputAggregateTPS, &m.RequestsPerSecond,
-		&m.AcceleratorUtilizationPct, &m.AcceleratorUtilizationAvgPct, &m.AcceleratorMemoryPeakGiB,
+		&m.AcceleratorUtilizationPct, &m.AcceleratorUtilizationAvgPct,
+		&m.AcceleratorMemoryPeakGiB, &m.AcceleratorMemoryAvgGiB,
 		&m.WaitingRequestsMax,
 		&m.SuccessfulRequests, &m.FailedRequests, &m.TotalDurationSeconds, &m.CreatedAt,
 		&m.TPOTP50Ms, &m.TPOTP90Ms, &m.TPOTP99Ms,
@@ -440,7 +453,10 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		&m.PromptThroughputTPS, &m.GenerationThroughputTPS,
 		&m.KVCacheUtilizationAvgPct, &m.KVCacheUtilizationPeakPct,
 		&m.PrefixCacheHitRate, &m.PreemptionCount,
-		&m.RunningRequestsAvg, &m.RunningRequestsMax, &m.OutputLengthMean)
+		&m.RunningRequestsAvg, &m.RunningRequestsMax, &m.OutputLengthMean,
+		&m.SMActiveAvgPct, &m.SMActivePeakPct,
+		&m.TensorActiveAvgPct, &m.TensorActivePeakPct,
+		&m.DRAMActiveAvgPct, &m.DRAMActivePeakPct)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

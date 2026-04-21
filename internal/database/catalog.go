@@ -31,16 +31,27 @@ type CatalogEntry struct {
 
 	// Metrics (inlined from benchmark_metrics)
 	TTFTP50Ms                *float64 `json:"ttft_p50_ms,omitempty"`
+	TTFTP95Ms                *float64 `json:"ttft_p95_ms,omitempty"`
 	TTFTP99Ms                *float64 `json:"ttft_p99_ms,omitempty"`
 	E2ELatencyP50Ms          *float64 `json:"e2e_latency_p50_ms,omitempty"`
+	E2ELatencyP95Ms          *float64 `json:"e2e_latency_p95_ms,omitempty"`
 	E2ELatencyP99Ms          *float64 `json:"e2e_latency_p99_ms,omitempty"`
 	ITLP50Ms                 *float64 `json:"itl_p50_ms,omitempty"`
+	ITLP95Ms                 *float64 `json:"itl_p95_ms,omitempty"`
 	ITLP99Ms                 *float64 `json:"itl_p99_ms,omitempty"`
 	ThroughputPerRequestTPS  *float64 `json:"throughput_per_request_tps,omitempty"`
 	ThroughputAggregateTPS   *float64 `json:"throughput_aggregate_tps,omitempty"`
 	RequestsPerSecond        *float64 `json:"requests_per_second,omitempty"`
-	AcceleratorUtilizationPct *float64 `json:"accelerator_utilization_pct,omitempty"`
-	AcceleratorMemoryPeakGiB *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+	SuccessfulRequests       *int     `json:"successful_requests,omitempty"`
+	FailedRequests           *int     `json:"failed_requests,omitempty"`
+	AcceleratorUtilizationPct    *float64 `json:"accelerator_utilization_pct,omitempty"`
+	AcceleratorUtilizationAvgPct *float64 `json:"accelerator_utilization_avg_pct,omitempty"`
+	AcceleratorMemoryPeakGiB     *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+	AcceleratorMemoryAvgGiB      *float64 `json:"accelerator_memory_avg_gib,omitempty"`
+	// PRD-22: DCP GPU metrics
+	SMActiveAvgPct     *float64 `json:"sm_active_avg_pct,omitempty"`
+	TensorActiveAvgPct *float64 `json:"tensor_active_avg_pct,omitempty"`
+	DRAMActiveAvgPct   *float64 `json:"dram_active_avg_pct,omitempty"`
 }
 
 // CatalogFilter holds optional filters for catalog queries.
@@ -57,20 +68,28 @@ type CatalogFilter struct {
 
 // allowedSortColumns maps user-facing sort keys to SQL column expressions.
 var allowedSortColumns = map[string]string{
-	"model":                    "m.hf_id",
-	"instance":                 "it.name",
-	"ttft_p50":                 "bm.ttft_p50_ms",
-	"ttft_p99":                 "bm.ttft_p99_ms",
-	"e2e_latency_p50":          "bm.e2e_latency_p50_ms",
-	"e2e_latency_p99":          "bm.e2e_latency_p99_ms",
-	"itl_p50":                  "bm.itl_p50_ms",
-	"itl_p99":                  "bm.itl_p99_ms",
-	"throughput_per_request":    "bm.throughput_per_request_tps",
-	"throughput_aggregate":      "bm.throughput_aggregate_tps",
-	"requests_per_second":       "bm.requests_per_second",
-	"accelerator_utilization":   "bm.accelerator_utilization_pct",
-	"accelerator_memory_peak":   "bm.accelerator_memory_peak_gib",
-	"completed_at":             "br.completed_at",
+	"model":                       "m.hf_id",
+	"instance":                    "it.name",
+	"ttft_p50":                    "bm.ttft_p50_ms",
+	"ttft_p95":                    "bm.ttft_p95_ms",
+	"ttft_p99":                    "bm.ttft_p99_ms",
+	"e2e_latency_p50":             "bm.e2e_latency_p50_ms",
+	"e2e_latency_p95":             "bm.e2e_latency_p95_ms",
+	"e2e_latency_p99":             "bm.e2e_latency_p99_ms",
+	"itl_p50":                     "bm.itl_p50_ms",
+	"itl_p95":                     "bm.itl_p95_ms",
+	"itl_p99":                     "bm.itl_p99_ms",
+	"throughput_per_request":      "bm.throughput_per_request_tps",
+	"throughput_aggregate":        "bm.throughput_aggregate_tps",
+	"requests_per_second":         "bm.requests_per_second",
+	"accelerator_utilization":     "bm.accelerator_utilization_pct",
+	"accelerator_utilization_avg": "bm.accelerator_utilization_avg_pct",
+	"accelerator_memory_peak":     "bm.accelerator_memory_peak_gib",
+	"accelerator_memory_avg":      "bm.accelerator_memory_avg_gib",
+	"sm_active_avg":               "bm.sm_active_avg_pct",
+	"tensor_active_avg":           "bm.tensor_active_avg_pct",
+	"dram_active_avg":             "bm.dram_active_avg_pct",
+	"completed_at":                "br.completed_at",
 }
 
 // ListCatalog queries the catalog with optional filters and sorting.
@@ -145,12 +164,16 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 			br.quantization, br.concurrency,
 			br.input_sequence_length, br.output_sequence_length,
 			br.completed_at,
-			bm.ttft_p50_ms, bm.ttft_p99_ms,
-			bm.e2e_latency_p50_ms, bm.e2e_latency_p99_ms,
-			bm.itl_p50_ms, bm.itl_p99_ms,
+			bm.ttft_p50_ms, bm.ttft_p95_ms, bm.ttft_p99_ms,
+			bm.e2e_latency_p50_ms, bm.e2e_latency_p95_ms, bm.e2e_latency_p99_ms,
+			bm.itl_p50_ms, bm.itl_p95_ms, bm.itl_p99_ms,
 			bm.throughput_per_request_tps, bm.throughput_aggregate_tps,
 			bm.requests_per_second,
-			bm.accelerator_utilization_pct, bm.accelerator_memory_peak_gib
+			bm.successful_requests, bm.failed_requests,
+			bm.accelerator_utilization_pct, bm.accelerator_utilization_avg_pct,
+			bm.accelerator_memory_peak_gib, bm.accelerator_memory_avg_gib,
+			bm.sm_active_avg_pct, bm.tensor_active_avg_pct,
+			bm.dram_active_avg_pct
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
 		JOIN instance_types it ON br.instance_type_id = it.id
@@ -177,12 +200,16 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 			&e.Quantization, &e.Concurrency,
 			&e.InputSequenceLength, &e.OutputSequenceLength,
 			&e.CompletedAt,
-			&e.TTFTP50Ms, &e.TTFTP99Ms,
-			&e.E2ELatencyP50Ms, &e.E2ELatencyP99Ms,
-			&e.ITLP50Ms, &e.ITLP99Ms,
+			&e.TTFTP50Ms, &e.TTFTP95Ms, &e.TTFTP99Ms,
+			&e.E2ELatencyP50Ms, &e.E2ELatencyP95Ms, &e.E2ELatencyP99Ms,
+			&e.ITLP50Ms, &e.ITLP95Ms, &e.ITLP99Ms,
 			&e.ThroughputPerRequestTPS, &e.ThroughputAggregateTPS,
 			&e.RequestsPerSecond,
-			&e.AcceleratorUtilizationPct, &e.AcceleratorMemoryPeakGiB,
+			&e.SuccessfulRequests, &e.FailedRequests,
+			&e.AcceleratorUtilizationPct, &e.AcceleratorUtilizationAvgPct,
+			&e.AcceleratorMemoryPeakGiB, &e.AcceleratorMemoryAvgGiB,
+			&e.SMActiveAvgPct, &e.TensorActiveAvgPct,
+			&e.DRAMActiveAvgPct,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan catalog row: %w", err)

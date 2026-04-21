@@ -9,8 +9,8 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { getRun, getMetrics, getExportManifestUrl, getExportReportUrl } from "../api";
-import type { BenchmarkRun, BenchmarkMetrics } from "../types";
+import { getRun, getMetrics, getExportManifestUrl, getExportReportUrl, listInstanceTypes } from "../api";
+import type { BenchmarkRun, BenchmarkMetrics, InstanceType } from "../types";
 import MetricCard from "../components/MetricCard";
 import {
   useChartTheme,
@@ -26,6 +26,7 @@ export default function ResultDetail() {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<BenchmarkRun | null>(null);
   const [metrics, setMetrics] = useState<BenchmarkMetrics | null>(null);
+  const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
   const [error, setError] = useState("");
   const chartTheme = useChartTheme();
   const ramp = percentileRamp();
@@ -38,6 +39,7 @@ export default function ResultDetail() {
       .catch(() => {
         /* metrics may not exist yet */
       });
+    listInstanceTypes().then(setInstanceTypes).catch(() => {});
   }, [id]);
 
   useEffect(() => {
@@ -166,62 +168,131 @@ export default function ResultDetail() {
 
       {metrics && (
         <>
-          {/* Metric cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <MetricCard
-              label="TTFT p50"
-              value={metrics.ttft_p50_ms}
-              unit="ms"
-            />
-            <MetricCard
-              label="E2E Latency p50"
-              value={metrics.e2e_latency_p50_ms}
-              unit="ms"
-            />
-            <MetricCard
-              label="ITL p50"
-              value={metrics.itl_p50_ms}
-              unit="ms"
-            />
-            <MetricCard
-              label="Requests/sec"
-              value={metrics.requests_per_second}
-              unit="rps"
-              precision={2}
-            />
-            <MetricCard
-              label="GPU Utilization (avg)"
-              value={metrics.accelerator_utilization_avg_pct ?? metrics.accelerator_utilization_pct}
-              unit="%"
-              precision={0}
-            />
-            <MetricCard
-              label="Peak Memory"
-              value={metrics.accelerator_memory_peak_gib}
-              unit="GiB"
-            />
-          </div>
+          {(() => {
+            const acceleratorCount =
+              instanceTypes.find((it) => it.id === run.instance_type_id)
+                ?.accelerator_count ?? 0;
+            const succeeded = metrics.successful_requests ?? 0;
+            const failed = metrics.failed_requests ?? 0;
+            const totalReqs = succeeded + failed;
+            const successRate =
+              totalReqs > 0 ? (succeeded / totalReqs) * 100 : undefined;
+            const throughput =
+              metrics.throughput_aggregate_tps ??
+              metrics.generation_throughput_tps;
+            const perAccelTPS =
+              acceleratorCount > 0 && throughput !== undefined
+                ? throughput / acceleratorCount
+                : undefined;
+            const acceleratorUnit =
+              (run.framework ?? "").toLowerCase().includes("neuron")
+                ? "tok/s/chip"
+                : "tok/s/GPU";
+            return (
+              <>
+                {/* Headline metric cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                  <MetricCard
+                    label="TTFT p50"
+                    value={metrics.ttft_p50_ms}
+                    unit="ms"
+                  />
+                  <MetricCard
+                    label="E2E Latency p50"
+                    value={metrics.e2e_latency_p50_ms}
+                    unit="ms"
+                  />
+                  <MetricCard
+                    label="ITL p50"
+                    value={metrics.itl_p50_ms}
+                    unit="ms"
+                  />
+                  <MetricCard
+                    label="Requests/sec"
+                    value={metrics.requests_per_second}
+                    unit="rps"
+                    precision={2}
+                  />
+                  <MetricCard
+                    label="GPU Busy (avg)"
+                    value={
+                      metrics.accelerator_utilization_avg_pct ??
+                      metrics.accelerator_utilization_pct
+                    }
+                    unit="%"
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="SM Active (avg)"
+                    value={metrics.sm_active_avg_pct}
+                    unit="%"
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="Tensor Active (avg)"
+                    value={metrics.tensor_active_avg_pct}
+                    unit="%"
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="DRAM Active (avg)"
+                    value={metrics.dram_active_avg_pct}
+                    unit="%"
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="Memory (avg)"
+                    value={metrics.accelerator_memory_avg_gib}
+                    unit="GiB"
+                  />
+                  <MetricCard
+                    label="Memory (peak)"
+                    value={metrics.accelerator_memory_peak_gib}
+                    unit="GiB"
+                  />
+                </div>
 
-          {/* Request stats */}
-          <div className="grid grid-cols-3 gap-4 mb-8">
-            <MetricCard
-              label="Successful Requests"
-              value={metrics.successful_requests}
-              unit=""
-              precision={0}
-            />
-            <MetricCard
-              label="Failed Requests"
-              value={metrics.failed_requests}
-              unit=""
-              precision={0}
-            />
-            <MetricCard
-              label="Total Duration"
-              value={metrics.total_duration_seconds}
-              unit="s"
-            />
-          </div>
+                {/* Request stats */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                  <MetricCard
+                    label="Successful Requests"
+                    value={succeeded}
+                    unit=""
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="Failed Requests"
+                    value={failed}
+                    unit=""
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="Success Rate"
+                    value={successRate}
+                    unit="%"
+                    precision={1}
+                  />
+                  <MetricCard
+                    label={`Throughput (per ${acceleratorUnit.includes("chip") ? "chip" : "GPU"})`}
+                    value={perAccelTPS}
+                    unit={acceleratorUnit}
+                    precision={0}
+                  />
+                  <MetricCard
+                    label="Total Duration"
+                    value={metrics.total_duration_seconds}
+                    unit="s"
+                  />
+                  <MetricCard
+                    label="Queue Max"
+                    value={metrics.waiting_requests_max}
+                    unit="req"
+                    precision={0}
+                  />
+                </div>
+              </>
+            );
+          })()}
 
           {/* Latency Breakdown section */}
           {(metrics.tpot_p50_ms || metrics.prefill_time_p50_ms || metrics.decode_time_p50_ms) && (
@@ -231,6 +302,11 @@ export default function ResultDetail() {
                 <MetricCard
                   label="TPOT p50"
                   value={metrics.tpot_p50_ms}
+                  unit="ms"
+                />
+                <MetricCard
+                  label="TPOT p99"
+                  value={metrics.tpot_p99_ms}
                   unit="ms"
                 />
                 <MetricCard

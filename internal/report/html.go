@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"strings"
 	"time"
 
 	"github.com/accelbench/accelbench/internal/database"
@@ -40,7 +41,14 @@ type ReportData struct {
 	Metrics      *database.BenchmarkMetrics
 	LatencyP50   []float64
 	LatencyP90   []float64
+	LatencyP95   []float64
 	LatencyP99   []float64
+
+	// Derived display values (PRD-22 Tier 1)
+	AcceleratorCount     int
+	AcceleratorLabel     string // "GPU" or "chip" depending on accelerator_type
+	SuccessRatePct       *float64
+	ThroughputPerAccelTPS *float64
 }
 
 // ConfigData holds configuration details for the report.
@@ -93,11 +101,52 @@ func GenerateRunReport(run *database.BenchmarkRun, metrics *database.BenchmarkMe
 			deref(metrics.E2ELatencyP90Ms),
 			deref(metrics.ITLP90Ms),
 		},
+		LatencyP95: []float64{
+			deref(metrics.TTFTP95Ms),
+			deref(metrics.E2ELatencyP95Ms),
+			deref(metrics.ITLP95Ms),
+		},
 		LatencyP99: []float64{
 			deref(metrics.TTFTP99Ms),
 			deref(metrics.E2ELatencyP99Ms),
 			deref(metrics.ITLP99Ms),
 		},
+
+		AcceleratorCount: details.AcceleratorCount,
+	}
+
+	if strings.EqualFold(details.AcceleratorType, "neuron") {
+		data.AcceleratorLabel = "chip"
+	} else {
+		data.AcceleratorLabel = "GPU"
+	}
+
+	// Success Rate %
+	if metrics.SuccessfulRequests != nil {
+		ok := *metrics.SuccessfulRequests
+		failed := 0
+		if metrics.FailedRequests != nil {
+			failed = *metrics.FailedRequests
+		}
+		total := ok + failed
+		if total > 0 {
+			pct := float64(ok) / float64(total) * 100
+			data.SuccessRatePct = &pct
+		}
+	}
+
+	// Throughput per accelerator
+	if details.AcceleratorCount > 0 {
+		var aggregate *float64
+		if metrics.ThroughputAggregateTPS != nil {
+			aggregate = metrics.ThroughputAggregateTPS
+		} else if metrics.GenerationThroughputTPS != nil {
+			aggregate = metrics.GenerationThroughputTPS
+		}
+		if aggregate != nil {
+			per := *aggregate / float64(details.AcceleratorCount)
+			data.ThroughputPerAccelTPS = &per
+		}
 	}
 
 	var buf bytes.Buffer

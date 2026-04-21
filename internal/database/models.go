@@ -94,6 +94,16 @@ type BenchmarkMetrics struct {
 	RunningRequestsAvg        *float64 `json:"running_requests_avg,omitempty"`
 	RunningRequestsMax        *int     `json:"running_requests_max,omitempty"`
 	OutputLengthMean          *float64 `json:"output_length_mean,omitempty"`
+
+	// PRD-22: DCP GPU metrics from DCGM profiling counters.
+	SMActiveAvgPct      *float64 `json:"sm_active_avg_pct,omitempty"`
+	SMActivePeakPct     *float64 `json:"sm_active_peak_pct,omitempty"`
+	TensorActiveAvgPct  *float64 `json:"tensor_active_avg_pct,omitempty"`
+	TensorActivePeakPct *float64 `json:"tensor_active_peak_pct,omitempty"`
+	DRAMActiveAvgPct    *float64 `json:"dram_active_avg_pct,omitempty"`
+	DRAMActivePeakPct   *float64 `json:"dram_active_peak_pct,omitempty"`
+	// Average framebuffer usage across scrapes (GiB).
+	AcceleratorMemoryAvgGiB *float64 `json:"accelerator_memory_avg_gib,omitempty"`
 }
 
 type Pricing struct {
@@ -156,21 +166,38 @@ type ScenarioResult struct {
 	CompletedAt       *time.Time `json:"completed_at,omitempty"`
 	TTFTP50Ms         *float64   `json:"ttft_p50_ms,omitempty"`
 	TTFTP90Ms         *float64   `json:"ttft_p90_ms,omitempty"`
+	TTFTP95Ms         *float64   `json:"ttft_p95_ms,omitempty"`
 	TTFTP99Ms         *float64   `json:"ttft_p99_ms,omitempty"`
 	E2ELatencyP50Ms   *float64   `json:"e2e_latency_p50_ms,omitempty"`
 	E2ELatencyP90Ms   *float64   `json:"e2e_latency_p90_ms,omitempty"`
+	E2ELatencyP95Ms   *float64   `json:"e2e_latency_p95_ms,omitempty"`
 	E2ELatencyP99Ms   *float64   `json:"e2e_latency_p99_ms,omitempty"`
 	ITLP50Ms          *float64   `json:"itl_p50_ms,omitempty"`
 	ITLP90Ms          *float64   `json:"itl_p90_ms,omitempty"`
+	ITLP95Ms          *float64   `json:"itl_p95_ms,omitempty"`
 	ITLP99Ms          *float64   `json:"itl_p99_ms,omitempty"`
+	TPOTP50Ms                *float64   `json:"tpot_p50_ms,omitempty"`
+	TPOTP90Ms                *float64   `json:"tpot_p90_ms,omitempty"`
+	TPOTP99Ms                *float64   `json:"tpot_p99_ms,omitempty"`
 	ThroughputTPS            *float64   `json:"throughput_tps,omitempty"`
 	RequestsPerSecond        *float64   `json:"requests_per_second,omitempty"`
 	SuccessfulRequests       *int       `json:"successful_requests,omitempty"`
 	FailedRequests           *int       `json:"failed_requests,omitempty"`
-	AcceleratorUtilizationPct *float64  `json:"accelerator_utilization_pct,omitempty"`
-	AcceleratorMemoryPeakGiB  *float64  `json:"accelerator_memory_peak_gib,omitempty"`
-	LoadgenConfig            *string    `json:"loadgen_config,omitempty"`
-	CreatedAt                time.Time  `json:"created_at"`
+	WaitingRequestsMax       *int       `json:"waiting_requests_max,omitempty"`
+	AcceleratorUtilizationPct    *float64 `json:"accelerator_utilization_pct,omitempty"`
+	AcceleratorUtilizationAvgPct *float64 `json:"accelerator_utilization_avg_pct,omitempty"`
+	AcceleratorMemoryPeakGiB     *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+	// PRD-22: DCP metrics
+	SMActiveAvgPct      *float64 `json:"sm_active_avg_pct,omitempty"`
+	SMActivePeakPct     *float64 `json:"sm_active_peak_pct,omitempty"`
+	TensorActiveAvgPct  *float64 `json:"tensor_active_avg_pct,omitempty"`
+	TensorActivePeakPct *float64 `json:"tensor_active_peak_pct,omitempty"`
+	DRAMActiveAvgPct    *float64 `json:"dram_active_avg_pct,omitempty"`
+	DRAMActivePeakPct   *float64 `json:"dram_active_peak_pct,omitempty"`
+	// Average framebuffer usage across scrapes (GiB).
+	AcceleratorMemoryAvgGiB *float64 `json:"accelerator_memory_avg_gib,omitempty"`
+	LoadgenConfig           *string    `json:"loadgen_config,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
 }
 
 // SuiteRunRequest represents the input parameters for starting a test suite run.

@@ -190,6 +190,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		computed.AcceleratorUtilizationPct = &gpuMetrics.UtilizationPeakPct
 		computed.AcceleratorUtilizationAvgPct = &gpuMetrics.UtilizationAvgPct
 		computed.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
+		computed.AcceleratorMemoryAvgGiB = &gpuMetrics.MemoryAvgGiB
 		computed.WaitingRequestsMax = &gpuMetrics.WaitingRequestsMax
 
 		// Extended metrics (PRD-14)
@@ -201,6 +202,15 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		computed.PreemptionCount = &gpuMetrics.PreemptionCount
 		computed.RunningRequestsAvg = &gpuMetrics.RunningRequestsAvg
 		computed.RunningRequestsMax = &gpuMetrics.RunningRequestsMax
+
+		// PRD-22: DCP metrics pass through as pointers. Nil → stored as NULL
+		// → UI renders "—". Non-nil carries a real reading.
+		computed.SMActiveAvgPct = gpuMetrics.SMActiveAvgPct
+		computed.SMActivePeakPct = gpuMetrics.SMActivePeakPct
+		computed.TensorActiveAvgPct = gpuMetrics.TensorActiveAvgPct
+		computed.TensorActivePeakPct = gpuMetrics.TensorActivePeakPct
+		computed.DRAMActiveAvgPct = gpuMetrics.DRAMActiveAvgPct
+		computed.DRAMActivePeakPct = gpuMetrics.DRAMActivePeakPct
 	}
 
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {

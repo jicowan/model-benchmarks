@@ -182,10 +182,21 @@ export default function Catalog() {
         size: 80,
       },
       {
-        accessorKey: "accelerator_utilization_pct",
-        header: "Util %",
+        accessorKey: "accelerator_utilization_avg_pct",
+        header: "Busy % (avg)",
+        cell: (info) =>
+          fmtNum(
+            info.getValue<number>() ??
+              info.row.original.accelerator_utilization_pct,
+            0
+          ),
+        size: 80,
+      },
+      {
+        accessorKey: "sm_active_avg_pct",
+        header: "SM % (avg)",
         cell: (info) => fmtNum(info.getValue<number>(), 0),
-        size: 70,
+        size: 80,
       },
     ],
     [selected]

@@ -20,12 +20,12 @@ const (
 
 // GPUMetrics holds aggregated GPU metrics collected during a benchmark run.
 type GPUMetrics struct {
-	// Peak GPU utilization percentage (0-100) from DCGM. 0 if DCGM unavailable.
+	// DCGM_FI_DEV_GPU_UTIL ("GPU Busy" — SM any-active ratio). 0 if DCGM unavailable.
 	UtilizationPeakPct float64
-	// Average GPU utilization percentage (0-100) from DCGM. 0 if DCGM unavailable.
-	UtilizationAvgPct float64
-	// Peak GPU memory usage in GiB from DCGM. 0 if DCGM unavailable.
+	UtilizationAvgPct  float64
+	// DCGM_FI_DEV_FB_USED framebuffer usage in GiB. 0 if DCGM unavailable.
 	MemoryPeakGiB float64
+	MemoryAvgGiB  float64
 	// Maximum number of waiting requests observed (from vLLM).
 	WaitingRequestsMax int
 
@@ -43,6 +43,19 @@ type GPUMetrics struct {
 	// Running requests
 	RunningRequestsAvg float64
 	RunningRequestsMax int
+
+	// PRD-22: DCP (DCGM Profiling) metrics. SMActive reflects warp occupancy
+	// across SMs; TensorActive reflects tensor-core pipe utilization;
+	// DRAMActive reflects memory-bandwidth utilization. All reported 0–100
+	// (derived from DCGM's 0.0–1.0 ratios). Pointers are nil when the DCGM
+	// exporter didn't emit DCP samples (e.g., SKU without profiling support,
+	// or DCP counters disabled).
+	SMActiveAvgPct      *float64
+	SMActivePeakPct     *float64
+	TensorActiveAvgPct  *float64
+	TensorActivePeakPct *float64
+	DRAMActiveAvgPct    *float64
+	DRAMActivePeakPct   *float64
 }
 
 // GPUScraper periodically polls a vLLM Prometheus metrics endpoint and
@@ -79,6 +92,11 @@ type GPUScraper struct {
 	// DCGM metrics samples
 	dcgmUtilSamples []float64
 	dcgmMemSamples  []float64 // Memory used in bytes
+
+	// DCP metrics samples (PRD-22). Empty when DCP counters aren't emitted.
+	dcgmSMActiveSamples     []float64 // 0–100 (DCGM_FI_PROF_SM_ACTIVE × 100)
+	dcgmTensorActiveSamples []float64 // 0–100 (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE × 100)
+	dcgmDRAMActiveSamples   []float64 // 0–100 (DCGM_FI_PROF_DRAM_ACTIVE × 100)
 }
 
 // NewGPUScraper creates a scraper targeting the given vLLM service.
@@ -210,20 +228,30 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 		dcgmUtilAvg = sum / float64(len(s.dcgmUtilSamples))
 	}
 
-	// Compute DCGM memory peak (convert MB to GiB)
-	var dcgmMemPeakGiB float64
+	// Compute DCGM memory peak and average (convert MB to GiB)
+	var dcgmMemPeakGiB, dcgmMemSum float64
 	for _, v := range s.dcgmMemSamples {
 		gib := v / 1024 // DCGM reports memory in MB
 		if gib > dcgmMemPeakGiB {
 			dcgmMemPeakGiB = gib
 		}
+		dcgmMemSum += gib
 	}
+	var dcgmMemAvgGiB float64
+	if len(s.dcgmMemSamples) > 0 {
+		dcgmMemAvgGiB = dcgmMemSum / float64(len(s.dcgmMemSamples))
+	}
+
+	smAvg, smPeak := aggregatePctSamples(s.dcgmSMActiveSamples)
+	tensorAvg, tensorPeak := aggregatePctSamples(s.dcgmTensorActiveSamples)
+	dramAvg, dramPeak := aggregatePctSamples(s.dcgmDRAMActiveSamples)
 
 	return &GPUMetrics{
 		// Primary metrics from DCGM (0 if unavailable)
 		UtilizationPeakPct: dcgmUtilPeak,
 		UtilizationAvgPct:  dcgmUtilAvg,
 		MemoryPeakGiB:      dcgmMemPeakGiB,
+		MemoryAvgGiB:       dcgmMemAvgGiB,
 		// Request queue metrics from vLLM
 		WaitingRequestsMax: maxWaiting,
 		// Throughput from vLLM
@@ -236,7 +264,33 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 		PreemptionCount:           preemptions,
 		RunningRequestsAvg:        runningAvg,
 		RunningRequestsMax:        maxRunning,
+		// PRD-22: DCP metrics (nil pointers when no samples collected)
+		SMActiveAvgPct:      smAvg,
+		SMActivePeakPct:     smPeak,
+		TensorActiveAvgPct:  tensorAvg,
+		TensorActivePeakPct: tensorPeak,
+		DRAMActiveAvgPct:    dramAvg,
+		DRAMActivePeakPct:   dramPeak,
 	}
+}
+
+// aggregatePctSamples returns (avg, peak) pointers over a sample slice. Returns
+// (nil, nil) on empty — lets callers preserve the "no DCP data" signal through
+// to the DB as a NULL, rather than storing 0 which would be ambiguous with a
+// real zero reading.
+func aggregatePctSamples(samples []float64) (*float64, *float64) {
+	if len(samples) == 0 {
+		return nil, nil
+	}
+	var sum, peak float64
+	for _, v := range samples {
+		sum += v
+		if v > peak {
+			peak = v
+		}
+	}
+	avg := sum / float64(len(samples))
+	return &avg, &peak
 }
 
 func (s *GPUScraper) loop(ctx context.Context) {
@@ -364,6 +418,15 @@ func (s *GPUScraper) scrapeDCGM(ctx context.Context) {
 	if dcgmMetrics.memUsed >= 0 {
 		s.dcgmMemSamples = append(s.dcgmMemSamples, dcgmMetrics.memUsed)
 	}
+	if dcgmMetrics.smActive >= 0 {
+		s.dcgmSMActiveSamples = append(s.dcgmSMActiveSamples, dcgmMetrics.smActive)
+	}
+	if dcgmMetrics.tensorActive >= 0 {
+		s.dcgmTensorActiveSamples = append(s.dcgmTensorActiveSamples, dcgmMetrics.tensorActive)
+	}
+	if dcgmMetrics.dramActive >= 0 {
+		s.dcgmDRAMActiveSamples = append(s.dcgmDRAMActiveSamples, dcgmMetrics.dramActive)
+	}
 }
 
 // promScrapeResult holds all metrics parsed from a single scrape.
@@ -457,21 +520,27 @@ func parsePromValue(line string) (float64, error) {
 
 // dcgmScrapeResult holds metrics parsed from DCGM exporter.
 type dcgmScrapeResult struct {
-	gpuUtil float64 // DCGM_FI_DEV_GPU_UTIL (0-100)
-	memUsed float64 // DCGM_FI_DEV_FB_USED (bytes)
+	gpuUtil      float64 // DCGM_FI_DEV_GPU_UTIL (0-100)
+	memUsed      float64 // DCGM_FI_DEV_FB_USED (bytes)
+	smActive     float64 // DCGM_FI_PROF_SM_ACTIVE (0-100, scaled from 0.0-1.0)
+	tensorActive float64 // DCGM_FI_PROF_PIPE_TENSOR_ACTIVE (0-100, scaled)
+	dramActive   float64 // DCGM_FI_PROF_DRAM_ACTIVE (0-100, scaled)
 }
 
 // parseDCGMMetrics parses DCGM exporter Prometheus output.
 // DCGM exposes per-GPU metrics with labels like gpu="0".
-// We aggregate across all GPUs by taking the max utilization and sum of memory.
+// We aggregate across all GPUs by averaging each metric.
 func parseDCGMMetrics(r io.Reader) dcgmScrapeResult {
 	result := dcgmScrapeResult{
-		gpuUtil: -1,
-		memUsed: -1,
+		gpuUtil:      -1,
+		memUsed:      -1,
+		smActive:     -1,
+		tensorActive: -1,
+		dramActive:   -1,
 	}
 
-	var utilSum, memSum float64
-	var utilCount int
+	var utilSum, memSum, smSum, tensorSum, dramSum float64
+	var utilCount, smCount, tensorCount, dramCount int
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -483,6 +552,9 @@ func parseDCGMMetrics(r io.Reader) dcgmScrapeResult {
 		// DCGM metrics we care about:
 		// DCGM_FI_DEV_GPU_UTIL{gpu="0",...} 45.0  (percentage 0-100)
 		// DCGM_FI_DEV_FB_USED{gpu="0",...} 12345678901  (bytes)
+		// DCGM_FI_PROF_SM_ACTIVE{gpu="0",...} 0.72  (ratio 0.0-1.0)
+		// DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{gpu="0",...} 0.58  (ratio 0.0-1.0)
+		// DCGM_FI_PROF_DRAM_ACTIVE{gpu="0",...} 0.34  (ratio 0.0-1.0)
 		switch {
 		case strings.HasPrefix(line, "DCGM_FI_DEV_GPU_UTIL"):
 			if v, err := parsePromValue(line); err == nil {
@@ -493,12 +565,36 @@ func parseDCGMMetrics(r io.Reader) dcgmScrapeResult {
 			if v, err := parsePromValue(line); err == nil {
 				memSum += v
 			}
+		case strings.HasPrefix(line, "DCGM_FI_PROF_SM_ACTIVE"):
+			if v, err := parsePromValue(line); err == nil {
+				smSum += v * 100 // scale ratio → percent
+				smCount++
+			}
+		case strings.HasPrefix(line, "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE"):
+			if v, err := parsePromValue(line); err == nil {
+				tensorSum += v * 100
+				tensorCount++
+			}
+		case strings.HasPrefix(line, "DCGM_FI_PROF_DRAM_ACTIVE"):
+			if v, err := parsePromValue(line); err == nil {
+				dramSum += v * 100
+				dramCount++
+			}
 		}
 	}
 
 	// Average utilization across GPUs
 	if utilCount > 0 {
 		result.gpuUtil = utilSum / float64(utilCount)
+	}
+	if smCount > 0 {
+		result.smActive = smSum / float64(smCount)
+	}
+	if tensorCount > 0 {
+		result.tensorActive = tensorSum / float64(tensorCount)
+	}
+	if dramCount > 0 {
+		result.dramActive = dramSum / float64(dramCount)
 	}
 	// Total memory used across GPUs
 	if memSum > 0 {

@@ -217,13 +217,21 @@ export default function Compare() {
           <tbody>
             {[
               ["TTFT p50 (ms)", "ttft_p50_ms"],
+              ["TTFT p95 (ms)", "ttft_p95_ms"],
               ["TTFT p99 (ms)", "ttft_p99_ms"],
               ["E2E Latency p50 (ms)", "e2e_latency_p50_ms"],
+              ["E2E Latency p95 (ms)", "e2e_latency_p95_ms"],
               ["E2E Latency p99 (ms)", "e2e_latency_p99_ms"],
               ["ITL p50 (ms)", "itl_p50_ms"],
+              ["ITL p95 (ms)", "itl_p95_ms"],
               ["Throughput (tok/s)", "throughput_aggregate_tps"],
               ["RPS", "requests_per_second"],
-              ["GPU Util %", "accelerator_utilization_pct"],
+              ["GPU Busy % (avg)", "accelerator_utilization_avg_pct"],
+              ["SM Active % (avg)", "sm_active_avg_pct"],
+              ["Tensor Active % (avg)", "tensor_active_avg_pct"],
+              ["DRAM Active % (avg)", "dram_active_avg_pct"],
+              ["Memory GiB (avg)", "accelerator_memory_avg_gib"],
+              ["Memory GiB (peak)", "accelerator_memory_peak_gib"],
             ].map(([label, key]) => (
               <tr key={key}>
                 <td className="py-2 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
@@ -241,6 +249,44 @@ export default function Compare() {
                 ))}
               </tr>
             ))}
+            {/* Derived: Throughput per accelerator */}
+            <tr>
+              <td className="py-2 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
+                Throughput / GPU (tok/s)
+              </td>
+              {entries.map((e) => {
+                const t = e.throughput_aggregate_tps;
+                const n = e.accelerator_count || 0;
+                const per = t !== undefined && n > 0 ? t / n : undefined;
+                return (
+                  <td
+                    key={e.run_id}
+                    className="py-2 px-3 border-b border-line/60 text-right text-ink-0 font-mono text-[12.5px] tabular"
+                  >
+                    {per?.toFixed(1) ?? "--"}
+                  </td>
+                );
+              })}
+            </tr>
+            {/* Derived: Success rate */}
+            <tr>
+              <td className="py-2 px-3 border-b border-line/60 text-ink-1 font-mono text-[12.5px]">
+                Success Rate (%)
+              </td>
+              {entries.map((e) => {
+                const ok = e.successful_requests ?? 0;
+                const total = ok + (e.failed_requests ?? 0);
+                const pct = total > 0 ? (ok / total) * 100 : undefined;
+                return (
+                  <td
+                    key={e.run_id}
+                    className="py-2 px-3 border-b border-line/60 text-right text-ink-0 font-mono text-[12.5px] tabular"
+                  >
+                    {pct?.toFixed(1) ?? "--"}
+                  </td>
+                );
+              })}
+            </tr>
             {/* Cost rows */}
             <tr className="bg-info/5">
               <td className="py-2 px-3 border-b border-line/60 text-ink-0 font-mono text-[12.5px]">

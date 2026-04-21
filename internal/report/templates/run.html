@@ -201,12 +201,20 @@
           <div class="metric-label">TTFT p50</div>
         </div>
         <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.TTFTP95Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">TTFT p95</div>
+        </div>
+        <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.TTFTP99Ms }}<span class="metric-unit">ms</span></div>
           <div class="metric-label">TTFT p99</div>
         </div>
         <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP50Ms }}<span class="metric-unit">ms</span></div>
           <div class="metric-label">E2E Latency p50</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP95Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">E2E Latency p95</div>
         </div>
         <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP99Ms }}<span class="metric-unit">ms</span></div>
@@ -217,12 +225,24 @@
           <div class="metric-label">ITL p50</div>
         </div>
         <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.ITLP95Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">ITL p95</div>
+        </div>
+        <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.ITLP99Ms }}<span class="metric-unit">ms</span></div>
           <div class="metric-label">ITL p99</div>
         </div>
         <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.TPOTP99Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">TPOT p99</div>
+        </div>
+        <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.ThroughputAggregateTPS }}<span class="metric-unit">tok/s</span></div>
           <div class="metric-label">Throughput</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .ThroughputPerAccelTPS }}<span class="metric-unit">tok/s/{{ .AcceleratorLabel }}</span></div>
+          <div class="metric-label">Throughput / {{ .AcceleratorLabel }}</div>
         </div>
         <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.RequestsPerSecond }}<span class="metric-unit">rps</span></div>
@@ -242,12 +262,24 @@
       <h2>Resource Utilization</h2>
       <div class="metric-grid">
         <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationPct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">GPU Utilization (Peak)</div>
+          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationAvgPct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">{{ .AcceleratorLabel }} Busy (Avg)</div>
         </div>
         <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationAvgPct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">GPU Utilization (Avg)</div>
+          <div class="metric-value">{{ formatFloat .Metrics.SMActiveAvgPct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">SM Active (Avg)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.TensorActiveAvgPct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">Tensor Active (Avg)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.DRAMActiveAvgPct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">DRAM Active (Avg)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryAvgGiB }}<span class="metric-unit">GiB</span></div>
+          <div class="metric-label">Memory (Avg)</div>
         </div>
         <div class="metric-card">
           <div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryPeakGiB }}<span class="metric-unit">GiB</span></div>
@@ -270,6 +302,10 @@
         <div class="stats-card failed">
           <div class="metric-value">{{ formatInt .Metrics.FailedRequests }}</div>
           <div class="metric-label">Failed Requests</div>
+        </div>
+        <div class="stats-card">
+          <div class="metric-value">{{ formatFloat .SuccessRatePct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">Success Rate</div>
         </div>
         <div class="stats-card">
           <div class="metric-value">{{ formatFloat .Metrics.TotalDurationSeconds }}<span class="metric-unit">s</span></div>
@@ -300,6 +336,12 @@
             label: 'p90',
             data: {{ toJSON .LatencyP90 }},
             backgroundColor: '#60a5fa',
+            borderRadius: 4
+          },
+          {
+            label: 'p95',
+            data: {{ toJSON .LatencyP95 }},
+            backgroundColor: '#7db3fb',
             borderRadius: 4
           },
           {

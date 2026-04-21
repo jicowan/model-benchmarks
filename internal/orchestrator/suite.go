@@ -177,13 +177,19 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 			Status:             "completed",
 			TTFTP50Ms:          computed.TTFTP50Ms,
 			TTFTP90Ms:          computed.TTFTP90Ms,
+			TTFTP95Ms:          computed.TTFTP95Ms,
 			TTFTP99Ms:          computed.TTFTP99Ms,
 			E2ELatencyP50Ms:    computed.E2ELatencyP50Ms,
 			E2ELatencyP90Ms:    computed.E2ELatencyP90Ms,
+			E2ELatencyP95Ms:    computed.E2ELatencyP95Ms,
 			E2ELatencyP99Ms:    computed.E2ELatencyP99Ms,
 			ITLP50Ms:           computed.ITLP50Ms,
 			ITLP90Ms:           computed.ITLP90Ms,
+			ITLP95Ms:           computed.ITLP95Ms,
 			ITLP99Ms:           computed.ITLP99Ms,
+			TPOTP50Ms:          computed.TPOTP50Ms,
+			TPOTP90Ms:          computed.TPOTP90Ms,
+			TPOTP99Ms:          computed.TPOTP99Ms,
 			ThroughputTPS:      computed.ThroughputAggregateTPS,
 			RequestsPerSecond:  computed.RequestsPerSecond,
 			SuccessfulRequests: computed.SuccessfulRequests,
@@ -194,7 +200,17 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 		// Merge GPU metrics if available
 		if gpuMetrics != nil {
 			result.AcceleratorUtilizationPct = &gpuMetrics.UtilizationPeakPct
+			result.AcceleratorUtilizationAvgPct = &gpuMetrics.UtilizationAvgPct
 			result.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
+			result.AcceleratorMemoryAvgGiB = &gpuMetrics.MemoryAvgGiB
+			result.WaitingRequestsMax = &gpuMetrics.WaitingRequestsMax
+			// PRD-22: DCP metrics — pointers pass through nil when DCP unavailable.
+			result.SMActiveAvgPct = gpuMetrics.SMActiveAvgPct
+			result.SMActivePeakPct = gpuMetrics.SMActivePeakPct
+			result.TensorActiveAvgPct = gpuMetrics.TensorActiveAvgPct
+			result.TensorActivePeakPct = gpuMetrics.TensorActivePeakPct
+			result.DRAMActiveAvgPct = gpuMetrics.DRAMActiveAvgPct
+			result.DRAMActivePeakPct = gpuMetrics.DRAMActivePeakPct
 		}
 
 		o.repo.UpdateScenarioResult(ctx, result)

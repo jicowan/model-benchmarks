@@ -12,11 +12,20 @@ function formatMetric(value: number | undefined, precision = 1): string {
 function ScenarioMetrics({ result }: { result: ScenarioResult }) {
   if (result.status !== "completed") return null;
 
+  const succeeded = result.successful_requests ?? 0;
+  const failed = result.failed_requests ?? 0;
+  const totalReqs = succeeded + failed;
+  const successRate = totalReqs > 0 ? (succeeded / totalReqs) * 100 : undefined;
+
   return (
     <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
       <div className="panel p-2">
         <div className="eyebrow">TTFT p50</div>
         <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.ttft_p50_ms)} ms</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">TTFT p95</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.ttft_p95_ms)} ms</div>
       </div>
       <div className="panel p-2">
         <div className="eyebrow">TTFT p99</div>
@@ -27,8 +36,16 @@ function ScenarioMetrics({ result }: { result: ScenarioResult }) {
         <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.e2e_latency_p50_ms)} ms</div>
       </div>
       <div className="panel p-2">
+        <div className="eyebrow">E2E p95</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.e2e_latency_p95_ms)} ms</div>
+      </div>
+      <div className="panel p-2">
         <div className="eyebrow">ITL p50</div>
         <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.itl_p50_ms)} ms</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">TPOT p99</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.tpot_p99_ms)} ms</div>
       </div>
       <div className="panel p-2">
         <div className="eyebrow">Throughput</div>
@@ -37,16 +54,42 @@ function ScenarioMetrics({ result }: { result: ScenarioResult }) {
       <div className="panel p-2">
         <div className="eyebrow">Requests</div>
         <div className="font-mono text-[12.5px] text-ink-0 tabular">
-          {result.successful_requests ?? 0} / {(result.successful_requests ?? 0) + (result.failed_requests ?? 0)}
+          {succeeded} / {totalReqs}
         </div>
       </div>
       <div className="panel p-2">
-        <div className="eyebrow">GPU Util</div>
-        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.accelerator_utilization_pct, 0)}%</div>
+        <div className="eyebrow">Success Rate</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(successRate, 1)}%</div>
       </div>
       <div className="panel p-2">
-        <div className="eyebrow">Peak Memory</div>
+        <div className="eyebrow">GPU Busy (avg)</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">
+          {formatMetric(result.accelerator_utilization_avg_pct ?? result.accelerator_utilization_pct, 0)}%
+        </div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">SM Active (avg)</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.sm_active_avg_pct, 0)}%</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">Tensor Active (avg)</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.tensor_active_avg_pct, 0)}%</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">DRAM Active (avg)</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.dram_active_avg_pct, 0)}%</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">Memory (avg)</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.accelerator_memory_avg_gib)} GiB</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">Memory (peak)</div>
         <div className="font-mono text-[12.5px] text-ink-0 tabular">{formatMetric(result.accelerator_memory_peak_gib)} GiB</div>
+      </div>
+      <div className="panel p-2">
+        <div className="eyebrow">Queue Max</div>
+        <div className="font-mono text-[12.5px] text-ink-0 tabular">{result.waiting_requests_max ?? "-"}</div>
       </div>
     </div>
   );
