@@ -209,6 +209,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if scenarioID != "" {
 		scenarioPtr = &scenarioID
 	}
+	var s3URIPtr *string
+	if req.ModelS3URI != "" && strings.HasPrefix(req.ModelS3URI, "s3://") {
+		u := req.ModelS3URI
+		s3URIPtr = &u
+	}
 	run := &database.BenchmarkRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -224,6 +229,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		ScenarioID:           scenarioPtr,
 		MinDurationSeconds:   req.MinDurationSeconds,
 		MaxModelLen:          req.MaxModelLen,
+		ModelS3URI:           s3URIPtr,
 		Status:               "pending",
 	}
 

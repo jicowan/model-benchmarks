@@ -67,7 +67,8 @@ func TestGenerateRunReport(t *testing.T) {
 		MaxModelLen:          32768,
 	}
 
-	html, err := GenerateRunReport(run, metrics, details)
+	hourly := 31.46
+	html, err := GenerateRunReport(run, metrics, details, &hourly)
 	if err != nil {
 		t.Fatalf("GenerateRunReport failed: %v", err)
 	}
@@ -79,10 +80,9 @@ func TestGenerateRunReport(t *testing.T) {
 		"<!DOCTYPE html>",
 		"meta-llama/Llama-3.1-70B-Instruct",
 		"p5.48xlarge",
-		"Tensor Parallel",
+		"TP Degree",
 		"45.5",  // TTFT
 		"150.0", // Throughput
-		"chart.js",
 		"AccelBench",
 	}
 
@@ -100,8 +100,8 @@ func TestGenerateRunReport(t *testing.T) {
 
 func TestFormatFloat_Nil(t *testing.T) {
 	result := formatFloat(nil)
-	if result != "-" {
-		t.Errorf("formatFloat(nil) = %q, want %q", result, "-")
+	if result != "—" {
+		t.Errorf("formatFloat(nil) = %q, want %q", result, "—")
 	}
 }
 
@@ -115,8 +115,8 @@ func TestFormatFloat_Value(t *testing.T) {
 
 func TestFormatInt_Nil(t *testing.T) {
 	result := formatInt(nil)
-	if result != "-" {
-		t.Errorf("formatInt(nil) = %q, want %q", result, "-")
+	if result != "—" {
+		t.Errorf("formatInt(nil) = %q, want %q", result, "—")
 	}
 }
 

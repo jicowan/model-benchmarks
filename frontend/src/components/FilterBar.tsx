@@ -1,117 +1,74 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CatalogFilter } from "../types";
 
 interface Props {
   onFilter: (filter: CatalogFilter) => void;
 }
 
+const ACCELERATORS = ["all", "gpu", "neuron"] as const;
+
 export default function FilterBar({ onFilter }: Props) {
   const [model, setModel] = useState("");
-  const [modelFamily, setModelFamily] = useState("");
-  const [instanceFamily, setInstanceFamily] = useState("");
-  const [acceleratorType, setAcceleratorType] = useState("");
+  const [acceleratorType, setAcceleratorType] = useState<string>("all");
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    onFilter({
-      model: model || undefined,
-      model_family: modelFamily || undefined,
-      instance_family: instanceFamily || undefined,
-      accelerator_type: acceleratorType || undefined,
-    });
-  }
-
-  function handleClear() {
-    setModel("");
-    setModelFamily("");
-    setInstanceFamily("");
-    setAcceleratorType("");
-    onFilter({});
-  }
+  // Debounce changes so typing in the search box doesn't hammer the backend.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      onFilter({
+        model: model || undefined,
+        accelerator_type:
+          acceleratorType === "all" ? undefined : acceleratorType,
+      });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [model, acceleratorType, onFilter]);
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex flex-wrap items-end gap-3 mb-6"
-    >
-      <div>
-        <label className="eyebrow block mb-1.5">
-          Model
-        </label>
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="e.g. meta-llama/Llama-3.1-8B"
-          className="input w-64"
-        />
+    <div className="mb-6 panel">
+      <div className="flex items-center">
+        <div className="flex border-r border-line">
+          {ACCELERATORS.map((opt, i) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => setAcceleratorType(opt)}
+              className={`h-11 px-4 font-mono text-[11px] tracking-mech uppercase ${
+                i < ACCELERATORS.length - 1 ? "border-r border-line" : ""
+              } transition-colors ${
+                acceleratorType === opt
+                  ? "text-ink-0 bg-surface-2"
+                  : "text-ink-1 hover:text-ink-0 hover:bg-surface-2/60"
+              }`}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-2 pointer-events-none">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="square"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+          </span>
+          <input
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="filter by model id…"
+            className="w-full h-11 pl-9 pr-3 bg-transparent font-mono text-[12px] tracking-mech text-ink-0 placeholder:text-ink-2 focus:outline-none focus:bg-surface-2"
+          />
+        </div>
       </div>
-      <div>
-        <label className="eyebrow block mb-1.5">
-          Model Family
-        </label>
-        <select
-          value={modelFamily}
-          onChange={(e) => setModelFamily(e.target.value)}
-          className="input"
-        >
-          <option value="">All</option>
-          <option value="llama">Llama</option>
-          <option value="mistral">Mistral</option>
-          <option value="qwen">Qwen</option>
-          <option value="gemma">Gemma</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="phi">Phi</option>
-        </select>
-      </div>
-      <div>
-        <label className="eyebrow block mb-1.5">
-          Instance Family
-        </label>
-        <select
-          value={instanceFamily}
-          onChange={(e) => setInstanceFamily(e.target.value)}
-          className="input"
-        >
-          <option value="">All</option>
-          <option value="g5">g5</option>
-          <option value="g6">g6</option>
-          <option value="g6e">g6e</option>
-          <option value="p4d">p4d</option>
-          <option value="p5">p5</option>
-          <option value="p5e">p5e</option>
-          <option value="inf2">inf2</option>
-          <option value="trn1">trn1</option>
-          <option value="trn2">trn2</option>
-        </select>
-      </div>
-      <div>
-        <label className="eyebrow block mb-1.5">
-          Accelerator
-        </label>
-        <select
-          value={acceleratorType}
-          onChange={(e) => setAcceleratorType(e.target.value)}
-          className="input"
-        >
-          <option value="">All</option>
-          <option value="gpu">GPU</option>
-          <option value="neuron">Neuron</option>
-        </select>
-      </div>
-      <button
-        type="submit"
-        className="btn btn-primary"
-      >
-        Filter
-      </button>
-      <button
-        type="button"
-        onClick={handleClear}
-        className="btn"
-      >
-        Clear
-      </button>
-    </form>
+    </div>
   );
 }

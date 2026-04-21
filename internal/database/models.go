@@ -42,6 +42,7 @@ type BenchmarkRun struct {
 	MaxModelLen           int        `json:"max_model_len,omitempty"`
 	ScenarioID            *string    `json:"scenario_id,omitempty"`    // scenario identifier (chatbot, batch, etc.)
 	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
+	ModelS3URI            *string    `json:"model_s3_uri,omitempty"`   // s3://bucket/path — set when weights loaded via Run:ai streamer
 	Status                string     `json:"status"`
 	ErrorMessage          *string    `json:"error_message,omitempty"`
 	Superseded            bool       `json:"superseded"`

@@ -110,6 +110,7 @@ func (r *Repository) ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, 
 type RunExportDetails struct {
 	RunID                string
 	ModelHfID            string
+	ModelS3URI           *string
 	InstanceTypeName     string
 	Framework            string
 	FrameworkVersion     string
@@ -117,6 +118,7 @@ type RunExportDetails struct {
 	Quantization         *string
 	MaxModelLen          int
 	AcceleratorType      string
+	AcceleratorName      string
 	AcceleratorCount     int
 	AcceleratorMemoryGiB int
 	VCPUs                int
@@ -130,20 +132,20 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 	var maxModelLen *int
 	err := r.pool.QueryRow(ctx, `
 		SELECT
-			br.id, m.hf_id, it.name,
+			br.id, m.hf_id, br.model_s3_uri, it.name,
 			br.framework, br.framework_version,
 			br.tensor_parallel_degree, br.quantization, br.max_model_len,
-			it.accelerator_type, it.accelerator_count, it.accelerator_memory_gib,
+			it.accelerator_type, it.accelerator_name, it.accelerator_count, it.accelerator_memory_gib,
 			it.vcpus, it.memory_gib
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
 		JOIN instance_types it ON br.instance_type_id = it.id
 		WHERE br.id = $1
 	`, runID).Scan(
-		&d.RunID, &d.ModelHfID, &d.InstanceTypeName,
+		&d.RunID, &d.ModelHfID, &d.ModelS3URI, &d.InstanceTypeName,
 		&d.Framework, &d.FrameworkVersion,
 		&d.TensorParallelDegree, &d.Quantization, &maxModelLen,
-		&d.AcceleratorType, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
+		&d.AcceleratorType, &d.AcceleratorName, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
 		&d.VCPUs, &d.MemoryGiB,
 	)
 	if err != nil {

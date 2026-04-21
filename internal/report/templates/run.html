@@ -4,376 +4,352 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ .Title }}</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      color: #1f2937;
-      background: #f9fafb;
+    /* AccelBench industrial theme — dark default, light via prefers-color-scheme */
+    :root {
+      --surface-0: 10 11 13;
+      --surface-1: 17 19 23;
+      --surface-2: 26 29 34;
+      --line: 35 39 46;
+      --line-strong: 58 64 73;
+      --ink-0: 232 234 237;
+      --ink-1: 154 160 166;
+      --ink-2: 95 99 104;
+      --signal: 57 255 136;
+      --warn: 255 176 32;
+      --danger: 255 71 87;
+      --info: 94 181 255;
+      color-scheme: dark;
     }
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 2rem;
-      background: white;
+    @media (prefers-color-scheme: light) {
+      :root {
+        --surface-0: 246 247 248;
+        --surface-1: 255 255 255;
+        --surface-2: 236 238 240;
+        --line: 216 219 223;
+        --line-strong: 183 188 194;
+        --ink-0: 10 11 13;
+        --ink-1: 75 80 86;
+        --ink-2: 128 134 139;
+        --signal: 10 138 74;
+        --warn: 184 106 0;
+        --danger: 201 48 44;
+        --info: 25 103 210;
+        color-scheme: light;
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      font-family: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-feature-settings: "cv11", "ss01";
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body {
+      background: rgb(var(--surface-0));
+      color: rgb(var(--ink-0));
+      line-height: 1.5;
       min-height: 100vh;
     }
-    .header {
-      border-bottom: 2px solid #2563eb;
-      padding-bottom: 1.5rem;
-      margin-bottom: 2rem;
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
     }
-    .header h1 {
-      font-size: 1.875rem;
-      font-weight: 700;
-      color: #111827;
-      margin-bottom: 0.5rem;
+
+    /* Header strip */
+    .header-strip {
+      height: 56px;
+      border-bottom: 1px solid rgb(var(--line));
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: 0.01em;
+      background: rgb(var(--surface-0));
     }
-    .header-meta {
-      color: #6b7280;
-      font-size: 0.875rem;
+    .header-strip .sep { color: rgb(var(--ink-2)); margin: 0 8px; }
+    .header-strip .muted { color: rgb(var(--ink-1)); }
+    .header-strip .active { color: rgb(var(--ink-0)); }
+
+    /* Hero */
+    .hero {
+      display: flex;
+      gap: 24px;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding-bottom: 32px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid rgb(var(--line));
+      flex-wrap: wrap;
     }
-    .header-meta span {
-      margin-right: 1.5rem;
-    }
-    .section {
-      margin-bottom: 2rem;
-    }
-    .section h2 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      color: #374151;
-      margin-bottom: 1rem;
-      padding-bottom: 0.5rem;
-      border-bottom: 1px solid #e5e7eb;
-    }
-    .config-grid {
+    .hero-left { min-width: 0; flex: 1 1 auto; }
+    .hero-eyebrow { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: rgb(var(--ink-2)); margin-bottom: 12px; }
+    .hero-heading { font-size: 28px; line-height: 1.1; letter-spacing: -0.01em; color: rgb(var(--ink-0)); word-break: break-word; }
+    .hero-subheading { font-family: "Geist Mono", ui-monospace, monospace; font-size: 13px; color: rgb(var(--ink-1)); margin-top: 6px; }
+    .hero-meta { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: rgb(var(--ink-2)); margin-top: 12px; }
+    .hero-metrics {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 1rem;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 32px;
+      flex: 0 0 auto;
     }
-    .config-item dt {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #6b7280;
-      margin-bottom: 0.25rem;
+    .hero-metric-label { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: rgb(var(--ink-2)); margin-bottom: 4px; }
+    .hero-metric-value { font-family: "Geist Mono", ui-monospace, monospace; font-size: 28px; font-variant-numeric: tabular-nums; color: rgb(var(--ink-0)); line-height: 1; }
+    .hero-metric-unit { font-size: 11px; color: rgb(var(--ink-2)); text-transform: uppercase; letter-spacing: 0.08em; margin-left: 6px; }
+    .hero-metric-value.accent-signal { color: rgb(var(--signal)); }
+    .hero-metric-value.accent-warn { color: rgb(var(--warn)); }
+
+    /* Section headers */
+    section { margin-bottom: 32px; }
+    .section-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+    .section-index { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: rgb(var(--ink-2)); }
+    .section-title { font-size: 15px; font-weight: 500; color: rgb(var(--ink-0)); }
+
+    /* Panels */
+    .panel {
+      background: rgb(var(--surface-1));
+      border: 1px solid rgb(var(--line));
+      padding: 16px;
     }
-    .config-item dd {
-      font-weight: 500;
-      color: #111827;
-    }
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 1rem;
+    .panel-pad { padding: 24px; }
+
+    /* Metric cards */
+    .metric-grid { display: grid; gap: 12px; }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    @media (max-width: 720px) {
+      .cols-3, .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
     }
     .metric-card {
-      background: #f9fafb;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.5rem;
-      padding: 1rem;
-      text-align: center;
-    }
-    .metric-value {
-      font-size: 1.875rem;
-      font-weight: 700;
-      color: #111827;
-      line-height: 1.2;
-    }
-    .metric-unit {
-      font-size: 1rem;
-      font-weight: 400;
-      color: #6b7280;
+      background: rgb(var(--surface-1));
+      border: 1px solid rgb(var(--line));
+      padding: 16px;
     }
     .metric-label {
-      font-size: 0.875rem;
-      color: #6b7280;
-      margin-top: 0.25rem;
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgb(var(--ink-2));
     }
-    .chart-container {
-      height: 350px;
-      margin: 1rem 0;
-      position: relative;
+    .metric-value {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 22px;
+      font-variant-numeric: tabular-nums;
+      color: rgb(var(--ink-0));
+      line-height: 1;
+      margin-top: 8px;
     }
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1rem;
+    .metric-unit {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-2));
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-left: 6px;
     }
-    .stats-card {
-      background: #f0f9ff;
-      border: 1px solid #bae6fd;
-      border-radius: 0.5rem;
-      padding: 1rem;
-      text-align: center;
+
+    /* Config */
+    .config-panel { padding: 24px; }
+    .config-heading { font-size: 14px; font-weight: 500; color: rgb(var(--ink-0)); letter-spacing: 0.01em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgb(var(--line)); }
+    .config-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+    @media (max-width: 720px) { .config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .config-item dt {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgb(var(--ink-2));
     }
-    .stats-card.success {
-      background: #f0fdf4;
-      border-color: #86efac;
+    .config-item dd {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 12.5px;
+      color: rgb(var(--ink-0));
+      margin-top: 4px;
     }
-    .stats-card.failed {
-      background: #fef2f2;
-      border-color: #fecaca;
+    .config-divider { margin: 16px 0; border-top: 1px solid rgba(var(--line) / 0.6); }
+
+    /* Latency distribution cell */
+    .latency-cell {
+      background: rgb(var(--surface-1));
+      border: 1px solid rgb(var(--line));
+      padding: 12px;
     }
+    .latency-cell-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+
+    /* SVG text classes used by latencyDistributionSVG */
+    .rpt-mono { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; }
+    .rpt-eyebrow { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+    /* Footer */
     .footer {
-      margin-top: 3rem;
-      padding-top: 1.5rem;
-      border-top: 1px solid #e5e7eb;
-      text-align: center;
-      color: #9ca3af;
-      font-size: 0.875rem;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid rgb(var(--line));
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-2));
+      display: flex;
+      justify-content: space-between;
     }
-    .footer a {
-      color: #2563eb;
-      text-decoration: none;
-    }
-    .footer a:hover {
-      text-decoration: underline;
-    }
-    @media print {
-      body { background: white; }
-      .container { padding: 1rem; }
-      .chart-container { page-break-inside: avoid; }
-    }
-    @media (max-width: 640px) {
-      .container { padding: 1rem; }
-      .metric-grid { grid-template-columns: repeat(2, 1fr); }
-      .stats-grid { grid-template-columns: 1fr; }
-    }
+    .footer a { color: rgb(var(--ink-1)); text-decoration: none; }
+    .footer a:hover { color: rgb(var(--signal)); }
   </style>
 </head>
 <body>
-  <div class="container">
-    <header class="header">
-      <h1>{{ .ModelName }}</h1>
-      <div class="header-meta">
-        <span><strong>Instance:</strong> {{ .InstanceType }}</span>
-        <span><strong>Generated:</strong> {{ .Timestamp }}</span>
-      </div>
-    </header>
-
-    <section class="section">
-      <h2>Configuration</h2>
-      <dl class="config-grid">
-        <div class="config-item">
-          <dt>Framework</dt>
-          <dd>{{ .Config.Framework }} {{ .Config.FrameworkVersion }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Tensor Parallel</dt>
-          <dd>{{ .Config.TensorParallel }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Quantization</dt>
-          <dd>{{ .Config.Quantization }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Max Context Length</dt>
-          <dd>{{ .Config.MaxModelLen }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Concurrency</dt>
-          <dd>{{ .Config.Concurrency }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Input / Output Tokens</dt>
-          <dd>{{ .Config.InputSequenceLength }} / {{ .Config.OutputSequenceLength }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Dataset</dt>
-          <dd>{{ .Config.DatasetName }}</dd>
-        </div>
-        <div class="config-item">
-          <dt>Run Type</dt>
-          <dd>{{ .Config.RunType }}</dd>
-        </div>
-      </dl>
-    </section>
-
-    <section class="section">
-      <h2>Performance Metrics</h2>
-      <div class="metric-grid">
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.TTFTP50Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">TTFT p50</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.TTFTP95Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">TTFT p95</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.TTFTP99Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">TTFT p99</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP50Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">E2E Latency p50</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP95Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">E2E Latency p95</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP99Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">E2E Latency p99</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.ITLP50Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">ITL p50</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.ITLP95Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">ITL p95</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.ITLP99Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">ITL p99</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.TPOTP99Ms }}<span class="metric-unit">ms</span></div>
-          <div class="metric-label">TPOT p99</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.ThroughputAggregateTPS }}<span class="metric-unit">tok/s</span></div>
-          <div class="metric-label">Throughput</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .ThroughputPerAccelTPS }}<span class="metric-unit">tok/s/{{ .AcceleratorLabel }}</span></div>
-          <div class="metric-label">Throughput / {{ .AcceleratorLabel }}</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.RequestsPerSecond }}<span class="metric-unit">rps</span></div>
-          <div class="metric-label">Requests/sec</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section">
-      <h2>Latency Distribution</h2>
-      <div class="chart-container">
-        <canvas id="latencyChart"></canvas>
-      </div>
-    </section>
-
-    <section class="section">
-      <h2>Resource Utilization</h2>
-      <div class="metric-grid">
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationAvgPct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">{{ .AcceleratorLabel }} Busy (Avg)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.SMActiveAvgPct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">SM Active (Avg)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.TensorActiveAvgPct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">Tensor Active (Avg)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.DRAMActiveAvgPct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">DRAM Active (Avg)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryAvgGiB }}<span class="metric-unit">GiB</span></div>
-          <div class="metric-label">Memory (Avg)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryPeakGiB }}<span class="metric-unit">GiB</span></div>
-          <div class="metric-label">Memory (Peak)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">{{ formatInt .Metrics.WaitingRequestsMax }}</div>
-          <div class="metric-label">Max Waiting Requests</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section">
-      <h2>Request Statistics</h2>
-      <div class="stats-grid">
-        <div class="stats-card success">
-          <div class="metric-value">{{ formatInt .Metrics.SuccessfulRequests }}</div>
-          <div class="metric-label">Successful Requests</div>
-        </div>
-        <div class="stats-card failed">
-          <div class="metric-value">{{ formatInt .Metrics.FailedRequests }}</div>
-          <div class="metric-label">Failed Requests</div>
-        </div>
-        <div class="stats-card">
-          <div class="metric-value">{{ formatFloat .SuccessRatePct }}<span class="metric-unit">%</span></div>
-          <div class="metric-label">Success Rate</div>
-        </div>
-        <div class="stats-card">
-          <div class="metric-value">{{ formatFloat .Metrics.TotalDurationSeconds }}<span class="metric-unit">s</span></div>
-          <div class="metric-label">Total Duration</div>
-        </div>
-      </div>
-    </section>
-
-    <footer class="footer">
-      <p>Generated by <a href="https://github.com/accelbench/accelbench">AccelBench</a></p>
-    </footer>
+  <div class="header-strip">
+    <span class="muted">accelbench</span>
+    <span class="sep">/</span>
+    <span class="muted">runs</span>
+    <span class="sep">/</span>
+    <span class="active">export</span>
   </div>
 
-  <script>
-    const ctx = document.getElementById('latencyChart').getContext('2d');
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: ['TTFT', 'E2E Latency', 'ITL'],
-        datasets: [
-          {
-            label: 'p50',
-            data: {{ toJSON .LatencyP50 }},
-            backgroundColor: '#2563eb',
-            borderRadius: 4
-          },
-          {
-            label: 'p90',
-            data: {{ toJSON .LatencyP90 }},
-            backgroundColor: '#60a5fa',
-            borderRadius: 4
-          },
-          {
-            label: 'p95',
-            data: {{ toJSON .LatencyP95 }},
-            backgroundColor: '#7db3fb',
-            borderRadius: 4
-          },
-          {
-            label: 'p99',
-            data: {{ toJSON .LatencyP99 }},
-            backgroundColor: '#93c5fd',
-            borderRadius: 4
-          },
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'top',
-          },
-          title: {
-            display: false
-          }
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            title: {
-              display: true,
-              text: 'Latency (ms)'
-            }
-          }
-        }
-      }
-    });
-  </script>
+  <div class="container">
+    <!-- Hero -->
+    <div class="hero">
+      <div class="hero-left">
+        <div class="hero-eyebrow">[ RUN ]</div>
+        <h1 class="hero-heading">{{ .ModelHfID }}</h1>
+        <div class="hero-subheading">{{ .AcceleratorSummary }}</div>
+        <div class="hero-meta">{{ .Timestamp }}</div>
+      </div>
+      <div class="hero-metrics">
+        <div>
+          <div class="hero-metric-label">TTFT p99</div>
+          <div class="hero-metric-value">{{ formatFloat .Metrics.TTFTP99Ms }}<span class="hero-metric-unit">ms</span></div>
+        </div>
+        <div>
+          <div class="hero-metric-label">Throughput</div>
+          <div class="hero-metric-value">{{ formatFloat .Metrics.ThroughputAggregateTPS }}<span class="hero-metric-unit">tok/s</span></div>
+        </div>
+        <div>
+          <div class="hero-metric-label">Success Rate</div>
+          <div class="hero-metric-value{{ if .SuccessRatePct }}{{ if lt (deref .SuccessRatePct) 99.0 }} accent-warn{{ else }} accent-signal{{ end }}{{ end }}">{{ formatFloat .SuccessRatePct }}<span class="hero-metric-unit">%</span></div>
+        </div>
+        <div>
+          <div class="hero-metric-label">Cost / 1M tok</div>
+          <div class="hero-metric-value">{{ formatUSD .CostPer1MTokensUSD 2 }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Configuration -->
+    <div class="panel config-panel" style="margin-bottom: 32px;">
+      <div class="config-heading">Configuration</div>
+      <dl class="config-grid">
+        <div class="config-item"><dt>TP Degree</dt><dd>{{ .Config.TensorParallel }}</dd></div>
+        <div class="config-item"><dt>Quantization</dt><dd>{{ .Config.Quantization }}</dd></div>
+        <div class="config-item"><dt>Concurrency</dt><dd>{{ .Config.Concurrency }}</dd></div>
+        <div class="config-item"><dt>Dataset</dt><dd>{{ .Config.DatasetName }}</dd></div>
+      </dl>
+      <div class="config-divider"></div>
+      <dl class="config-grid">
+        <div class="config-item"><dt>Framework</dt><dd>{{ .Config.Framework }} {{ .Config.FrameworkVersion }}</dd></div>
+        <div class="config-item"><dt>Run Type</dt><dd>{{ .Config.RunType }}</dd></div>
+        <div class="config-item"><dt>Input Seq</dt><dd>{{ .Config.InputSequenceLength }}</dd></div>
+        <div class="config-item"><dt>Output Seq</dt><dd>{{ .Config.OutputSequenceLength }}</dd></div>
+      </dl>
+    </div>
+
+    <!-- A. Latency distribution -->
+    <section>
+      <div class="section-header"><span class="section-index">[ A ]</span><h2 class="section-title">Latency distribution</h2></div>
+      <div class="metric-grid cols-4">
+        <div class="latency-cell">
+          <div class="latency-cell-header"><span class="metric-label">TTFT</span><span class="metric-label">ms</span></div>
+          {{ latencySVG .LatencyTTFT }}
+        </div>
+        <div class="latency-cell">
+          <div class="latency-cell-header"><span class="metric-label">E2E</span><span class="metric-label">ms</span></div>
+          {{ latencySVG .LatencyE2E }}
+        </div>
+        <div class="latency-cell">
+          <div class="latency-cell-header"><span class="metric-label">ITL</span><span class="metric-label">ms</span></div>
+          {{ latencySVG .LatencyITL }}
+        </div>
+        <div class="latency-cell">
+          <div class="latency-cell-header"><span class="metric-label">TPOT</span><span class="metric-label">ms</span></div>
+          {{ latencySVG .LatencyTPOT }}
+        </div>
+      </div>
+    </section>
+
+    <!-- B. Throughput -->
+    <section>
+      <div class="section-header"><span class="section-index">[ B ]</span><h2 class="section-title">Throughput</h2></div>
+      <div class="metric-grid cols-4">
+        <div class="metric-card"><div class="metric-label">Aggregate</div><div class="metric-value">{{ formatFloat .Metrics.ThroughputAggregateTPS }}<span class="metric-unit">tok/s</span></div></div>
+        <div class="metric-card"><div class="metric-label">Per {{ .AcceleratorLabel }}</div><div class="metric-value">{{ formatFloat .ThroughputPerAccelTPS }}<span class="metric-unit">tok/s/{{ .AcceleratorLabel }}</span></div></div>
+        <div class="metric-card"><div class="metric-label">Requests/sec</div><div class="metric-value">{{ formatFloat .Metrics.RequestsPerSecond }}<span class="metric-unit">rps</span></div></div>
+        <div class="metric-card"><div class="metric-label">Success Rate</div><div class="metric-value">{{ formatFloat .SuccessRatePct }}<span class="metric-unit">%</span></div></div>
+        <div class="metric-card"><div class="metric-label">Prompt</div><div class="metric-value">{{ formatFloat .Metrics.PromptThroughputTPS }}<span class="metric-unit">tok/s</span></div></div>
+        <div class="metric-card"><div class="metric-label">Generation</div><div class="metric-value">{{ formatFloat .Metrics.GenerationThroughputTPS }}<span class="metric-unit">tok/s</span></div></div>
+        <div class="metric-card"><div class="metric-label">Avg Output</div><div class="metric-value">{{ formatFloat .Metrics.OutputLengthMean }}<span class="metric-unit">tokens</span></div></div>
+        <div class="metric-card"><div class="metric-label">Duration</div><div class="metric-value">{{ formatFloat .Metrics.TotalDurationSeconds }}<span class="metric-unit">s</span></div></div>
+      </div>
+    </section>
+
+    <!-- C. Hardware utilization -->
+    <section>
+      <div class="section-header"><span class="section-index">[ C ]</span><h2 class="section-title">Hardware utilization</h2></div>
+      <div class="metric-grid cols-4">
+        <div class="metric-card"><div class="metric-label">{{ .AcceleratorLabel }} Busy (avg)</div><div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationAvgPct }}<span class="metric-unit">%</span></div></div>
+        <div class="metric-card"><div class="metric-label">SM Active (avg)</div><div class="metric-value">{{ formatFloat .Metrics.SMActiveAvgPct }}<span class="metric-unit">%</span></div></div>
+        <div class="metric-card"><div class="metric-label">Tensor Active (avg)</div><div class="metric-value">{{ formatFloat .Metrics.TensorActiveAvgPct }}<span class="metric-unit">%</span></div></div>
+        <div class="metric-card"><div class="metric-label">DRAM Active (avg)</div><div class="metric-value">{{ formatFloat .Metrics.DRAMActiveAvgPct }}<span class="metric-unit">%</span></div></div>
+      </div>
+    </section>
+
+    <!-- D. Memory -->
+    <section>
+      <div class="section-header"><span class="section-index">[ D ]</span><h2 class="section-title">Memory</h2></div>
+      <div class="metric-grid cols-4">
+        <div class="metric-card"><div class="metric-label">Memory (avg)</div><div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryAvgGiB }}<span class="metric-unit">GiB</span></div></div>
+        <div class="metric-card"><div class="metric-label">Memory (peak)</div><div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryPeakGiB }}<span class="metric-unit">GiB</span></div></div>
+        <div class="metric-card"><div class="metric-label">KV Cache (avg)</div><div class="metric-value">{{ formatFloat .Metrics.KVCacheUtilizationAvgPct }}<span class="metric-unit">%</span></div></div>
+        <div class="metric-card"><div class="metric-label">KV Cache (peak)</div><div class="metric-value">{{ formatFloat .Metrics.KVCacheUtilizationPeakPct }}<span class="metric-unit">%</span></div></div>
+        <div class="metric-card"><div class="metric-label">Prefix Hit</div><div class="metric-value">{{ formatFloat .Metrics.PrefixCacheHitRate }}<span class="metric-unit">%</span></div></div>
+      </div>
+    </section>
+
+    <!-- E. Request flow -->
+    <section>
+      <div class="section-header"><span class="section-index">[ E ]</span><h2 class="section-title">Request flow</h2></div>
+      <div class="metric-grid cols-4">
+        <div class="metric-card"><div class="metric-label">Successful</div><div class="metric-value">{{ formatInt .Metrics.SuccessfulRequests }}</div></div>
+        <div class="metric-card"><div class="metric-label">Failed</div><div class="metric-value">{{ formatInt .Metrics.FailedRequests }}</div></div>
+        <div class="metric-card"><div class="metric-label">Queue Max</div><div class="metric-value">{{ formatInt .Metrics.WaitingRequestsMax }}<span class="metric-unit">req</span></div></div>
+        <div class="metric-card"><div class="metric-label">Running (avg)</div><div class="metric-value">{{ formatFloat .Metrics.RunningRequestsAvg }}<span class="metric-unit">req</span></div></div>
+        <div class="metric-card"><div class="metric-label">Running (max)</div><div class="metric-value">{{ formatInt .Metrics.RunningRequestsMax }}<span class="metric-unit">req</span></div></div>
+        <div class="metric-card"><div class="metric-label">Preemptions</div><div class="metric-value">{{ formatInt .Metrics.PreemptionCount }}</div></div>
+      </div>
+    </section>
+
+    <!-- F. Cost -->
+    <section>
+      <div class="section-header"><span class="section-index">[ F ]</span><h2 class="section-title">Cost</h2></div>
+      <div class="metric-grid cols-4">
+        <div class="metric-card"><div class="metric-label">Hourly</div><div class="metric-value">{{ formatUSD .HourlyRateUSD 2 }}</div></div>
+        <div class="metric-card"><div class="metric-label">Per Request</div><div class="metric-value">{{ formatUSD .CostPerRequestUSD 6 }}</div></div>
+        <div class="metric-card"><div class="metric-label">Per 1M Tokens</div><div class="metric-value">{{ formatUSD .CostPer1MTokensUSD 2 }}</div></div>
+        <div class="metric-card"><div class="metric-label">Total Spent</div><div class="metric-value">{{ formatUSD .TotalSpentUSD 2 }}</div></div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <span>Generated by <a href="https://github.com/accelbench/accelbench">AccelBench</a></span>
+      <span>{{ .Timestamp }}</span>
+    </div>
+  </div>
 </body>
 </html>

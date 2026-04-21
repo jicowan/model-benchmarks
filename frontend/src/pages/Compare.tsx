@@ -306,7 +306,7 @@ function CompareInner({
 
   return (
     <>
-      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
+      <div className="h-14 border-b border-line flex items-center justify-between px-6 bg-surface-0 sticky top-0 z-20">
         <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
           <span className="text-ink-1">accelbench</span>
           <span className="text-ink-2">/</span>
@@ -314,30 +314,28 @@ function CompareInner({
           <span className="text-ink-2">/</span>
           <span className="text-ink-0">compare ({entries.length})</span>
         </div>
+        <div className="flex items-center gap-3">
+          <select
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            className="input input-sm"
+          >
+            {AWS_REGIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          <PricingToggle value={pricingTier} onChange={setPricingTier} />
+        </div>
       </div>
 
       <div className="p-6 max-w-[1600px] mx-auto animate-enter">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <div className="eyebrow mb-2">SIDE-BY-SIDE</div>
-            <h1 className="font-sans text-[22px] leading-tight tracking-[-0.01em]">
-              Compare {entries.length} runs
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <select
-              value={region}
-              onChange={(e) => setRegion(e.target.value)}
-              className="input"
-            >
-              {AWS_REGIONS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-            <PricingToggle value={pricingTier} onChange={setPricingTier} />
-          </div>
+        <div className="mb-8">
+          <div className="eyebrow mb-2">SIDE-BY-SIDE</div>
+          <h1 className="font-sans text-[22px] leading-tight tracking-[-0.01em]">
+            Compare {entries.length} runs
+          </h1>
         </div>
 
         {/* Summary */}

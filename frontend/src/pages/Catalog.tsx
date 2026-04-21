@@ -16,13 +16,6 @@ function fmtNum(v: number | undefined, d = 1): string {
   return v != null ? v.toFixed(d) : "--";
 }
 
-function fmtParams(v: number | undefined): string {
-  if (v == null) return "--";
-  if (v >= 1e9) return `${(v / 1e9).toFixed(0)}B`;
-  if (v >= 1e6) return `${(v / 1e6).toFixed(0)}M`;
-  return String(v);
-}
-
 export default function Catalog() {
   const [data, setData] = useState<CatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,12 +119,6 @@ export default function Catalog() {
         cell: (info) => (
           <span className="font-medium">{info.getValue<string>()}</span>
         ),
-      },
-      {
-        accessorKey: "parameter_count",
-        header: "Params",
-        cell: (info) => fmtParams(info.getValue<number>()),
-        size: 80,
       },
       {
         accessorKey: "instance_type_name",

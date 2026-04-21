@@ -70,6 +70,7 @@ func sanitizeFilename(modelID string) string {
 type manifestData struct {
 	Name                 string
 	ModelHfID            string
+	ModelS3URI           string // non-empty when the run loaded weights from S3
 	InstanceType         string
 	FrameworkVersion     string
 	TensorParallelDegree int
@@ -96,6 +97,9 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		MemoryRequest:        fmt.Sprintf("%dGi", max(d.MemoryGiB/2, 16)),
 		ShmSize:              "16Gi",
 	}
+	if d.ModelS3URI != nil && *d.ModelS3URI != "" {
+		data.ModelS3URI = *d.ModelS3URI
+	}
 
 	// Handle quantization.
 	if d.Quantization != nil {
@@ -118,6 +122,9 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 # Generated from AccelBench benchmark run
 #
 # Model: {{ .ModelHfID }}
+{{- if .ModelS3URI }}
+# Weights: {{ .ModelS3URI }} (loaded via Run:ai Model Streamer)
+{{- end }}
 # Instance: {{ .InstanceType }}
 # Tensor Parallel: {{ .TensorParallelDegree }}
 # Max Model Length: {{ .MaxModelLen }}
@@ -126,14 +133,22 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 {{- end }}
 #
 # Prerequisites:
+{{- if .ModelS3URI }}
+# 1. Pod must have read access to the S3 bucket holding the model weights.
+#    The template uses a ServiceAccount named 'accelbench-model' that assumes
+#    an IAM role via EKS Pod Identity. If you're deploying outside the
+#    AccelBench cluster, replace this with your own SA + IAM binding.
+{{- else }}
 # 1. Create the HuggingFace token secret:
 #    kubectl create secret generic hf-token --from-literal=token=<YOUR_HF_TOKEN>
+{{- end }}
 #
 # 2. Ensure your cluster has nodes with the required instance type:
 #    {{ .InstanceType }}
 #
 # Apply with:
 #    kubectl apply -f <this-file>.yaml
+{{- if not .ModelS3URI }}
 ---
 apiVersion: v1
 kind: Secret
@@ -144,6 +159,7 @@ metadata:
 type: Opaque
 stringData:
   token: "<YOUR_HF_TOKEN>"
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -163,7 +179,7 @@ spec:
         app.kubernetes.io/name: {{ .Name }}
         app.kubernetes.io/component: model-server
     spec:
-      serviceAccountName: default
+      serviceAccountName: {{ if .ModelS3URI }}accelbench-model{{ else }}default{{ end }}
       terminationGracePeriodSeconds: 30
       tolerations:
 {{- if eq .AcceleratorType "gpu" }}
@@ -189,12 +205,17 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+{{- if .ModelS3URI }}
+            - name: AWS_REGION
+              value: "us-east-2"
+{{- else }}
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: hf-token
                   key: token
                   optional: true
+{{- end }}
 {{- if and (eq .AcceleratorType "gpu") (gt .TensorParallelDegree 1) }}
             - name: NCCL_DEBUG
               value: "INFO"
@@ -203,13 +224,23 @@ spec:
 {{- end }}
 {{- if eq .AcceleratorType "gpu" }}
           args:
+{{- if .ModelS3URI }}
+            - "--model"
+            - "{{ .ModelS3URI }}"
+            - "--load-format"
+            - "runai_streamer"
+            - "--model-loader-extra-config"
+            - '{"concurrency":16}'
+{{- else }}
             - "--model"
             - "{{ .ModelHfID }}"
+{{- end }}
             - "--port"
             - "8000"
             - "--tensor-parallel-size"
             - "{{ .TensorParallelDegree }}"
             - "--trust-remote-code"
+{{- if not .ModelS3URI }}
 {{- if eq .Quantization "fp16" }}
             - "--dtype"
             - "float16"
@@ -221,6 +252,7 @@ spec:
 {{- else if eq .Quantization "int4" }}
             - "--quantization"
             - "gptq"
+{{- end }}
 {{- end }}
 {{- if gt .MaxModelLen 0 }}
             - "--max-model-len"
@@ -353,8 +385,21 @@ func (s *Server) handleExportReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Look up pricing for the instance in us-east-2 (best-effort — if it's
+	// missing, the report's Cost section renders as "—").
+	var hourlyRate *float64
+	if rows, err := s.repo.ListPricing(r.Context(), "us-east-2"); err == nil {
+		for _, row := range rows {
+			if row.InstanceTypeName == details.InstanceTypeName {
+				rate := row.OnDemandHourlyUSD
+				hourlyRate = &rate
+				break
+			}
+		}
+	}
+
 	// Generate the HTML report.
-	html, err := report.GenerateRunReport(run, metrics, details)
+	html, err := report.GenerateRunReport(run, metrics, details, hourlyRate)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate report failed: %v", err))
 		return
