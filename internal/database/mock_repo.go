@@ -73,6 +73,17 @@ func (m *MockRepo) GetModelByHfID(_ context.Context, hfID, hfRevision string) (*
 	return m.models[key], nil
 }
 
+func (m *MockRepo) GetModelByID(_ context.Context, id string) (*Model, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, model := range m.models {
+		if model.ID == id {
+			return model, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MockRepo) EnsureModel(_ context.Context, hfID, hfRevision string) (*Model, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -95,6 +106,17 @@ func (m *MockRepo) GetInstanceTypeByName(_ context.Context, name string) (*Insta
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.instTypes[name], nil
+}
+
+func (m *MockRepo) GetInstanceTypeByID(_ context.Context, id string) (*InstanceType, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, it := range m.instTypes {
+		if it.ID == id {
+			return it, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *MockRepo) CreateBenchmarkRun(_ context.Context, run *BenchmarkRun) (string, error) {

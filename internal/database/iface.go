@@ -11,8 +11,10 @@ import (
 type Repo interface {
 	Ping(ctx context.Context) error
 	GetModelByHfID(ctx context.Context, hfID, hfRevision string) (*Model, error)
+	GetModelByID(ctx context.Context, id string) (*Model, error)
 	EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error)
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
+	GetInstanceTypeByID(ctx context.Context, id string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)
 	UpdateRunStatus(ctx context.Context, runID, status string) error
 	UpdateRunFailed(ctx context.Context, runID, reason string) error

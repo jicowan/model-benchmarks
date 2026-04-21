@@ -969,9 +969,15 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 	}
 	type suiteRunResponse struct {
 		*database.TestSuiteRun
-		Progress            progressInfo              `json:"progress"`
-		Results             []database.ScenarioResult `json:"results"`
-		ScenarioDefinitions []scenarioDefinition      `json:"scenario_definitions"`
+		ModelHfID            string                    `json:"model_hf_id,omitempty"`
+		InstanceTypeName     string                    `json:"instance_type_name,omitempty"`
+		AcceleratorType      string                    `json:"accelerator_type,omitempty"`
+		AcceleratorName      string                    `json:"accelerator_name,omitempty"`
+		AcceleratorCount     int                       `json:"accelerator_count,omitempty"`
+		AcceleratorMemoryGiB int                       `json:"accelerator_memory_gib,omitempty"`
+		Progress             progressInfo              `json:"progress"`
+		Results              []database.ScenarioResult `json:"results"`
+		ScenarioDefinitions  []scenarioDefinition      `json:"scenario_definitions"`
 	}
 
 	completed := 0
@@ -997,7 +1003,7 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, suiteRunResponse{
+	resp := suiteRunResponse{
 		TestSuiteRun: suiteRun,
 		Progress: progressInfo{
 			Completed: completed,
@@ -1006,7 +1012,18 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		},
 		Results:             results,
 		ScenarioDefinitions: scenarioDefs,
-	})
+	}
+	if model, _ := s.repo.GetModelByID(ctx, suiteRun.ModelID); model != nil {
+		resp.ModelHfID = model.HfID
+	}
+	if it, _ := s.repo.GetInstanceTypeByID(ctx, suiteRun.InstanceTypeID); it != nil {
+		resp.InstanceTypeName = it.Name
+		resp.AcceleratorType = it.AcceleratorType
+		resp.AcceleratorName = it.AcceleratorName
+		resp.AcceleratorCount = it.AcceleratorCount
+		resp.AcceleratorMemoryGiB = it.AcceleratorMemoryGiB
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 

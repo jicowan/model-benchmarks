@@ -472,6 +472,13 @@ export interface TestSuiteRun {
   progress?: SuiteRunProgress;
   results?: ScenarioResult[];
   scenario_definitions?: ScenarioDefinition[];
+  // Enrichments from the suite-run API
+  model_hf_id?: string;
+  instance_type_name?: string;
+  accelerator_type?: string;
+  accelerator_name?: string;
+  accelerator_count?: number;
+  accelerator_memory_gib?: number;
 }
 
 export interface ComponentStatus {

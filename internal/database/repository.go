@@ -81,6 +81,40 @@ func (r *Repository) GetModelByHfID(ctx context.Context, hfID, hfRevision string
 	return &m, nil
 }
 
+// GetModelByID returns a model by its primary key.
+func (r *Repository) GetModelByID(ctx context.Context, id string) (*Model, error) {
+	var m Model
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, hf_id, hf_revision, model_family, parameter_count, created_at
+		 FROM models WHERE id = $1`, id,
+	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.ModelFamily, &m.ParameterCount, &m.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query model: %w", err)
+	}
+	return &m, nil
+}
+
+// GetInstanceTypeByID returns an instance type by primary key.
+func (r *Repository) GetInstanceTypeByID(ctx context.Context, id string) (*InstanceType, error) {
+	var it InstanceType
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, name, family, accelerator_type, accelerator_name,
+		        accelerator_count, accelerator_memory_gib, vcpus, memory_gib
+		 FROM instance_types WHERE id = $1`, id,
+	).Scan(&it.ID, &it.Name, &it.Family, &it.AcceleratorType, &it.AcceleratorName,
+		&it.AcceleratorCount, &it.AcceleratorMemoryGiB, &it.VCPUs, &it.MemoryGiB)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query instance type: %w", err)
+	}
+	return &it, nil
+}
+
 // EnsureModel returns an existing model or creates one if it doesn't exist.
 func (r *Repository) EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error) {
 	m, err := r.GetModelByHfID(ctx, hfID, hfRevision)

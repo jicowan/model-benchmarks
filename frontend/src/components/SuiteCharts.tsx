@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   LineChart,
   Line,
@@ -31,7 +31,6 @@ interface SuiteChartsProps {
 }
 
 export default function SuiteCharts({ results, definitions }: SuiteChartsProps) {
-  const [expanded, setExpanded] = useState(true);
   const theme = useChartTheme();
   const palette = seriesPalette();
   const axis = axisStyle(theme);
@@ -86,22 +85,8 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
   };
 
   return (
-    <div className="panel mt-6">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between w-full text-left px-4 h-11 border-b border-line hover:bg-surface-2 transition-colors"
-      >
-        <div className="flex items-baseline gap-3">
-          <span className="eyebrow">[ CHARTS ]</span>
-          <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0">
-            Performance visualizations
-          </h2>
-        </div>
-        <span className="text-ink-2 font-mono text-[11px]">{expanded ? "▼ HIDE" : "▶ SHOW"}</span>
-      </button>
-
-      {expanded && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
+    <div className="panel">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
           {/* QPS vs Latency */}
           <ChartPanel title="QPS → LATENCY" unit="ms">
             <ResponsiveContainer width="100%" height={280}>
@@ -274,8 +259,7 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
               </BarChart>
             </ResponsiveContainer>
           </ChartPanel>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
