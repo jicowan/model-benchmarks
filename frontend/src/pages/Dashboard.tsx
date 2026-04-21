@@ -54,14 +54,18 @@ function ActivityPulse({
   const CHART_HEIGHT = 48;
   const [hovered, setHovered] = useState<number | null>(null);
 
-  // Align bucket boundaries to local midnight so same-day runs land in the same bucket.
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  // Align bucket boundaries to local midnight so same-day runs land in the
+  // same bucket. Compare calendar dates rather than ms-floored arithmetic,
+  // otherwise a run from e.g. 22h ago computes (22/24).floor = 0 and gets
+  // double-booked into "today" instead of "yesterday".
   const runBuckets = Array(DAYS).fill(0);
   const suiteBuckets = Array(DAYS).fill(0);
   const bucketIndex = (ts: string) => {
-    const t = new Date(ts).getTime();
-    const daysAgo = Math.floor((todayStart.getTime() - t) / (1000 * 60 * 60 * 24));
+    const now = new Date();
+    const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const d = new Date(ts);
+    const dayMid = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const daysAgo = Math.round((todayMid - dayMid) / (1000 * 60 * 60 * 24));
     return DAYS - 1 - Math.max(0, daysAgo);
   };
   runTimestamps.forEach((ts) => {
