@@ -102,7 +102,7 @@ export default function Estimate() {
           <span className="text-ink-0">estimate</span>
         </div>
       </div>
-      <div className="p-6 max-w-6xl mx-auto animate-enter">
+      <div className="p-6 max-w-[1600px] mx-auto animate-enter">
       <div className="mb-8">
         <div className="eyebrow mb-3">INSTANCE SIZING</div>
         <h1 className="font-sans text-[28px] leading-tight tracking-[-0.01em] text-balance">
