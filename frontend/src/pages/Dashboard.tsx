@@ -43,7 +43,13 @@ function SectionHeader({ index, label, action }: { index: string; label: string;
 /* --------------------------- ActivityPulse ---------------------------- */
 
 // Generates a tiny bar chart from run timestamps (last N days).
-function ActivityPulse({ runs }: { runs: RunListItem[] }) {
+function ActivityPulse({
+  runTimestamps,
+  suiteTimestamps,
+}: {
+  runTimestamps: string[];
+  suiteTimestamps: string[];
+}) {
   const DAYS = 14;
   const CHART_HEIGHT = 48;
   const [hovered, setHovered] = useState<number | null>(null);
@@ -51,13 +57,22 @@ function ActivityPulse({ runs }: { runs: RunListItem[] }) {
   // Align bucket boundaries to local midnight so same-day runs land in the same bucket.
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const buckets = Array(DAYS).fill(0);
-  runs.forEach((r) => {
-    const t = new Date(r.created_at).getTime();
+  const runBuckets = Array(DAYS).fill(0);
+  const suiteBuckets = Array(DAYS).fill(0);
+  const bucketIndex = (ts: string) => {
+    const t = new Date(ts).getTime();
     const daysAgo = Math.floor((todayStart.getTime() - t) / (1000 * 60 * 60 * 24));
-    const idx = DAYS - 1 - Math.max(0, daysAgo);
-    if (idx >= 0 && idx < DAYS) buckets[idx]++;
+    return DAYS - 1 - Math.max(0, daysAgo);
+  };
+  runTimestamps.forEach((ts) => {
+    const idx = bucketIndex(ts);
+    if (idx >= 0 && idx < DAYS) runBuckets[idx]++;
   });
+  suiteTimestamps.forEach((ts) => {
+    const idx = bucketIndex(ts);
+    if (idx >= 0 && idx < DAYS) suiteBuckets[idx]++;
+  });
+  const buckets = runBuckets.map((n, i) => n + suiteBuckets[i]);
   const max = Math.max(1, ...buckets);
   const total = buckets.reduce((a, b) => a + b, 0);
 
@@ -95,11 +110,13 @@ function ActivityPulse({ runs }: { runs: RunListItem[] }) {
         <span className="caption">
           {hovered !== null ? (
             <>
-              <span className="text-ink-0 font-mono tabular">{buckets[hovered]}</span>{" "}
-              RUN{buckets[hovered] === 1 ? "" : "S"} · {hoveredLabel}
+              <span className="text-ink-0 font-mono tabular">{runBuckets[hovered]}</span>{" "}
+              RUN{runBuckets[hovered] === 1 ? "" : "S"} ·{" "}
+              <span className="text-ink-0 font-mono tabular">{suiteBuckets[hovered]}</span>{" "}
+              SUITE{suiteBuckets[hovered] === 1 ? "" : "S"} · {hoveredLabel}
             </>
           ) : (
-            <>{total} RUNS · PEAK {max}/DAY</>
+            <>{total} TOTAL · PEAK {max}/DAY</>
           )}
         </span>
         <span className="caption">-{DAYS - 1}d ← today</span>
@@ -175,6 +192,8 @@ export default function Dashboard() {
   }, []);
 
   const activeRuns = runs.filter((r) => r.status === "running" || r.status === "pending");
+  const activeSuiteRuns = suiteRuns.filter((s) => s.status === "running" || s.status === "pending");
+  const activeCount = activeRuns.length + activeSuiteRuns.length;
   const failedCount = runs.filter((r) => r.status === "failed").length;
   const completedCount = runs.filter((r) => r.status === "completed").length;
   const successRate = runs.length > 0 ? ((completedCount / runs.length) * 100).toFixed(1) : "—";
@@ -219,7 +238,7 @@ export default function Dashboard() {
             <p className="meta mt-3 max-w-md">
               {loading
                 ? "Loading system state…"
-                : `${runs.length} runs recorded · ${activeRuns.length} active · ${cachedCount} models in S3 cache`}
+                : `${runs.length} runs recorded · ${activeCount} active · ${cachedCount} models in S3 cache`}
             </p>
           </div>
           <div className="flex gap-2">
@@ -248,9 +267,9 @@ export default function Dashboard() {
           <div className="border-r border-b border-line">
             <StatCardPlain
               label="ACTIVE"
-              value={loading ? "—" : activeRuns.length}
-              sub={activeRuns.length > 0 ? "In progress now" : "Nothing running"}
-              accent={activeRuns.length > 0 ? "signal" : undefined}
+              value={loading ? "—" : activeCount}
+              sub={activeCount > 0 ? "In progress now" : "Nothing running"}
+              accent={activeCount > 0 ? "signal" : undefined}
               index="02"
             />
           </div>
@@ -284,7 +303,10 @@ export default function Dashboard() {
             {loading ? (
               <div className="h-12 flex items-center caption">Loading…</div>
             ) : (
-              <ActivityPulse runs={runs} />
+              <ActivityPulse
+                runTimestamps={runs.map((r) => r.created_at)}
+                suiteTimestamps={suiteRuns.map((s) => s.created_at)}
+              />
             )}
           </div>
         </section>

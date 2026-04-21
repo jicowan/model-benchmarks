@@ -316,18 +316,18 @@ export default function Estimate() {
                       <tr key={`${row.instance_type}-expanded`}>
                         <td colSpan={7} className="p-4 bg-surface-2 border-b border-line">
                           {row.feasible && row.config ? (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-[12.5px]">
                               <div>
                                 <span className="eyebrow mr-1.5">TP</span>{" "}
-                                <span className="font-medium">{row.config.tensor_parallel_degree}</span>
+                                <span className="text-ink-0 tabular">{row.config.tensor_parallel_degree}</span>
                               </div>
                               <div>
                                 <span className="eyebrow mr-1.5">CONCURRENCY</span>{" "}
-                                <span className="font-medium">{row.config.concurrency}</span>
+                                <span className="text-ink-0 tabular">{row.config.concurrency}</span>
                               </div>
                               <div>
                                 <span className="eyebrow mr-1.5">MEMORY</span>{" "}
-                                <span className="font-medium">
+                                <span className="text-ink-0 tabular">
                                   {row.memory
                                     ? `${row.memory.model_weights_gib.toFixed(0)} / ${row.memory.available_gib.toFixed(0)} GiB (${row.memory.utilization_pct.toFixed(0)}%)`
                                     : "-"}
@@ -335,7 +335,7 @@ export default function Estimate() {
                               </div>
                               <div>
                                 <span className="eyebrow mr-1.5">BENCHMARK</span>{" "}
-                                <span className="font-medium">
+                                <span className="text-ink-0">
                                   {row.has_benchmark_data ? "Available" : "Not yet run"}
                                 </span>
                               </div>

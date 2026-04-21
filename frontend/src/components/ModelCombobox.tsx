@@ -186,11 +186,11 @@ export default function ModelCombobox({
                 <li
                   key={`cached-${model.id}`}
                   onMouseDown={() => handleSelectCached(model)}
-                  className="px-3 py-2 cursor-pointer hover:bg-green-50"
+                  className="px-3 py-2 cursor-pointer hover:bg-surface-2"
                 >
                   <div className="font-mono text-[12.5px] text-ink-0 flex items-center gap-2">
                     {model.display_name}
-                    <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
+                    <span className="inline-flex items-center px-1.5 py-0.5 font-mono text-[10px] tracking-widemech uppercase border border-signal/50 text-signal bg-signal/5">
                       S3
                     </span>
                   </div>

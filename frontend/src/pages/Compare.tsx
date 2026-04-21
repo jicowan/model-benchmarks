@@ -198,7 +198,7 @@ export default function Compare() {
 
       {/* Comparison table */}
       <div className="panel overflow-x-auto mb-8">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
+        <table className="min-w-full">
           <thead className="bg-surface-1">
             <tr>
               <th className="eyebrow text-left py-2 px-3 border-b border-line bg-surface-1">
@@ -214,7 +214,7 @@ export default function Compare() {
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200">
+          <tbody>
             {[
               ["TTFT p50 (ms)", "ttft_p50_ms"],
               ["TTFT p99 (ms)", "ttft_p99_ms"],

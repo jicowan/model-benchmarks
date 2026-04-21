@@ -131,7 +131,7 @@ export default function ResultDetail() {
       {/* Run configuration */}
       <div className="panel p-6 mb-8">
         <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Configuration</h2>
-        <dl className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
             ["Framework", `${run.framework} ${run.framework_version}`],
             ["TP Degree", String(run.tensor_parallel_degree)],
@@ -144,7 +144,7 @@ export default function ResultDetail() {
           ].map(([label, value]) => (
             <div key={label}>
               <dt className="eyebrow">{label}</dt>
-              <dd className="font-medium">{value}</dd>
+              <dd className="font-mono text-[12.5px] text-ink-0">{value}</dd>
             </div>
           ))}
         </dl>
