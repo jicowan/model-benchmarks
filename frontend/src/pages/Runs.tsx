@@ -347,7 +347,7 @@ export default function Runs() {
                       <td className="text-ink-2">{timeAgo(j.created_at)}</td>
                       <td>
                         <div className="flex gap-1 justify-end">
-                          {j.status === "running" && j.type === "run" && (
+                          {(j.status === "running" || j.status === "pending") && (
                             <button
                               onClick={() => handleCancel(j.id)}
                               className="text-[11px] font-mono tracking-mech text-warn hover:text-danger px-1"
@@ -356,15 +356,13 @@ export default function Runs() {
                               STOP
                             </button>
                           )}
-                          {(j.status === "completed" || j.status === "failed") && j.type === "run" && (
-                            <button
-                              onClick={() => handleDelete(j.id)}
-                              className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger px-1"
-                              title="Delete"
-                            >
-                              DEL
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleDelete(j.id)}
+                            className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger px-1"
+                            title="Delete"
+                          >
+                            DEL
+                          </button>
                         </div>
                       </td>
                     </tr>
