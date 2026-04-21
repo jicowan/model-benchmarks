@@ -553,6 +553,10 @@ func parseDCGMMetrics(r io.Reader) dcgmScrapeResult {
 		// DCGM_FI_DEV_GPU_UTIL{gpu="0",...} 45.0  (percentage 0-100)
 		// DCGM_FI_DEV_FB_USED{gpu="0",...} 12345678901  (bytes)
 		// DCGM_FI_PROF_SM_ACTIVE{gpu="0",...} 0.72  (ratio 0.0-1.0)
+		// DCGM_FI_PROF_GR_ENGINE_ACTIVE{gpu="0",...} 0.72  (ratio — fallback
+		//   when SM_ACTIVE isn't emitted; dcp-metrics-included.csv on some
+		//   images ships GR_ENGINE_ACTIVE instead. For LLM inference on CUDA
+		//   these metrics are very close in practice.)
 		// DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{gpu="0",...} 0.58  (ratio 0.0-1.0)
 		// DCGM_FI_PROF_DRAM_ACTIVE{gpu="0",...} 0.34  (ratio 0.0-1.0)
 		switch {
@@ -565,7 +569,8 @@ func parseDCGMMetrics(r io.Reader) dcgmScrapeResult {
 			if v, err := parsePromValue(line); err == nil {
 				memSum += v
 			}
-		case strings.HasPrefix(line, "DCGM_FI_PROF_SM_ACTIVE"):
+		case strings.HasPrefix(line, "DCGM_FI_PROF_SM_ACTIVE"),
+			strings.HasPrefix(line, "DCGM_FI_PROF_GR_ENGINE_ACTIVE"):
 			if v, err := parsePromValue(line); err == nil {
 				smSum += v * 100 // scale ratio → percent
 				smCount++

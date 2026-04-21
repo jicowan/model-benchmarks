@@ -98,6 +98,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
 	// Export HTML report (PRD-16)
 	mux.HandleFunc("GET /api/v1/runs/{id}/report", s.handleExportReport)
+	// Export comparison report (HTML + CSV)
+	mux.HandleFunc("GET /api/v1/compare/report", s.handleExportCompareReport)
+	mux.HandleFunc("GET /api/v1/compare/csv", s.handleExportCompareCSV)
 	// PRD-12/13: Scenarios and test suites
 	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
 	mux.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)

@@ -412,3 +412,122 @@ func (s *Server) handleExportReport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write(html)
 }
+
+// --- Compare exports ---
+
+// resolveCompareParams parses the shared query string format used by both
+// compare export handlers and returns the fetched entries + pricing lookup.
+func (s *Server) resolveCompareParams(
+	r *http.Request,
+) ([]database.CatalogEntry, func(string) *float64, string, string, error) {
+	ids := strings.Split(r.URL.Query().Get("ids"), ",")
+	var cleaned []string
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			cleaned = append(cleaned, id)
+		}
+	}
+	if len(cleaned) < 2 {
+		return nil, nil, "", "", fmt.Errorf("at least two run ids are required")
+	}
+
+	region := r.URL.Query().Get("region")
+	if region == "" {
+		region = "us-east-2"
+	}
+	tier := r.URL.Query().Get("tier")
+	if tier == "" {
+		tier = "on_demand"
+	}
+
+	// Fetch catalog rows and filter to selected ids (mirrors the UI).
+	all, err := s.repo.ListCatalog(r.Context(), database.CatalogFilter{Limit: 500})
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("list catalog: %w", err)
+	}
+	idSet := make(map[string]bool, len(cleaned))
+	for _, id := range cleaned {
+		idSet[id] = true
+	}
+	var entries []database.CatalogEntry
+	for _, e := range all {
+		if idSet[e.RunID] {
+			entries = append(entries, e)
+		}
+	}
+	if len(entries) < 2 {
+		return nil, nil, "", "", fmt.Errorf("need at least two resolvable run ids")
+	}
+
+	// Build pricing lookup for the requested region + tier.
+	priceByInstance := map[string]*float64{}
+	if rows, err := s.repo.ListPricing(r.Context(), region); err == nil {
+		for _, row := range rows {
+			var v *float64
+			switch tier {
+			case "reserved_1yr":
+				v = row.Reserved1YrHourlyUSD
+			case "reserved_3yr":
+				v = row.Reserved3YrHourlyUSD
+			default:
+				x := row.OnDemandHourlyUSD
+				v = &x
+			}
+			if v != nil {
+				priceByInstance[row.InstanceTypeName] = v
+			}
+		}
+	}
+	lookup := func(name string) *float64 { return priceByInstance[name] }
+	return entries, lookup, tier, region, nil
+}
+
+func tierLabel(tier string) string {
+	switch tier {
+	case "reserved_1yr":
+		return "Reserved 1yr"
+	case "reserved_3yr":
+		return "Reserved 3yr"
+	default:
+		return "On-demand"
+	}
+}
+
+// handleExportCompareReport returns an HTML comparison report.
+func (s *Server) handleExportCompareReport(w http.ResponseWriter, r *http.Request) {
+	entries, lookup, tier, region, err := s.resolveCompareParams(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	html, err := report.GenerateCompareReport(entries, lookup, tierLabel(tier), region)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate compare report: %v", err))
+		return
+	}
+	filename := fmt.Sprintf("accelbench-compare-%d-runs.html", len(entries))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write(html)
+}
+
+// handleExportCompareCSV returns a CSV of the comparison data.
+func (s *Server) handleExportCompareCSV(w http.ResponseWriter, r *http.Request) {
+	entries, lookup, tier, region, err := s.resolveCompareParams(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := report.GenerateCompareCSV(entries, lookup, tierLabel(tier), region)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate compare csv: %v", err))
+		return
+	}
+	filename := fmt.Sprintf("accelbench-compare-%d-runs.csv", len(entries))
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}

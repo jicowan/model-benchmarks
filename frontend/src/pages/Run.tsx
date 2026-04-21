@@ -399,7 +399,7 @@ export default function Run() {
         </div>
       </div>
 
-      <div className="p-6 max-w-3xl mx-auto animate-enter">
+      <div className="p-6 max-w-[1600px] mx-auto animate-enter">
         <div className="mb-8">
           <div className="eyebrow mb-3">CONFIGURE RUN</div>
           <h1 className="font-sans text-[28px] leading-tight tracking-[-0.01em] text-balance">

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ .Title }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* AccelBench industrial theme (duplicated from run.html so the export is self-contained) */
+    :root {
+      --surface-0: 10 11 13;
+      --surface-1: 17 19 23;
+      --surface-2: 26 29 34;
+      --line: 35 39 46;
+      --line-strong: 58 64 73;
+      --ink-0: 232 234 237;
+      --ink-1: 154 160 166;
+      --ink-2: 95 99 104;
+      --signal: 57 255 136;
+      --warn: 255 176 32;
+      --danger: 255 71 87;
+      --info: 94 181 255;
+      color-scheme: dark;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --surface-0: 246 247 248;
+        --surface-1: 255 255 255;
+        --surface-2: 236 238 240;
+        --line: 216 219 223;
+        --line-strong: 183 188 194;
+        --ink-0: 10 11 13;
+        --ink-1: 75 80 86;
+        --ink-2: 128 134 139;
+        --signal: 10 138 74;
+        --warn: 184 106 0;
+        --danger: 201 48 44;
+        --info: 25 103 210;
+        color-scheme: light;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html {
+      font-family: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-feature-settings: "cv11", "ss01";
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body { background: rgb(var(--surface-0)); color: rgb(var(--ink-0)); line-height: 1.5; min-height: 100vh; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+    .header-strip {
+      height: 56px;
+      border-bottom: 1px solid rgb(var(--line));
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: 0.01em;
+    }
+    .header-strip .sep { color: rgb(var(--ink-2)); margin: 0 8px; }
+    .header-strip .muted { color: rgb(var(--ink-1)); }
+    .header-strip .active { color: rgb(var(--ink-0)); }
+
+    .title-block { margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid rgb(var(--line)); }
+    .title-eyebrow {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgb(var(--ink-2));
+      margin-bottom: 8px;
+    }
+    .title-heading { font-size: 22px; letter-spacing: -0.01em; color: rgb(var(--ink-0)); }
+    .title-meta {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-2));
+      margin-top: 12px;
+    }
+
+    section { margin-bottom: 32px; }
+    .section-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+    .section-index { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: rgb(var(--ink-2)); }
+    .section-title { font-size: 15px; font-weight: 500; color: rgb(var(--ink-0)); }
+
+    .panel {
+      background: rgb(var(--surface-1));
+      border: 1px solid rgb(var(--line));
+      padding: 16px;
+    }
+
+    .summary-list { display: flex; flex-direction: column; gap: 6px; }
+    .summary-item { display: flex; gap: 8px; align-items: baseline; }
+    .summary-marker {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-2));
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 12.5px;
+      font-variant-numeric: tabular-nums;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(var(--line) / 0.6);
+      text-align: right;
+    }
+    th {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgb(var(--ink-2));
+      background: rgb(var(--surface-1));
+      border-bottom: 1px solid rgb(var(--line));
+      text-align: right;
+      font-weight: 500;
+    }
+    th.label, td.label { text-align: left; color: rgb(var(--ink-1)); }
+    td.value { color: rgb(var(--ink-0)); }
+    td.winner {
+      background: rgba(var(--signal) / 0.12);
+      color: rgb(var(--signal));
+    }
+    .winner-mark { margin-right: 4px; }
+
+    .caption {
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-2));
+      letter-spacing: 0.01em;
+      margin-top: 8px;
+    }
+
+    .footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid rgb(var(--line));
+      font-family: "Geist Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-2));
+      display: flex;
+      justify-content: space-between;
+    }
+    .footer a { color: rgb(var(--ink-1)); text-decoration: none; }
+    .footer a:hover { color: rgb(var(--signal)); }
+  </style>
+</head>
+<body>
+  <div class="header-strip">
+    <span class="muted">accelbench</span>
+    <span class="sep">/</span>
+    <span class="muted">runs</span>
+    <span class="sep">/</span>
+    <span class="active">compare · {{ len .Entries }}</span>
+  </div>
+
+  <div class="container">
+    <div class="title-block">
+      <div class="title-eyebrow">SIDE-BY-SIDE</div>
+      <h1 class="title-heading">Compare {{ len .Entries }} runs</h1>
+      <div class="title-meta">{{ .Timestamp }} · {{ .Region }} · {{ .PricingTierLabel }}</div>
+    </div>
+
+    {{ if .Summary }}
+    <section>
+      <div class="section-header"><span class="section-index">[ Σ ]</span><h2 class="section-title">Summary</h2></div>
+      <div class="panel">
+        <ul class="summary-list">
+          {{- range .Summary }}
+          <li class="summary-item"><span class="summary-marker">›</span><span>{{ . }}</span></li>
+          {{- end }}
+        </ul>
+      </div>
+    </section>
+    {{ end }}
+
+    <section>
+      <div class="section-header"><span class="section-index">[ A ]</span><h2 class="section-title">Configuration</h2></div>
+      <div class="panel" style="padding: 0;">
+      {{ if .ConfigDiff }}
+        <table>
+          <thead>
+            <tr>
+              <th class="label">Field</th>
+              {{- range .Entries }}
+              <th>{{ shortRun . }}</th>
+              {{- end }}
+            </tr>
+          </thead>
+          <tbody>
+            {{- range .ConfigDiff }}
+            <tr>
+              <td class="label">{{ .Label }}</td>
+              {{- range .Values }}
+              <td class="value">{{ . }}</td>
+              {{- end }}
+            </tr>
+            {{- end }}
+          </tbody>
+        </table>
+      {{ else }}
+        <div style="padding: 16px;" class="caption">ALL RUNS USE IDENTICAL CONFIGURATION</div>
+      {{ end }}
+      </div>
+    </section>
+
+    {{ template "metric_table" map "index" "B" "title" "Latency" "rows" .LatencyRows "entries" .Entries }}
+    {{ template "metric_table" map "index" "C" "title" "Throughput" "rows" .ThroughputRows "entries" .Entries }}
+
+    <section>
+      <div class="section-header"><span class="section-index">[ D ]</span><h2 class="section-title">Hardware utilization</h2></div>
+      <div class="panel" style="padding: 0;">
+        {{ template "metric_rows" map "rows" .HardwareRows "entries" .Entries }}
+      </div>
+      <p class="caption">Higher isn't always better — high utilization may indicate saturation.</p>
+    </section>
+
+    {{ template "metric_table" map "index" "E" "title" "Memory" "rows" .MemoryRows "entries" .Entries }}
+    {{ template "metric_table" map "index" "F" "title" "Cost" "rows" .CostRows "entries" .Entries }}
+
+    <div class="footer">
+      <span>Generated by <a href="https://github.com/accelbench/accelbench">AccelBench</a></span>
+      <span>{{ .Timestamp }}</span>
+    </div>
+  </div>
+</body>
+</html>
+
+{{ define "metric_table" }}
+<section>
+  <div class="section-header"><span class="section-index">[ {{ .index }} ]</span><h2 class="section-title">{{ .title }}</h2></div>
+  <div class="panel" style="padding: 0;">
+    {{ template "metric_rows" map "rows" .rows "entries" .entries }}
+  </div>
+</section>
+{{ end }}
+
+{{ define "metric_rows" }}
+<table>
+  <thead>
+    <tr>
+      <th class="label">Metric</th>
+      {{- range .entries }}
+      <th>{{ shortRun . }}</th>
+      {{- end }}
+    </tr>
+  </thead>
+  <tbody>
+    {{- range .rows }}
+    <tr>
+      <td class="label">{{ .Label }}</td>
+      {{- range $i, $c := .Cells }}
+      <td class="{{ if $c.IsWinner }}winner{{ else }}value{{ end }}">{{ if $c.IsWinner }}<span class="winner-mark">▸</span>{{ end }}{{ $c.Text }}</td>
+      {{- end }}
+    </tr>
+    {{- end }}
+  </tbody>
+</table>
+{{ end }}

@@ -461,22 +461,50 @@ function CompareInner({
         </section>
 
         {/* Export */}
-        <div className="flex gap-3">
-          <button
-            onClick={() => {
-              const blob = new Blob([JSON.stringify(entries, null, 2)], {
-                type: "application/json",
-              });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "accelbench-comparison.json";
-              a.click();
-            }}
-            className="btn"
-          >
-            Export JSON
-          </button>
+        <div className="mt-8 pt-6 hairline">
+          {(() => {
+            const ids = entries.map((e) => e.run_id).join(",");
+            const qs = `ids=${encodeURIComponent(ids)}&region=${encodeURIComponent(
+              region
+            )}&tier=${encodeURIComponent(pricingTier)}`;
+            return (
+              <div className="flex gap-4">
+                <a
+                  href={`/api/v1/compare/report?${qs}`}
+                  download
+                  className="btn btn-primary"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  Export HTML Report
+                </a>
+                <a
+                  href={`/api/v1/compare/csv?${qs}`}
+                  download
+                  className="btn"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                    />
+                  </svg>
+                  Export CSV
+                </a>
+              </div>
+            );
+          })()}
+          <p className="mt-2 caption">
+            HTML for sharing; CSV for further analysis. Both honor the current region and pricing tier.
+          </p>
         </div>
       </div>
     </>
