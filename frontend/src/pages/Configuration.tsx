@@ -11,17 +11,19 @@ import {
   deleteScenarioOverride,
   getRegistry,
   listAuditLog,
+  listInstanceTypes,
 } from "../api";
 import type {
   CredentialsStatus,
   CredentialMetadata,
   CatalogMatrixPayload,
   CatalogModelEntry,
-  CatalogInstanceTypeEntry,
   ScenarioOverrideEntry,
   RegistryStatus,
   AuditLogEntry,
+  InstanceType,
 } from "../types";
+import ModelCombobox from "../components/ModelCombobox";
 
 /* ----------------------------- PageHeader ----------------------------- */
 
@@ -40,17 +42,48 @@ function PageHeader({ path }: { path: string[] }) {
   );
 }
 
-/* ------------------------- SectionHeader ---------------------------- */
+/* --------------------- Collapsible section wrapper -------------------- */
+// Single source of the expand/collapse UI used across the Configuration
+// page. Clicking the whole header bar toggles; the SHOW/HIDE indicator
+// on the right mirrors the current state. `action` still renders when
+// open (e.g., Save button on the matrix editor) without toggling.
 
-function SectionHeader({ index, label, action }: { index: string; label: string; action?: React.ReactNode }) {
+function CollapsibleSection({
+  index,
+  label,
+  defaultOpen = false,
+  action,
+  children,
+}: {
+  index: string;
+  label: string;
+  defaultOpen?: boolean;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="flex items-end justify-between mb-4 pb-3 border-b border-line">
-      <div className="flex items-baseline gap-4">
-        <span className="font-mono text-[11px] tracking-widemech text-ink-2">[{index}]</span>
-        <h2 className="font-sans text-[15px] font-medium tracking-mech text-ink-0">{label}</h2>
+    <section className="mb-10">
+      <div className="flex items-end justify-between mb-4 pb-3 border-b border-line">
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex items-baseline gap-4 text-left flex-1 min-w-0"
+        >
+          <span className="font-mono text-[11px] tracking-widemech text-ink-2">[{index}]</span>
+          <h2 className="font-sans text-[15px] font-medium tracking-mech text-ink-0">{label}</h2>
+        </button>
+        <div className="flex items-center gap-3">
+          {open && action}
+          <button
+            onClick={() => setOpen(!open)}
+            className="caption hover:text-ink-0 transition-colors"
+          >
+            {open ? "HIDE" : "SHOW"}
+          </button>
+        </div>
       </div>
-      {action}
-    </div>
+      {open && children}
+    </section>
   );
 }
 
@@ -264,8 +297,7 @@ function CredentialsCard({
   }
 
   return (
-    <section className="mb-10">
-      <SectionHeader index="A" label="Credentials" />
+    <CollapsibleSection index="A" label="Credentials" defaultOpen>
       <div className="panel px-5">
         <CredentialRow
           label="HuggingFace token"
@@ -283,7 +315,7 @@ function CredentialsCard({
         Tokens are stored in AWS Secrets Manager and automatically injected into benchmark runs,
         cache jobs, and catalog seeds. The UI never displays saved values — to change, use rotate.
       </p>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -291,6 +323,7 @@ function CredentialsCard({
 
 function SeedingMatrixCard() {
   const [matrix, setMatrix] = useState<CatalogMatrixPayload | null>(null);
+  const [availableInstances, setAvailableInstances] = useState<InstanceType[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -305,6 +338,12 @@ function SeedingMatrixCard() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Accelerated instance types for the dropdown — pulled from the same
+  // endpoint the Run form uses.
+  useEffect(() => {
+    listInstanceTypes().then(setAvailableInstances).catch(() => {});
+  }, []);
 
   async function handleSave() {
     if (!matrix) return;
@@ -324,10 +363,9 @@ function SeedingMatrixCard() {
 
   if (!matrix) {
     return (
-      <section className="mb-10">
-        <SectionHeader index="B" label="Seeding Matrix" />
+      <CollapsibleSection index="B" label="Seeding Matrix">
         <div className="panel p-5 caption">{error ? error : "Loading…"}</div>
-      </section>
+      </CollapsibleSection>
     );
   }
 
@@ -341,32 +379,34 @@ function SeedingMatrixCard() {
   const removeModel = (i: number) =>
     setMatrix({ ...matrix, models: matrix.models.filter((_, j) => j !== i) });
 
-  const updateInstance = (i: number, patch: Partial<CatalogInstanceTypeEntry>) => {
-    const next = [...matrix.instance_types];
-    next[i] = { ...next[i], ...patch };
-    setMatrix({ ...matrix, instance_types: next });
-  };
   const addInstance = () =>
     setMatrix({ ...matrix, instance_types: [...matrix.instance_types, { name: "", enabled: true }] });
+  const updateInstance = (i: number, name: string) => {
+    const next = [...matrix.instance_types];
+    next[i] = { ...next[i], name };
+    setMatrix({ ...matrix, instance_types: next });
+  };
   const removeInstance = (i: number) =>
     setMatrix({ ...matrix, instance_types: matrix.instance_types.filter((_, j) => j !== i) });
 
-  return (
-    <section className="mb-10">
-      <SectionHeader
-        index="B"
-        label="Seeding Matrix"
-        action={
-          <div className="flex items-center gap-3">
-            {savedFlash && <span className="font-mono text-[11px] tracking-mech uppercase text-signal">SAVED</span>}
-            {error && <span className="font-mono text-[11.5px] text-danger">{error}</span>}
-            <button onClick={handleSave} disabled={saving} className="btn btn-primary">
-              {saving ? "SAVING…" : "SAVE"}
-            </button>
-          </div>
-        }
-      />
+  // Instance types already selected in the matrix — used to dim the dropdown
+  // option so operators don't add duplicates. (The backend rejects dupes too.)
+  const selectedInstanceNames = new Set(matrix.instance_types.map((it) => it.name));
 
+  return (
+    <CollapsibleSection
+      index="B"
+      label="Seeding Matrix"
+      action={
+        <div className="flex items-center gap-3">
+          {savedFlash && <span className="font-mono text-[11px] tracking-mech uppercase text-signal">SAVED</span>}
+          {error && <span className="font-mono text-[11.5px] text-danger">{error}</span>}
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary">
+            {saving ? "SAVING…" : "SAVE"}
+          </button>
+        </div>
+      }
+    >
       <div className="panel p-5 mb-4">
         <div className="eyebrow mb-3">DEFAULTS</div>
         <div className="grid grid-cols-2 gap-4">
@@ -401,31 +441,24 @@ function SeedingMatrixCard() {
           <span className="eyebrow">MODELS ({matrix.models.length})</span>
           <button onClick={addModel} className="btn btn-ghost">+ ADD</button>
         </div>
-        <div className="space-y-1">
+        <p className="meta mb-3">
+          Search HuggingFace as you type. Any model in this list is included in seeding — to
+          exclude one, remove its row.
+        </p>
+        <div className="space-y-2">
           {matrix.models.map((m, i) => (
-            <div key={i} className="grid grid-cols-[1fr_140px_auto_auto] gap-2 items-center">
-              <input
+            <div key={i} className="grid grid-cols-[1fr_auto] gap-2 items-start">
+              <ModelCombobox
                 value={m.hf_id}
-                onChange={(e) => updateModel(i, { hf_id: e.target.value })}
-                placeholder="meta-llama/Llama-3.1-8B-Instruct"
-                className="input"
+                onChange={(hfID) => updateModel(i, { hf_id: hfID })}
               />
-              <input
-                value={m.family || ""}
-                onChange={(e) => updateModel(i, { family: e.target.value })}
-                placeholder="family"
-                className="input"
-              />
-              <label className="flex items-center gap-1.5 font-mono text-[11px] uppercase cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={m.enabled}
-                  onChange={(e) => updateModel(i, { enabled: e.target.checked })}
-                  className="accent-signal"
-                />
-                enabled
-              </label>
-              <button onClick={() => removeModel(i)} className="btn btn-ghost text-danger">×</button>
+              <button
+                onClick={() => removeModel(i)}
+                className="btn btn-ghost text-danger mt-0.5"
+                title="Remove"
+              >
+                ×
+              </button>
             </div>
           ))}
         </div>
@@ -436,30 +469,42 @@ function SeedingMatrixCard() {
           <span className="eyebrow">INSTANCE TYPES ({matrix.instance_types.length})</span>
           <button onClick={addInstance} className="btn btn-ghost">+ ADD</button>
         </div>
+        <p className="meta mb-3">
+          Pick from AWS accelerated instance families. Any type in this list is included in
+          seeding — to exclude one, remove its row.
+        </p>
         <div className="space-y-1">
           {matrix.instance_types.map((it, i) => (
-            <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-2 items-center">
-              <input
+            <div key={i} className="grid grid-cols-[1fr_auto] gap-2 items-center">
+              <select
                 value={it.name}
-                onChange={(e) => updateInstance(i, { name: e.target.value })}
-                placeholder="g6e.xlarge"
-                className="input"
-              />
-              <label className="flex items-center gap-1.5 font-mono text-[11px] uppercase cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={it.enabled}
-                  onChange={(e) => updateInstance(i, { enabled: e.target.checked })}
-                  className="accent-signal"
-                />
-                enabled
-              </label>
-              <button onClick={() => removeInstance(i)} className="btn btn-ghost text-danger">×</button>
+                onChange={(e) => updateInstance(i, e.target.value)}
+                className="input w-full"
+              >
+                <option value="">— select instance type —</option>
+                {availableInstances.map((opt) => {
+                  const alreadyUsed = opt.name !== it.name && selectedInstanceNames.has(opt.name);
+                  return (
+                    <option key={opt.name} value={opt.name} disabled={alreadyUsed}>
+                      {opt.name}
+                      {opt.accelerator_name ? ` · ${opt.accelerator_count ?? ""}x ${opt.accelerator_name}` : ""}
+                      {alreadyUsed ? " (already added)" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                onClick={() => removeInstance(i)}
+                className="btn btn-ghost text-danger"
+                title="Remove"
+              >
+                ×
+              </button>
             </div>
           ))}
         </div>
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -497,16 +542,14 @@ function ScenarioOverridesCard() {
 
   if (!entries) {
     return (
-      <section className="mb-10">
-        <SectionHeader index="C" label="Scenario Overrides" />
+      <CollapsibleSection index="C" label="Scenario Overrides">
         <div className="panel p-5 caption">{error ? error : "Loading…"}</div>
-      </section>
+      </CollapsibleSection>
     );
   }
 
   return (
-    <section className="mb-10">
-      <SectionHeader index="C" label="Scenario Overrides" />
+    <CollapsibleSection index="C" label="Scenario Overrides">
       <div className="panel p-5">
         <p className="meta mb-4 max-w-2xl">
           Each scenario's stage shape, dataset, and description are defined in code. These knobs can be
@@ -518,7 +561,7 @@ function ScenarioOverridesCard() {
           ))}
         </div>
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -656,10 +699,9 @@ function RegistryCard() {
 
   if (!reg) {
     return (
-      <section className="mb-10">
-        <SectionHeader index="D" label="Registry" />
+      <CollapsibleSection index="D" label="Registry">
         <div className="panel p-5 caption">{error ? error : "Loading…"}</div>
-      </section>
+      </CollapsibleSection>
     );
   }
 
@@ -676,8 +718,7 @@ function RegistryCard() {
 
   if (!reg.enabled) {
     return (
-      <section className="mb-10">
-        <SectionHeader index="D" label="Registry" />
+      <CollapsibleSection index="D" label="Registry">
         <div className="panel p-5">
           <div className="flex items-baseline gap-3 mb-3">
             <span className="font-mono text-[12.5px] text-ink-0">Pull-through cache</span>
@@ -693,13 +734,12 @@ function RegistryCard() {
             <button onClick={copyHint} className="btn">{copied ? "COPIED" : "COPY"}</button>
           </div>
         </div>
-      </section>
+      </CollapsibleSection>
     );
   }
 
   return (
-    <section className="mb-10">
-      <SectionHeader index="D" label="Registry" />
+    <CollapsibleSection index="D" label="Registry">
       <div className="panel p-5">
         <div className="flex items-baseline gap-3 mb-2">
           <span className="font-mono text-[12.5px] text-ink-0">Pull-through cache</span>
@@ -724,7 +764,7 @@ function RegistryCard() {
           </div>
         )}
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -743,47 +783,38 @@ function formatBytes(n: number): string {
 /* ---------------------- Audit log accordion (PRD-32) ------------------ */
 
 function AuditLogAccordion() {
-  const [open, setOpen] = useState(false);
   const [entries, setEntries] = useState<AuditLogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [requested, setRequested] = useState(false);
 
+  // Lazy-load entries the first time the section opens. We can't cleanly
+  // observe the open state from inside CollapsibleSection, so trigger the
+  // fetch on first render and stop there.
   useEffect(() => {
-    if (!open) return;
-    if (entries !== null) return;
+    if (requested) return;
+    setRequested(true);
     listAuditLog(50).then(setEntries).catch((e) => setError(e.message || "Failed to load"));
-  }, [open, entries]);
+  }, [requested]);
 
   return (
-    <section className="mb-10">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-end justify-between mb-4 pb-3 border-b border-line"
-      >
-        <div className="flex items-baseline gap-4">
-          <span className="font-mono text-[11px] tracking-widemech text-ink-2">[E]</span>
-          <h2 className="font-sans text-[15px] font-medium tracking-mech text-ink-0">Audit Log</h2>
-        </div>
-        <span className="caption">{open ? "HIDE" : "SHOW"}</span>
-      </button>
-      {open && (
-        <div className="panel p-5">
-          {entries === null && !error && <p className="caption">Loading…</p>}
-          {error && <p className="caption text-danger">{error}</p>}
-          {entries !== null && entries.length === 0 && <p className="caption">No entries yet.</p>}
-          {entries !== null && entries.length > 0 && (
-            <div className="space-y-1">
-              {entries.map((e) => (
-                <div key={e.id} className="grid grid-cols-[180px_1fr_1fr] gap-3 font-mono text-[11.5px]">
-                  <span className="text-ink-2 tabular">{formatDate(e.at)}</span>
-                  <span className="text-ink-1 truncate">{e.action}</span>
-                  <span className="text-ink-0">{e.summary}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </section>
+    <CollapsibleSection index="E" label="Audit Log">
+      <div className="panel p-5">
+        {entries === null && !error && <p className="caption">Loading…</p>}
+        {error && <p className="caption text-danger">{error}</p>}
+        {entries !== null && entries.length === 0 && <p className="caption">No entries yet.</p>}
+        {entries !== null && entries.length > 0 && (
+          <div className="space-y-1">
+            {entries.map((e) => (
+              <div key={e.id} className="grid grid-cols-[180px_1fr_1fr] gap-3 font-mono text-[11.5px]">
+                <span className="text-ink-2 tabular">{formatDate(e.at)}</span>
+                <span className="text-ink-1 truncate">{e.action}</span>
+                <span className="text-ink-0">{e.summary}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </CollapsibleSection>
   );
 }
 
