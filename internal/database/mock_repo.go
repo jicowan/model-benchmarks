@@ -20,6 +20,8 @@ type MockRepo struct {
 	suiteRuns       map[string]*TestSuiteRun     // keyed by suite run ID
 	scenarioResults map[string]*ScenarioResult   // keyed by scenario result ID
 	modelCache      map[string]*ModelCache       // keyed by cache ID
+	catalogMatrix   *CatalogMatrix               // PRD-30 seeding matrix
+	catalogSeeds    map[string]*CatalogSeedStatus
 	nextID          int
 }
 
@@ -779,4 +781,174 @@ func (m *MockRepo) DeleteModelCache(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 	delete(m.modelCache, id)
 	return nil
+}
+
+// Catalog matrix mock — returns whatever SeedCatalogMatrix populated.
+
+// SeedCatalogMatrix lets tests preload the seeding matrix.
+func (m *MockRepo) SeedCatalogMatrix(cm *CatalogMatrix) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.catalogMatrix = cm
+}
+
+// SeedCatalogStatus lets tests preload seed status rows.
+func (m *MockRepo) SeedCatalogStatus(s *CatalogSeedStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.catalogSeeds == nil {
+		m.catalogSeeds = make(map[string]*CatalogSeedStatus)
+	}
+	m.catalogSeeds[s.ID] = s
+}
+
+func (m *MockRepo) LoadCatalogMatrix(_ context.Context) (*CatalogMatrix, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.catalogMatrix == nil {
+		return &CatalogMatrix{}, nil
+	}
+	cp := *m.catalogMatrix
+	return &cp, nil
+}
+
+func (m *MockRepo) ModelCacheByHfID(_ context.Context) (map[string]ModelCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]ModelCache)
+	for _, mc := range m.modelCache {
+		if mc.HfID != nil {
+			out[*mc.HfID] = *mc
+		}
+	}
+	return out, nil
+}
+
+func (m *MockRepo) ListRunKeys(_ context.Context) ([]RunKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	type key struct{ a, b string }
+	seen := make(map[key]bool)
+	for _, run := range m.runs {
+		if run.Status == "failed" {
+			continue
+		}
+		var modelHfID, instName string
+		for _, mdl := range m.models {
+			if mdl.ID == run.ModelID {
+				modelHfID = mdl.HfID
+				break
+			}
+		}
+		for _, it := range m.instTypes {
+			if it.ID == run.InstanceTypeID {
+				instName = it.Name
+				break
+			}
+		}
+		seen[key{modelHfID, instName}] = true
+	}
+	out := make([]RunKey, 0, len(seen))
+	for k := range seen {
+		out = append(out, RunKey{ModelHfID: k.a, InstanceTypeName: k.b})
+	}
+	return out, nil
+}
+
+func (m *MockRepo) CreateCatalogSeedStatus(_ context.Context, id string, total int, dryRun bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.catalogSeeds == nil {
+		m.catalogSeeds = make(map[string]*CatalogSeedStatus)
+	}
+	now := time.Now()
+	m.catalogSeeds[id] = &CatalogSeedStatus{
+		ID:        id,
+		Status:    "active",
+		Total:     total,
+		DryRun:    dryRun,
+		StartedAt: now,
+		UpdatedAt: now,
+	}
+	return nil
+}
+
+func (m *MockRepo) UpdateCatalogSeedProgress(_ context.Context, id string, completed int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.catalogSeeds[id]
+	if !ok {
+		return fmt.Errorf("seed %s not found", id)
+	}
+	s.Completed = completed
+	s.UpdatedAt = time.Now()
+	return nil
+}
+
+func (m *MockRepo) CompleteCatalogSeedStatus(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.catalogSeeds[id]
+	if !ok {
+		return fmt.Errorf("seed %s not found", id)
+	}
+	s.Status = "completed"
+	now := time.Now()
+	s.UpdatedAt = now
+	s.CompletedAt = &now
+	return nil
+}
+
+func (m *MockRepo) FailCatalogSeedStatus(_ context.Context, id, errMsg string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.catalogSeeds[id]
+	if !ok {
+		return fmt.Errorf("seed %s not found", id)
+	}
+	s.Status = "failed"
+	s.ErrorMessage = &errMsg
+	now := time.Now()
+	s.UpdatedAt = now
+	s.CompletedAt = &now
+	return nil
+}
+
+func (m *MockRepo) InterruptActiveCatalogSeeds(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for _, s := range m.catalogSeeds {
+		if s.Status == "active" {
+			s.Status = "interrupted"
+			s.UpdatedAt = now
+			s.CompletedAt = &now
+		}
+	}
+	return nil
+}
+
+func (m *MockRepo) GetLatestCatalogSeedStatus(_ context.Context) (*CatalogSeedStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var latest *CatalogSeedStatus
+	for _, s := range m.catalogSeeds {
+		if latest == nil || s.StartedAt.After(latest.StartedAt) {
+			cp := *s
+			latest = &cp
+		}
+	}
+	return latest, nil
+}
+
+func (m *MockRepo) GetActiveCatalogSeed(_ context.Context) (*CatalogSeedStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.catalogSeeds {
+		if s.Status == "active" {
+			cp := *s
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }

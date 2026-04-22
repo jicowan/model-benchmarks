@@ -52,7 +52,7 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	quant = q.Get("quantization")
 
 	// Fetch model config (from S3 cache if available, else HuggingFace).
-	modelCfg, err := s.fetchModelConfig(r.Context(), modelID, hfToken)
+	modelCfg, err := s.FetchModelConfig(r.Context(), modelID, hfToken)
 	if err != nil {
 		var hfErr *recommend.HFError
 		if errors.As(err, &hfErr) {

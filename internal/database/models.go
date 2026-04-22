@@ -242,3 +242,55 @@ type RegisterCustomModelRequest struct {
 	S3URI       string `json:"s3_uri"`
 	DisplayName string `json:"display_name"`
 }
+
+// CatalogModel is a model in the seeding matrix (PRD-30).
+type CatalogModel struct {
+	ID        int       `json:"id"`
+	HfID      string    `json:"hf_id"`
+	Family    *string   `json:"family,omitempty"`
+	Enabled   bool      `json:"enabled"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CatalogInstanceType is an instance type in the seeding matrix.
+type CatalogInstanceType struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CatalogSeedDefaults is the singleton row of per-seed-run defaults.
+type CatalogSeedDefaults struct {
+	FrameworkVersion   string    `json:"framework_version"`
+	Scenario           string    `json:"scenario"`
+	Dataset            string    `json:"dataset"`
+	MinDurationSeconds int       `json:"min_duration_seconds"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// CatalogMatrix bundles the full matrix for the seeder.
+type CatalogMatrix struct {
+	Defaults      CatalogSeedDefaults   `json:"defaults"`
+	Models        []CatalogModel        `json:"models"`
+	InstanceTypes []CatalogInstanceType `json:"instance_types"`
+}
+
+// CatalogSeedStatus tracks an in-process seed run (PRD-30).
+type CatalogSeedStatus struct {
+	ID           string     `json:"id"`
+	Status       string     `json:"status"` // active | completed | failed | interrupted
+	Total        int        `json:"total"`
+	Completed    int        `json:"completed"`
+	DryRun       bool       `json:"dry_run"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+}
+
+// RunKey is a (model_hf_id, instance_type_name) dedup key for the seeder.
+type RunKey struct {
+	ModelHfID        string
+	InstanceTypeName string
+}
