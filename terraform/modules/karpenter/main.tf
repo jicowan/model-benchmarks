@@ -138,12 +138,40 @@ resource "kubectl_manifest" "gpu_node_class" {
       securityGroupSelectorTerms:
         - tags:
             karpenter.sh/discovery: ${var.cluster_name}
+      instanceStorePolicy: RAID0
       blockDeviceMappings:
         - deviceName: /dev/xvda
           ebs:
-            volumeSize: 500Gi
+            volumeSize: 100Gi
             volumeType: gp3
             encrypted: true
+            throughput: 1000
+            iops: 16000
+      userData: |
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+        --BOUNDARY
+        Content-Type: text/x-shellscript; charset="us-ascii"
+
+        #!/bin/bash
+        # SOCI parallel-pull tuning lives in /etc/soci-snapshotter-grpc/config.toml
+        # under [pull_modes.parallel_pull_unpack]. nodeadm cannot set these via
+        # containerd.config, so we edit the file directly before nodeadm init.
+        sed -i 's/^[[:space:]]*max_concurrent_downloads_per_image = .*/max_concurrent_downloads_per_image = 20/' /etc/soci-snapshotter-grpc/config.toml
+        sed -i 's/^[[:space:]]*max_concurrent_unpacks_per_image = .*/max_concurrent_unpacks_per_image = 12/' /etc/soci-snapshotter-grpc/config.toml
+        sed -i 's/^[[:space:]]*concurrent_download_chunk_size = .*/concurrent_download_chunk_size = "16mb"/' /etc/soci-snapshotter-grpc/config.toml
+        sed -i 's/^[[:space:]]*discard_unpacked_layers = .*/discard_unpacked_layers = true/' /etc/soci-snapshotter-grpc/config.toml
+
+        --BOUNDARY
+        Content-Type: application/node.eks.aws
+
+        apiVersion: node.eks.aws/v1alpha1
+        kind: NodeConfig
+        spec:
+          featureGates:
+            FastImagePull: true
+        --BOUNDARY--
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
