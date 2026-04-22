@@ -522,3 +522,14 @@ export interface RegisterCustomModelRequest {
   s3_uri: string;
   display_name: string;
 }
+
+// PRD-31: credentials management
+export interface CredentialMetadata {
+  set: boolean;
+  updated_at?: string;
+}
+
+export interface CredentialsStatus {
+  hf_token: CredentialMetadata;
+  dockerhub_token: CredentialMetadata;
+}

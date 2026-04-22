@@ -399,6 +399,32 @@ resource "aws_iam_role_policy" "api_models_s3_read" {
   })
 }
 
+# PRD-31: the API pod manages the HuggingFace + Docker Hub platform tokens
+# via AWS Secrets Manager. Scoped to just the two prefixes — the pod cannot
+# reach RDS, Karpenter, or any other Secrets Manager entries in the account.
+resource "aws_iam_role_policy" "api_config_secrets" {
+  name = "ConfigSecretsManager"
+  role = aws_iam_role.api_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:DeleteSecret",
+      ]
+      Resource = [
+        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:accelbench/config/*",
+        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:ecr-pullthroughcache/*",
+      ]
+    }]
+  })
+}
+
 # ---------- ECR Pull-through Cache for Docker Hub (PRD-29) ----------
 # Mirrors docker.io/vllm/vllm-openai:<tag> into our private ECR on first pull,
 # serving subsequent pulls from AWS. Secret ARN must be under

@@ -118,9 +118,14 @@ func (s *Server) handleCreateModelCache(w http.ResponseWriter, r *http.Request) 
 
 	jobName := fmt.Sprintf("cache-%s", id[:8])
 	hfToken := req.HfToken
-	if hfToken == "" {
-		if secretName := os.Getenv("HF_SECRET_NAME"); secretName != "" {
-			hfToken = "" // Token will be injected from secret in a future enhancement
+	if hfToken == "" && s.secrets != nil {
+		// PRD-31: fall back to the platform HF token from Secrets Manager.
+		// Errors are logged and swallowed — if the token isn't retrievable
+		// the cache job will fail with a clearer HF 401 than a secrets error.
+		if tok, err := s.secrets.GetHFToken(ctx); err == nil {
+			hfToken = tok
+		} else {
+			log.Printf("resolve platform HF token for cache job: %v", err)
 		}
 	}
 

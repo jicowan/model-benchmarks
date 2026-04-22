@@ -9,6 +9,7 @@ import ResultDetail from "./pages/ResultDetail";
 import SuiteResults from "./pages/SuiteResults";
 import Runs from "./pages/Runs";
 import ModelCachePage from "./pages/ModelCache";
+import Configuration from "./pages/Configuration";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/models" element={<ModelCachePage />} />
           <Route path="/estimate" element={<Estimate />} />
           <Route path="/catalog" element={<Catalog />} />
+          <Route path="/configuration" element={<Configuration />} />
 
           {/* Contextual routes */}
           <Route path="/compare" element={<Compare />} />

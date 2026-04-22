@@ -9,6 +9,7 @@ import (
 
 	"github.com/accelbench/accelbench/internal/api"
 	"github.com/accelbench/accelbench/internal/database"
+	"github.com/accelbench/accelbench/internal/secrets"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -43,6 +44,15 @@ func main() {
 	}
 
 	srv := api.NewServer(repo, k8sClient)
+
+	// PRD-31: wire up AWS Secrets Manager for HF / Docker Hub credentials.
+	// Non-fatal if construction fails — the credentials endpoints will
+	// return 500 and auto-injection is skipped.
+	if sm, err := secrets.New(ctx); err != nil {
+		log.Printf("secrets manager unavailable: %v", err)
+	} else {
+		srv.SetSecretsStore(sm)
+	}
 
 	// Recover any runs left in "running" status from a previous crash
 	go srv.RecoverOrphanedRuns(ctx)

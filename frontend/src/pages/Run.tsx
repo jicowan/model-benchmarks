@@ -415,7 +415,7 @@ export default function Run() {
         {/* HF Token — above model so search can use it */}
         <div>
           <label className="eyebrow block mb-1.5">
-            HF Token (optional, for gated models)
+            HF Token (optional, overrides platform default)
           </label>
           <div className="flex items-center gap-2">
             <input
@@ -423,7 +423,7 @@ export default function Run() {
               value={form.hf_token}
               onChange={(e) => set("hf_token", e.target.value)}
               onBlur={handleTokenBlur}
-              placeholder="hf_..."
+              placeholder="Uses platform token — leave blank for default"
               className="input flex-1"
             />
             {tokenStatus === "validating" && (

@@ -28,6 +28,7 @@ type Server struct {
 	client   kubernetes.Interface
 	hfClient recommend.HFClientInterface
 	seeder   *seed.Seeder
+	secrets  SecretsStore
 }
 
 // NewServer creates a new API server.
@@ -52,6 +53,13 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 	}
 	s.seeder = seed.New(repo, s)
 	return s
+}
+
+// SetSecretsStore injects the AWS Secrets Manager wrapper. Called from main
+// after construction so tests can leave it nil and the handlers will 500.
+func (s *Server) SetSecretsStore(store SecretsStore) {
+	s.secrets = store
+	s.orch.SetSecretsStore(store)
 }
 
 // RecoverOrphanedRuns attempts to complete any runs that were left in "running"
@@ -120,6 +128,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
 	mux.HandleFunc("DELETE /api/v1/model-cache/{id}", s.handleDeleteModelCache)
 	mux.HandleFunc("POST /api/v1/model-cache/register", s.handleRegisterCustomModel)
+	// PRD-31: Credentials management (HF token + Docker Hub token)
+	mux.HandleFunc("GET /api/v1/config/credentials", s.handleGetCredentials)
+	mux.HandleFunc("PUT /api/v1/config/credentials/hf-token", s.handlePutHFToken)
+	mux.HandleFunc("DELETE /api/v1/config/credentials/hf-token", s.handleDeleteHFToken)
+	mux.HandleFunc("PUT /api/v1/config/credentials/dockerhub-token", s.handlePutDockerHubToken)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -583,7 +596,18 @@ func (s *Server) handleCatalogSeed(w http.ResponseWriter, r *http.Request) {
 	}
 	dryRun := r.URL.Query().Get("dry_run") == "true"
 
-	id, err := s.seeder.Start(r.Context(), seed.Options{DryRun: dryRun})
+	// PRD-31: resolve the platform HF token so gated models in the matrix
+	// can be processed without the operator pasting a token per-seed.
+	var hfToken string
+	if s.secrets != nil {
+		if tok, err := s.secrets.GetHFToken(r.Context()); err == nil {
+			hfToken = tok
+		} else {
+			log.Printf("resolve platform HF token for seed: %v", err)
+		}
+	}
+
+	id, err := s.seeder.Start(r.Context(), seed.Options{DryRun: dryRun, HfToken: hfToken})
 	if err != nil {
 		if errors.Is(err, seed.ErrSeedAlreadyRunning) {
 			writeError(w, http.StatusConflict, err.Error())
