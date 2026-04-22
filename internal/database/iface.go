@@ -38,6 +38,27 @@ type Repo interface {
 	TestSuiteRepo
 	// Model cache operations
 	ModelCacheRepo
+	// Catalog seeding matrix (PRD-30)
+	CatalogMatrixRepo
+}
+
+// CatalogMatrixRepo defines the interface for the DB-backed seeding matrix
+// introduced in PRD-30 (replaces the accelbench-catalog-scripts ConfigMap).
+type CatalogMatrixRepo interface {
+	// Matrix reads
+	LoadCatalogMatrix(ctx context.Context) (*CatalogMatrix, error)
+	ModelCacheByHfID(ctx context.Context) (map[string]ModelCache, error)
+	// Dedup set for the seeder: all (model_hf_id, instance_type_name) pairs
+	// that already have a non-failed benchmark run.
+	ListRunKeys(ctx context.Context) ([]RunKey, error)
+	// Seed status lifecycle
+	CreateCatalogSeedStatus(ctx context.Context, id string, total int, dryRun bool) error
+	UpdateCatalogSeedProgress(ctx context.Context, id string, completed int) error
+	CompleteCatalogSeedStatus(ctx context.Context, id string) error
+	FailCatalogSeedStatus(ctx context.Context, id, errMsg string) error
+	InterruptActiveCatalogSeeds(ctx context.Context) error
+	GetLatestCatalogSeedStatus(ctx context.Context) (*CatalogSeedStatus, error)
+	GetActiveCatalogSeed(ctx context.Context) (*CatalogSeedStatus, error)
 }
 
 // OOMRepo defines the interface for OOM event operations.

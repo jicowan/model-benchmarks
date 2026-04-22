@@ -234,8 +234,12 @@ export interface InstanceType {
 }
 
 export interface CatalogSeedStatus {
-  job_name?: string;
-  status: "none" | "active" | "succeeded" | "failed";
+  seed_id?: string;
+  status: "none" | "active" | "completed" | "failed" | "interrupted";
+  total?: number;
+  completed?: number;
+  dry_run?: boolean;
+  error_message?: string;
   started_at?: string;
   completed_at?: string;
 }

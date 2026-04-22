@@ -3,12 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"errors"
-	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,12 +15,9 @@ import (
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/recommend"
 	"github.com/accelbench/accelbench/internal/scenario"
+	"github.com/accelbench/accelbench/internal/seed"
 	"github.com/accelbench/accelbench/internal/testsuite"
 
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -32,39 +27,51 @@ type Server struct {
 	orch     *orchestrator.Orchestrator
 	client   kubernetes.Interface
 	hfClient recommend.HFClientInterface
+	seeder   *seed.Seeder
 }
 
 // NewServer creates a new API server.
 func NewServer(repo database.Repo, client kubernetes.Interface) *Server {
-	return &Server{
+	s := &Server{
 		repo:     repo,
 		orch:     orchestrator.New(client, repo),
 		client:   client,
 		hfClient: recommend.NewHFClient(),
 	}
+	s.seeder = seed.New(repo, s)
+	return s
 }
 
 // NewServerWithHFClient creates a new API server with a custom HFClient (for testing).
 func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfClient recommend.HFClientInterface) *Server {
-	return &Server{
+	s := &Server{
 		repo:     repo,
 		orch:     orchestrator.New(client, repo),
 		client:   client,
 		hfClient: hfClient,
 	}
+	s.seeder = seed.New(repo, s)
+	return s
 }
 
 // RecoverOrphanedRuns attempts to complete any runs that were left in "running"
-// status due to an API restart. Call this on server startup.
+// status due to an API restart. Call this on server startup. Also marks any
+// in-flight seed goroutines as interrupted (PRD-30).
 func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
 	s.orch.RecoverOrphanedRuns(ctx)
+	if err := s.repo.InterruptActiveCatalogSeeds(ctx); err != nil {
+		log.Printf("interrupt active catalog seeds: %v", err)
+	}
 }
 
-// fetchModelConfig returns a ModelConfig for modelID. If the model is already
+// FetchModelConfig returns a ModelConfig for modelID. If the model is already
 // cached in S3 (status=cached with a matching hf_id), it reads config.json
 // from S3 — this avoids requiring an HF token for gated models. Otherwise it
 // falls back to the HuggingFace API.
-func (s *Server) fetchModelConfig(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
+//
+// Exported for use by internal/seed. The un-exported alias below keeps the
+// existing call sites in this package untouched.
+func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
 	if mc, _ := s.repo.GetModelCacheByHfID(ctx, modelID, "main"); mc != nil && mc.Status == "cached" {
 		if cfg, err := recommend.FetchModelConfigFromS3(ctx, mc.S3URI); err == nil {
 			return cfg, nil
@@ -149,35 +156,59 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	runID, err := s.CreateRun(r.Context(), &req)
+	if err != nil {
+		var crErr *createRunError
+		if errors.As(err, &crErr) {
+			writeError(w, crErr.status, crErr.msg)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "create run failed")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"id":     runID,
+		"status": "pending",
+	})
+}
 
-	ctx := r.Context()
+// createRunError carries an HTTP status + message for callers that want to
+// distinguish user errors from internal ones (the seeder doesn't, but the
+// HTTP handler does).
+type createRunError struct {
+	status int
+	msg    string
+}
 
+func (e *createRunError) Error() string { return e.msg }
+
+// CreateRun is the internal entry point shared by handleCreateRun and the
+// catalog seeder. Returns the new run ID or a *createRunError on user error,
+// or another error on internal failure. The orchestrator is kicked off in
+// a background goroutine on success.
+func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (string, error) {
 	// For S3-only models, derive model_hf_id from the S3 URI if not provided
 	if req.ModelHfID == "" && req.ModelS3URI != "" {
 		req.ModelHfID = req.ModelS3URI
 	}
 
 	if req.ModelHfID == "" {
-		writeError(w, http.StatusBadRequest, "model_hf_id or model_s3_uri is required")
-		return
+		return "", &createRunError{http.StatusBadRequest, "model_hf_id or model_s3_uri is required"}
 	}
 
 	// Look up or auto-register model.
 	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ensure model failed")
-		return
+		return "", fmt.Errorf("ensure model: %w", err)
 	}
 
 	// Look up instance type.
 	instType, err := s.repo.GetInstanceTypeByName(ctx, req.InstanceTypeName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "lookup instance type failed")
-		return
+		return "", fmt.Errorf("lookup instance type: %w", err)
 	}
 	if instType == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("instance type %s not found", req.InstanceTypeName))
-		return
+		return "", &createRunError{http.StatusNotFound, fmt.Sprintf("instance type %s not found", req.InstanceTypeName)}
 	}
 
 	// Default dataset from scenario if not provided
@@ -238,8 +269,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	runID, err := s.repo.CreateBenchmarkRun(ctx, run)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create run failed")
-		return
+		return "", fmt.Errorf("create benchmark run: %w", err)
 	}
 
 	// Launch orchestration in the background with a detached context
@@ -249,17 +279,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			RunID:        runID,
 			Model:        model,
 			InstanceType: instType,
-			Request:      &req,
+			Request:      req,
 		}
 		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"id":     runID,
-		"status": "pending",
-	})
+	return runID, nil
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
@@ -461,7 +488,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch model config (from S3 cache if available, else HuggingFace).
-	modelCfg, err := s.fetchModelConfig(r.Context(), modelID, hfToken)
+	modelCfg, err := s.FetchModelConfig(r.Context(), modelID, hfToken)
 	if err != nil {
 		var hfErr *recommend.HFError
 		if errors.As(err, &hfErr) {
@@ -547,178 +574,58 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
-const (
-	seedNamespace = "accelbench"
-	seedLabelKey  = "accelbench/role"
-	seedLabelVal  = "catalog-seed"
-)
-
+// handleCatalogSeed launches the in-process seeder (PRD-30). Replaces the
+// previous K8s Job + bash script implementation.
 func (s *Server) handleCatalogSeed(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	toolsImage := os.Getenv("TOOLS_IMAGE")
-	if toolsImage == "" {
-		writeError(w, http.StatusInternalServerError, "TOOLS_IMAGE not configured")
+	if s.seeder == nil {
+		writeError(w, http.StatusInternalServerError, "seeder not configured")
 		return
 	}
-	configMap := os.Getenv("CATALOG_CONFIGMAP")
-	if configMap == "" {
-		writeError(w, http.StatusInternalServerError, "CATALOG_CONFIGMAP not configured")
-		return
-	}
+	dryRun := r.URL.Query().Get("dry_run") == "true"
 
-	// Check for active seed jobs.
-	jobs, err := s.client.BatchV1().Jobs(seedNamespace).List(ctx, metav1.ListOptions{
-		LabelSelector: seedLabelKey + "=" + seedLabelVal,
-	})
+	id, err := s.seeder.Start(r.Context(), seed.Options{DryRun: dryRun})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list seed jobs")
-		return
-	}
-	for _, j := range jobs.Items {
-		if j.Status.Active > 0 {
-			writeError(w, http.StatusConflict, fmt.Sprintf("A catalog seed job is already running: %s", j.Name))
+		if errors.Is(err, seed.ErrSeedAlreadyRunning) {
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-	}
-
-	// Build the Job spec.
-	jobName := fmt.Sprintf("catalog-seed-%d", time.Now().Unix())
-	backoffLimit := int32(1)
-	ttl := int32(86400)
-
-	env := []corev1.EnvVar{
-		{
-			Name:  "API_URL",
-			Value: fmt.Sprintf("http://accelbench-api.%s.svc.cluster.local:8080", seedNamespace),
-		},
-	}
-	if secretName := os.Getenv("HF_SECRET_NAME"); secretName != "" {
-		env = append(env, corev1.EnvVar{
-			Name: "HF_TOKEN",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-					Key:                  "HF_TOKEN",
-					Optional:             boolPtr(true),
-				},
-			},
-		})
-	}
-
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: seedNamespace,
-			Labels:    map[string]string{seedLabelKey: seedLabelVal},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoffLimit,
-			TTLSecondsAfterFinished: &ttl,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:    "catalog-seed",
-							Image:   toolsImage,
-							Command: []string{"/bin/bash", "/scripts/seed-catalog.sh"},
-							Env:     env,
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "scripts", MountPath: "/scripts"},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("500m"),
-									corev1.ResourceMemory: resource.MustParse("256Mi"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("1"),
-									corev1.ResourceMemory: resource.MustParse("512Mi"),
-								},
-							},
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "scripts",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{Name: configMap},
-								},
-							},
-						},
-					},
-					NodeSelector: map[string]string{"accelbench/node-type": "system"},
-				},
-			},
-		},
-	}
-
-	created, err := s.client.BatchV1().Jobs(seedNamespace).Create(ctx, job, metav1.CreateOptions{})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create seed job: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("start seed: %v", err))
 		return
 	}
-
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"job_name": created.Name,
-		"status":   "active",
+		"seed_id": id,
+		"status":  "active",
 	})
 }
 
+// handleCatalogSeedStatus returns the latest seed's progress. Response shape
+// is a superset of the old job-based response to keep the UI working.
 func (s *Server) handleCatalogSeedStatus(w http.ResponseWriter, r *http.Request) {
-	jobs, err := s.client.BatchV1().Jobs(seedNamespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: seedLabelKey + "=" + seedLabelVal,
-	})
+	st, err := s.repo.GetLatestCatalogSeedStatus(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list seed jobs")
+		writeError(w, http.StatusInternalServerError, "query seed status")
 		return
 	}
-
-	if len(jobs.Items) == 0 {
+	if st == nil {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "none"})
 		return
 	}
-
-	// Sort by creation timestamp descending, pick most recent.
-	sort.Slice(jobs.Items, func(i, j int) bool {
-		return jobs.Items[i].CreationTimestamp.After(jobs.Items[j].CreationTimestamp.Time)
-	})
-	latest := jobs.Items[0]
-
-	status := seedJobStatus(&latest)
 	resp := map[string]any{
-		"job_name": latest.Name,
-		"status":   status,
+		"seed_id":    st.ID,
+		"status":     st.Status,
+		"total":      st.Total,
+		"completed":  st.Completed,
+		"dry_run":    st.DryRun,
+		"started_at": st.StartedAt.Format(time.RFC3339),
 	}
-	if latest.Status.StartTime != nil {
-		resp["started_at"] = latest.Status.StartTime.Format(time.RFC3339)
+	if st.ErrorMessage != nil {
+		resp["error_message"] = *st.ErrorMessage
 	}
-	if latest.Status.CompletionTime != nil {
-		resp["completed_at"] = latest.Status.CompletionTime.Format(time.RFC3339)
+	if st.CompletedAt != nil {
+		resp["completed_at"] = st.CompletedAt.Format(time.RFC3339)
 	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
-
-func seedJobStatus(job *batchv1.Job) string {
-	for _, c := range job.Status.Conditions {
-		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			return "succeeded"
-		}
-		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return "failed"
-		}
-	}
-	if job.Status.Active > 0 {
-		return "active"
-	}
-	// Job exists but hasn't started yet — treat as active.
-	return "active"
-}
-
-func boolPtr(b bool) *bool { return &b }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")

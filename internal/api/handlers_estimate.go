@@ -115,7 +115,7 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Fetch model config (from S3 cache if available, else HuggingFace).
-	modelCfg, err := s.fetchModelConfig(ctx, modelID, hfToken)
+	modelCfg, err := s.FetchModelConfig(ctx, modelID, hfToken)
 	if err != nil {
 		var hfErr *recommend.HFError
 		if errors.As(err, &hfErr) {

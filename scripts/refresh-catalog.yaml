@@ -32,30 +32,24 @@ spec:
                         values:
                           - system
           containers:
-            - name: seed
-              image: ghcr.io/accelbench/tools:latest
-              command: ["/bin/bash", "/scripts/seed-catalog.sh"]
-              env:
-                - name: API_URL
-                  value: "http://accelbench-api.accelbench.svc.cluster.local:8080"
-                - name: HF_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: accelbench-hf-token
-                      key: token
-                      optional: true
-              volumeMounts:
-                - name: scripts
-                  mountPath: /scripts
-                  readOnly: true
+            - name: trigger
+              image: curlimages/curl:8.11.0
+              # PRD-30: the seeder is now an in-process goroutine inside the
+              # API server. This CronJob just nudges the endpoint; the API
+              # reads the matrix from the DB and uses the platform HF token
+              # (PRD-31) for gated models.
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  curl -sfX POST \
+                    "http://accelbench-api.accelbench.svc.cluster.local:8080/api/v1/catalog/seed" \
+                    -o /dev/null -w 'HTTP %{http_code}\n'
               resources:
                 requests:
-                  cpu: "500m"
-                  memory: "256Mi"
+                  cpu: "50m"
+                  memory: "32Mi"
                 limits:
-                  cpu: "1"
-                  memory: "512Mi"
-          volumes:
-            - name: scripts
-              configMap:
-                name: accelbench-catalog-scripts
+                  cpu: "200m"
+                  memory: "64Mi"

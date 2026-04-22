@@ -48,7 +48,7 @@ export default function Catalog() {
       try {
         const s = await getCatalogSeedStatus();
         setSeedStatus(s.status);
-        if (s.status === "succeeded") {
+        if (s.status === "completed") {
           stopPolling();
           setSeedFlash(true);
           fetchData();
@@ -204,14 +204,14 @@ export default function Catalog() {
         <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
           <span className="text-ink-1">accelbench</span>
           <span className="text-ink-2">/</span>
-          <span className="text-ink-0">catalog</span>
+          <span className="text-ink-0">benchmarks</span>
         </div>
       </div>
       <div className="p-6 max-w-[1600px] mx-auto animate-enter">
       <div className="flex items-center justify-between mb-4">
         <div>
           <div className="eyebrow mb-2">BENCHMARK RESULTS INDEX</div>
-          <h1 className="font-sans text-[22px] leading-tight tracking-[-0.01em]">Catalog</h1>
+          <h1 className="font-sans text-[22px] leading-tight tracking-[-0.01em]">Benchmarks</h1>
         </div>
         <div className="flex items-center gap-3">
           {seedFlash && (
@@ -234,7 +234,7 @@ export default function Catalog() {
                 Seeding...
               </span>
             ) : (
-              "Seed Catalog"
+              "Seed Benchmarks"
             )}
           </button>
         </div>
@@ -329,7 +329,7 @@ export default function Catalog() {
           </table>
           {data.length === 0 && (
             <p className="text-center py-8 caption">
-              No results found. Adjust filters or seed the catalog.
+              No results found. Adjust filters or seed benchmarks.
             </p>
           )}
         </div>

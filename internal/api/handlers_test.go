@@ -11,9 +11,6 @@ import (
 
 	"github.com/accelbench/accelbench/internal/database"
 
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -640,37 +637,26 @@ func TestHandleDeleteRun_CancelsActiveRun(t *testing.T) {
 	}
 }
 
-// --- Catalog Seed API tests ---
+// --- Catalog Seed API tests (PRD-30: in-process seeder, DB-backed status) ---
 
-func setupSeedServer() (*Server, *http.ServeMux) {
+// emptyMatrix returns a repo with the seeding matrix preloaded as empty so
+// the seeder completes instantly without dispatching work.
+func emptyMatrixRepo() *database.MockRepo {
 	repo := seedRepo()
+	repo.SeedCatalogMatrix(&database.CatalogMatrix{})
+	return repo
+}
+
+func setupSeedServer(repo *database.MockRepo) *http.ServeMux {
 	client := fake.NewSimpleClientset()
 	srv := NewServer(repo, client)
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
-	return srv, mux
+	return mux
 }
 
-func TestHandleCatalogSeed_MissingEnv(t *testing.T) {
-	t.Setenv("TOOLS_IMAGE", "")
-	t.Setenv("CATALOG_CONFIGMAP", "")
-
-	_, mux := setupSeedServer()
-
-	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
-	}
-}
-
-func TestHandleCatalogSeed_Success(t *testing.T) {
-	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
-	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
-
-	_, mux := setupSeedServer()
+func TestHandleCatalogSeed_Starts(t *testing.T) {
+	mux := setupSeedServer(emptyMatrixRepo())
 
 	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
@@ -679,11 +665,10 @@ func TestHandleCatalogSeed_Success(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
 	}
-
 	var resp map[string]string
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["job_name"] == "" {
-		t.Error("response missing job_name")
+	if resp["seed_id"] == "" {
+		t.Error("response missing seed_id")
 	}
 	if resp["status"] != "active" {
 		t.Errorf("status = %s, want active", resp["status"])
@@ -691,23 +676,14 @@ func TestHandleCatalogSeed_Success(t *testing.T) {
 }
 
 func TestHandleCatalogSeed_ConflictWhenActive(t *testing.T) {
-	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
-	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
-
-	repo := seedRepo()
-	// Pre-create an active seed Job in the fake client.
-	activeJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "catalog-seed-existing",
-			Namespace: seedNamespace,
-			Labels:    map[string]string{seedLabelKey: seedLabelVal},
-		},
-		Status: batchv1.JobStatus{Active: 1},
-	}
-	client := fake.NewSimpleClientset(activeJob)
-	srv := NewServer(repo, client)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
+	repo := emptyMatrixRepo()
+	// Pre-seed an active status row.
+	repo.SeedCatalogStatus(&database.CatalogSeedStatus{
+		ID:        "existing-seed",
+		Status:    "active",
+		StartedAt: time.Now(),
+	})
+	mux := setupSeedServer(repo)
 
 	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
@@ -719,26 +695,15 @@ func TestHandleCatalogSeed_ConflictWhenActive(t *testing.T) {
 }
 
 func TestHandleCatalogSeed_AllowsAfterCompleted(t *testing.T) {
-	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
-	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
-
-	repo := seedRepo()
-	completedJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "catalog-seed-old",
-			Namespace: seedNamespace,
-			Labels:    map[string]string{seedLabelKey: seedLabelVal},
-		},
-		Status: batchv1.JobStatus{
-			Conditions: []batchv1.JobCondition{
-				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-			},
-		},
-	}
-	client := fake.NewSimpleClientset(completedJob)
-	srv := NewServer(repo, client)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
+	repo := emptyMatrixRepo()
+	completedAt := time.Now().Add(-1 * time.Hour)
+	repo.SeedCatalogStatus(&database.CatalogSeedStatus{
+		ID:          "old-seed",
+		Status:      "completed",
+		StartedAt:   completedAt.Add(-5 * time.Minute),
+		CompletedAt: &completedAt,
+	})
+	mux := setupSeedServer(repo)
 
 	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
@@ -749,8 +714,34 @@ func TestHandleCatalogSeed_AllowsAfterCompleted(t *testing.T) {
 	}
 }
 
+func TestHandleCatalogSeed_DryRunQuery(t *testing.T) {
+	repo := emptyMatrixRepo()
+	mux := setupSeedServer(repo)
+
+	req := httptest.NewRequest("POST", "/api/v1/catalog/seed?dry_run=true", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	// Wait for the goroutine to write the seed row, then check dry_run flag.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		st, _ := repo.GetLatestCatalogSeedStatus(context.Background())
+		if st != nil {
+			if !st.DryRun {
+				t.Error("expected dry_run=true in status row")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("seed status not written within 500ms")
+}
+
 func TestHandleCatalogSeedStatus_None(t *testing.T) {
-	_, mux := setupSeedServer()
+	mux := setupSeedServer(seedRepo())
 
 	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
@@ -759,7 +750,6 @@ func TestHandleCatalogSeedStatus_None(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-
 	var resp map[string]string
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp["status"] != "none" {
@@ -769,77 +759,55 @@ func TestHandleCatalogSeedStatus_None(t *testing.T) {
 
 func TestHandleCatalogSeedStatus_Active(t *testing.T) {
 	repo := seedRepo()
-	now := metav1.Now()
-	activeJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "catalog-seed-123",
-			Namespace:         seedNamespace,
-			Labels:            map[string]string{seedLabelKey: seedLabelVal},
-			CreationTimestamp: now,
-		},
-		Status: batchv1.JobStatus{
-			Active:    1,
-			StartTime: &now,
-		},
-	}
-	client := fake.NewSimpleClientset(activeJob)
-	srv := NewServer(repo, client)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
+	repo.SeedCatalogStatus(&database.CatalogSeedStatus{
+		ID:        "active-seed",
+		Status:    "active",
+		Total:     10,
+		Completed: 3,
+		StartedAt: time.Now(),
+	})
+	mux := setupSeedServer(repo)
 
 	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
 
 	var resp map[string]any
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp["status"] != "active" {
 		t.Errorf("status = %v, want active", resp["status"])
 	}
-	if resp["job_name"] != "catalog-seed-123" {
-		t.Errorf("job_name = %v, want catalog-seed-123", resp["job_name"])
+	if resp["seed_id"] != "active-seed" {
+		t.Errorf("seed_id = %v, want active-seed", resp["seed_id"])
+	}
+	// JSON numbers decode as float64.
+	if resp["total"] != float64(10) {
+		t.Errorf("total = %v, want 10", resp["total"])
+	}
+	if resp["completed"] != float64(3) {
+		t.Errorf("completed = %v, want 3", resp["completed"])
 	}
 }
 
-func TestHandleCatalogSeedStatus_Succeeded(t *testing.T) {
+func TestHandleCatalogSeedStatus_Completed(t *testing.T) {
 	repo := seedRepo()
-	now := metav1.Now()
-	completedJob := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "catalog-seed-456",
-			Namespace:         seedNamespace,
-			Labels:            map[string]string{seedLabelKey: seedLabelVal},
-			CreationTimestamp: now,
-		},
-		Status: batchv1.JobStatus{
-			StartTime:      &now,
-			CompletionTime: &now,
-			Conditions: []batchv1.JobCondition{
-				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-			},
-		},
-	}
-	client := fake.NewSimpleClientset(completedJob)
-	srv := NewServer(repo, client)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
+	now := time.Now()
+	repo.SeedCatalogStatus(&database.CatalogSeedStatus{
+		ID:          "done-seed",
+		Status:      "completed",
+		StartedAt:   now.Add(-5 * time.Minute),
+		CompletedAt: &now,
+	})
+	mux := setupSeedServer(repo)
 
 	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-
 	var resp map[string]any
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["status"] != "succeeded" {
-		t.Errorf("status = %v, want succeeded", resp["status"])
+	if resp["status"] != "completed" {
+		t.Errorf("status = %v, want completed", resp["status"])
 	}
 	if resp["completed_at"] == nil {
 		t.Error("expected completed_at to be set")
@@ -848,36 +816,15 @@ func TestHandleCatalogSeedStatus_Succeeded(t *testing.T) {
 
 func TestHandleCatalogSeedStatus_MostRecent(t *testing.T) {
 	repo := seedRepo()
-	older := metav1.NewTime(time.Now().Add(-1 * time.Hour))
-	newer := metav1.Now()
-	jobs := []batchv1.Job{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              "catalog-seed-old",
-				Namespace:         seedNamespace,
-				Labels:            map[string]string{seedLabelKey: seedLabelVal},
-				CreationTimestamp: older,
-			},
-			Status: batchv1.JobStatus{
-				Conditions: []batchv1.JobCondition{
-					{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-				},
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              "catalog-seed-new",
-				Namespace:         seedNamespace,
-				Labels:            map[string]string{seedLabelKey: seedLabelVal},
-				CreationTimestamp: newer,
-			},
-			Status: batchv1.JobStatus{Active: 1},
-		},
-	}
-	client := fake.NewSimpleClientset(&jobs[0], &jobs[1])
-	srv := NewServer(repo, client)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
+	older := time.Now().Add(-1 * time.Hour)
+	newer := time.Now()
+	repo.SeedCatalogStatus(&database.CatalogSeedStatus{
+		ID: "old-seed", Status: "completed", StartedAt: older,
+	})
+	repo.SeedCatalogStatus(&database.CatalogSeedStatus{
+		ID: "new-seed", Status: "active", StartedAt: newer,
+	})
+	mux := setupSeedServer(repo)
 
 	req := httptest.NewRequest("GET", "/api/v1/catalog/seed", nil)
 	w := httptest.NewRecorder()
@@ -885,26 +832,10 @@ func TestHandleCatalogSeedStatus_MostRecent(t *testing.T) {
 
 	var resp map[string]any
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["job_name"] != "catalog-seed-new" {
-		t.Errorf("job_name = %v, want catalog-seed-new (most recent)", resp["job_name"])
+	if resp["seed_id"] != "new-seed" {
+		t.Errorf("seed_id = %v, want new-seed (most recent)", resp["seed_id"])
 	}
 	if resp["status"] != "active" {
 		t.Errorf("status = %v, want active", resp["status"])
-	}
-}
-
-func TestHandleCatalogSeed_WithHFSecret(t *testing.T) {
-	t.Setenv("TOOLS_IMAGE", "test-registry/tools:latest")
-	t.Setenv("CATALOG_CONFIGMAP", "accelbench-catalog-scripts")
-	t.Setenv("HF_SECRET_NAME", "my-hf-secret")
-
-	_, mux := setupSeedServer()
-
-	req := httptest.NewRequest("POST", "/api/v1/catalog/seed", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
 	}
 }
