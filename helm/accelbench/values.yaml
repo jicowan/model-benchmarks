@@ -124,6 +124,11 @@ catalogSeed:
   enabled: true
 
 # -- HuggingFace token (optional, for gated model access)
+# PRD-31: Prefer setting this via the Configuration page (/configuration) once
+# the API is running. The page stores the token in AWS Secrets Manager at
+# accelbench/config/hf-token and auto-injects it into benchmark runs, cache
+# jobs, and catalog seeds. The values below are kept as a bootstrap path for
+# clusters that want to pre-configure before first boot.
 huggingface:
   token: ""
   existingSecret: ""

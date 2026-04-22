@@ -252,12 +252,12 @@ export default function Models() {
                   />
                 </div>
                 <div>
-                  <label className="eyebrow block mb-1.5">HF TOKEN <span className="text-ink-2 normal-case">(optional, for gated models)</span></label>
+                  <label className="eyebrow block mb-1.5">HF TOKEN <span className="text-ink-2 normal-case">(optional, overrides platform default)</span></label>
                   <input
                     type="password"
                     value={cacheToken}
                     onChange={(e) => setCacheToken(e.target.value)}
-                    placeholder="hf_…"
+                    placeholder="Uses platform token — leave blank for default"
                     className="input w-full"
                   />
                 </div>

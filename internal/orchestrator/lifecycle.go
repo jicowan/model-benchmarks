@@ -46,10 +46,17 @@ type RunConfig struct {
 }
 
 // Orchestrator manages the benchmark lifecycle.
+// HFTokenResolver is satisfied by any store that can return the platform
+// HuggingFace token (empty string = not configured).
+type HFTokenResolver interface {
+	GetHFToken(ctx context.Context) (string, error)
+}
+
 type Orchestrator struct {
 	client      kubernetes.Interface
 	repo        database.Repo
 	oomDetector *oom.Detector
+	secrets     HFTokenResolver // optional; nil = no auto-injection
 	mu          sync.Mutex
 	cancels     map[string]context.CancelFunc // runID → cancel
 }
@@ -62,6 +69,31 @@ func New(client kubernetes.Interface, repo database.Repo) *Orchestrator {
 		oomDetector: oom.NewDetector(client, defaultNamespace),
 		cancels:     make(map[string]context.CancelFunc),
 	}
+}
+
+// SetSecretsStore enables HF token auto-injection. Called from the API server
+// after construction; leaving it unset falls back to per-request tokens only.
+func (o *Orchestrator) SetSecretsStore(s HFTokenResolver) {
+	o.secrets = s
+}
+
+// resolveHFToken returns the per-request token when set, otherwise the
+// platform token from Secrets Manager, otherwise "". Errors fetching the
+// platform token are logged and swallowed — gated models will fail at HF
+// with a clearer 401 than a Secrets Manager error.
+func (o *Orchestrator) resolveHFToken(ctx context.Context, perRequest string) string {
+	if perRequest != "" {
+		return perRequest
+	}
+	if o.secrets == nil {
+		return ""
+	}
+	tok, err := o.secrets.GetHFToken(ctx)
+	if err != nil {
+		log.Printf("resolve platform HF token: %v (proceeding without token)", err)
+		return ""
+	}
+	return tok
 }
 
 // CancelRun cancels a running benchmark by its run ID. Returns true if
@@ -264,7 +296,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		Name:                 name,
 		Namespace:            ns,
 		ModelHfID:            cfg.Request.ModelHfID,
-		HfToken:              cfg.Request.HfToken,
+		HfToken:              o.resolveHFToken(ctx, cfg.Request.HfToken),
 		Framework:            cfg.Request.Framework,
 		FrameworkVersion:     cfg.Request.FrameworkVersion,
 		TensorParallelDegree: cfg.Request.TensorParallelDegree,
@@ -480,7 +512,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		ResultsS3Bucket:    resultsBucket,
 		ResultsS3Key:       resultsKey,
 		AWSRegion:          awsRegion,
-		HfToken:            cfg.Request.HfToken,
+		HfToken:            o.resolveHFToken(ctx, cfg.Request.HfToken),
 	})
 	if err != nil {
 		return err

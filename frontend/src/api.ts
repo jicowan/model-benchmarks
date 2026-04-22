@@ -22,6 +22,7 @@ import type {
   CacheModelRequest,
   RegisterCustomModelRequest,
   StatusResponse,
+  CredentialsStatus,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -279,4 +280,38 @@ export async function registerCustomModel(req: RegisterCustomModelRequest): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
+}
+
+// PRD-31: Configuration / Credentials
+export async function getCredentials(): Promise<CredentialsStatus> {
+  return fetchJSON<CredentialsStatus>(`${BASE}/config/credentials`);
+}
+
+export async function putHFToken(token: string): Promise<void> {
+  const res = await fetch(`${BASE}/config/credentials/hf-token`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `PUT hf-token failed: ${res.status}`);
+  }
+}
+
+export async function deleteHFToken(): Promise<void> {
+  const res = await fetch(`${BASE}/config/credentials/hf-token`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`DELETE hf-token failed: ${res.status}`);
+}
+
+export async function putDockerHubToken(username: string, access_token: string): Promise<void> {
+  const res = await fetch(`${BASE}/config/credentials/dockerhub-token`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, access_token }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `PUT dockerhub-token failed: ${res.status}`);
+  }
 }
