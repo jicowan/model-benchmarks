@@ -96,6 +96,30 @@ func (o *Orchestrator) resolveHFToken(ctx context.Context, perRequest string) st
 	return tok
 }
 
+// resolveScenario returns the code-defined scenario with any DB-stored
+// per-scenario overrides (PRD-32) merged in. Returns nil if the scenario
+// ID is unknown.
+func (o *Orchestrator) resolveScenario(ctx context.Context, id string) *scenario.Scenario {
+	code := scenario.Get(id)
+	if code == nil {
+		return nil
+	}
+	ov, err := o.repo.GetScenarioOverride(ctx, id)
+	if err != nil {
+		log.Printf("load scenario override for %s: %v (using code defaults)", id, err)
+		return code
+	}
+	if ov == nil {
+		return code
+	}
+	return code.Merge(&scenario.Override{
+		NumWorkers: ov.NumWorkers,
+		Streaming:  ov.Streaming,
+		InputMean:  ov.InputMean,
+		OutputMean: ov.OutputMean,
+	})
+}
+
 // CancelRun cancels a running benchmark by its run ID. Returns true if
 // a cancel function was found and invoked.
 func (o *Orchestrator) CancelRun(runID string) bool {
@@ -364,8 +388,8 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 	var inferencePerfConfig manifest.InferencePerfConfigParams
 
 	if cfg.Request.ScenarioID != "" {
-		// Use predefined scenario
-		s := scenario.Get(cfg.Request.ScenarioID)
+		// Use predefined scenario, with DB overrides (PRD-32) applied.
+		s := o.resolveScenario(ctx, cfg.Request.ScenarioID)
 		if s == nil {
 			return fmt.Errorf("unknown scenario: %s", cfg.Request.ScenarioID)
 		}

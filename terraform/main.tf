@@ -425,6 +425,27 @@ resource "aws_iam_role_policy" "api_config_secrets" {
   })
 }
 
+# PRD-32: Registry card on the Configuration page lists cached repos in the
+# pull-through cache and their size + last-pulled timestamps. Describe-only,
+# no mutation, resource="*" because ECR DescribeRepositories/DescribeImages
+# don't support prefix-scoped resource ARNs.
+resource "aws_iam_role_policy" "api_ecr_describe" {
+  name = "ECRDescribe"
+  role = aws_iam_role.api_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # ---------- ECR Pull-through Cache for Docker Hub (PRD-29) ----------
 # Mirrors docker.io/vllm/vllm-openai:<tag> into our private ECR on first pull,
 # serving subsequent pulls from AWS. Secret ARN must be under
