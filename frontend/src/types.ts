@@ -610,3 +610,28 @@ export interface AuditLogEntry {
   actor?: string;
   summary: string;
 }
+
+// PRD-33: capacity reservations card
+export interface ReservationSummary {
+  id: string;
+  type: string; // "default" | "capacity-block" | "unknown"
+  state: string; // active | scheduled | expired | cancelled | pending | failed | payment-pending | payment-failed | unknown
+  instance_type: string;
+  availability_zone: string;
+  total_instance_count: number;
+  available_instance_count: number;
+  start_date?: string;
+  end_date?: string;
+  end_date_type?: string;
+  drain_warning_at?: string;
+  tags?: Record<string, string>;
+}
+
+export interface NodePoolReservations {
+  node_class: string;
+  node_pool: string;
+  instance_families: string[];
+  subnet_azs: string[];
+  capacity_type_includes_reserved: boolean;
+  reservations: ReservationSummary[];
+}

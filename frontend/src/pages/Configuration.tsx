@@ -12,6 +12,9 @@ import {
   getRegistry,
   listAuditLog,
   listInstanceTypes,
+  listCapacityReservations,
+  attachCapacityReservation,
+  detachCapacityReservation,
 } from "../api";
 import type {
   CredentialsStatus,
@@ -22,6 +25,8 @@ import type {
   RegistryStatus,
   AuditLogEntry,
   InstanceType,
+  NodePoolReservations,
+  ReservationSummary,
 } from "../types";
 import ModelCombobox from "../components/ModelCombobox";
 
@@ -782,6 +787,207 @@ function formatBytes(n: number): string {
 
 /* ---------------------- Audit log accordion (PRD-32) ------------------ */
 
+/* -------------------- Capacity Reservations card (PRD-33) ------------- */
+
+function CapacityReservationsCard() {
+  const [pools, setPools] = useState<NodePoolReservations[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      setPools(await listCapacityReservations());
+    } catch (err: any) {
+      setError(err.message || "Failed to load capacity reservations");
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (!pools) {
+    return (
+      <CollapsibleSection index="E" label="Capacity Reservations">
+        <div className="panel p-5 caption">{error ? error : "Loading…"}</div>
+      </CollapsibleSection>
+    );
+  }
+
+  return (
+    <CollapsibleSection index="E" label="Capacity Reservations">
+      <div className="panel p-5">
+        <p className="meta mb-4 max-w-2xl">
+          Attach EC2 on-demand capacity reservations (ODCRs) or Capacity Blocks for ML (CBRs) to the
+          GPU and Neuron Karpenter NodeClasses. Karpenter prioritizes reserved capacity over
+          on-demand; fallback to on-demand happens automatically when reservations are exhausted.
+        </p>
+        {error && <p className="caption text-danger mb-3">{error}</p>}
+
+        <div className="space-y-6">
+          {pools.map((np) => (
+            <NodePoolReservationsBlock key={np.node_class} pool={np} onChanged={refresh} />
+          ))}
+        </div>
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+function NodePoolReservationsBlock({
+  pool,
+  onChanged,
+}: {
+  pool: NodePoolReservations;
+  onChanged: () => void;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [newID, setNewID] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  async function handleAttach(e: React.FormEvent) {
+    e.preventDefault();
+    const id = newID.trim();
+    if (!id) return;
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      await attachCapacityReservation(pool.node_class, id);
+      setNewID("");
+      setShowForm(false);
+      onChanged();
+    } catch (err: any) {
+      setFormError(err.message || "Attach failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDetach(id: string) {
+    if (!confirm(`Remove reservation ${id} from ${pool.node_class}?`)) return;
+    try {
+      await detachCapacityReservation(pool.node_class, id);
+      onChanged();
+    } catch (err: any) {
+      // Inline per-row error handling is noisy; surface via alert for now.
+      alert(err.message || "Detach failed");
+    }
+  }
+
+  return (
+    <div className="border border-line/60 p-4">
+      <div className="flex items-baseline justify-between mb-2">
+        <div className="flex items-baseline gap-3">
+          <span className="font-mono text-[13px] text-ink-0">{pool.node_class}</span>
+          <span className="caption uppercase">NodePool</span>
+        </div>
+        {!showForm && (
+          <button onClick={() => setShowForm(true)} className="btn btn-ghost">+ ATTACH RESERVATION</button>
+        )}
+      </div>
+
+      <div className="caption mb-3">
+        <span className="text-ink-2">families:</span> {pool.instance_families.join(", ") || "—"}
+        <span className="mx-2 text-ink-2">·</span>
+        <span className="text-ink-2">AZs:</span> {pool.subnet_azs.join(", ") || "—"}
+        {!pool.capacity_type_includes_reserved && (
+          <>
+            <span className="mx-2 text-ink-2">·</span>
+            <span className="text-danger">capacity-type does NOT include 'reserved'</span>
+          </>
+        )}
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleAttach} className="flex items-start gap-2 mb-3">
+          <input
+            value={newID}
+            onChange={(e) => setNewID(e.target.value)}
+            placeholder="cr-0abc1234567890abc"
+            autoFocus
+            className="input flex-1 font-mono"
+          />
+          <button type="submit" disabled={submitting || !newID.trim()} className="btn btn-primary">
+            {submitting ? "ATTACHING…" : "ATTACH"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setShowForm(false); setNewID(""); setFormError(null); }}
+            className="btn btn-ghost"
+          >
+            CANCEL
+          </button>
+        </form>
+      )}
+      {formError && <div className="caption text-danger mb-3">{formError}</div>}
+
+      {pool.reservations.length === 0 ? (
+        <p className="caption">No reservations attached.</p>
+      ) : (
+        <div className="space-y-2">
+          {pool.reservations.map((r) => (
+            <ReservationRow key={r.id} res={r} onDetach={() => handleDetach(r.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReservationRow({ res, onDetach }: { res: ReservationSummary; onDetach: () => void }) {
+  const stateClass =
+    res.state === "active" ? "text-signal" :
+    res.state === "scheduled" || res.state === "pending" || res.state === "payment-pending" ? "text-warn" :
+    res.state === "unknown" ? "text-ink-2" :
+    "text-danger";
+
+  const typeLabel = res.type === "capacity-block" ? "CAPACITY BLOCK" : res.type === "default" ? "ODCR" : res.type.toUpperCase();
+
+  return (
+    <div className="bg-surface-0 border border-line p-3">
+      <div className="flex items-baseline justify-between gap-2 mb-1">
+        <div className="flex items-baseline gap-3 min-w-0">
+          <span className="path">{res.id}</span>
+          <span className={`font-mono text-[10px] tracking-widemech uppercase ${stateClass}`}>
+            {res.state}
+          </span>
+          <span className="caption">{typeLabel}</span>
+        </div>
+        <button onClick={onDetach} className="btn btn-ghost text-danger" title="Remove">×</button>
+      </div>
+      {res.state !== "unknown" ? (
+        <div className="caption">
+          <span>{res.instance_type || "—"}</span>
+          <span className="mx-2 text-ink-2">·</span>
+          <span>{res.availability_zone || "—"}</span>
+          <span className="mx-2 text-ink-2">·</span>
+          <span className="tabular">
+            {res.available_instance_count} / {res.total_instance_count} available
+          </span>
+          {(res.start_date || res.end_date) && (
+            <>
+              <span className="mx-2 text-ink-2">·</span>
+              <span>
+                {res.start_date ? formatDate(res.start_date) : "—"}
+                {res.end_date ? ` → ${formatDate(res.end_date)}` : " (no end)"}
+              </span>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="caption text-ink-2">
+          EC2 returned no data for this reservation (may be in another region or access denied).
+          Remove to clean up.
+        </div>
+      )}
+      {res.drain_warning_at && (
+        <div className="caption text-warn mt-1">
+          ⚠ Karpenter drains nodes at {formatDate(res.drain_warning_at)} (~40 min before capacity block ends)
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuditLogAccordion() {
   const [entries, setEntries] = useState<AuditLogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -797,7 +1003,7 @@ function AuditLogAccordion() {
   }, [requested]);
 
   return (
-    <CollapsibleSection index="E" label="Audit Log">
+    <CollapsibleSection index="F" label="Audit Log">
       <div className="panel p-5">
         {entries === null && !error && <p className="caption">Loading…</p>}
         {error && <p className="caption text-danger">{error}</p>}
@@ -860,6 +1066,7 @@ export default function Configuration() {
             <SeedingMatrixCard />
             <ScenarioOverridesCard />
             <RegistryCard />
+            <CapacityReservationsCard />
             <AuditLogAccordion />
           </>
         )}
