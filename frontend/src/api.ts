@@ -23,6 +23,11 @@ import type {
   RegisterCustomModelRequest,
   StatusResponse,
   CredentialsStatus,
+  CatalogMatrixPayload,
+  ScenarioOverrideEntry,
+  ScenarioOverride,
+  RegistryStatus,
+  AuditLogEntry,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -314,4 +319,64 @@ export async function putDockerHubToken(username: string, access_token: string):
     const body = await res.text();
     throw new Error(body || `PUT dockerhub-token failed: ${res.status}`);
   }
+}
+
+// PRD-32: catalog matrix editor
+export async function getCatalogMatrix(): Promise<CatalogMatrixPayload> {
+  return fetchJSON<CatalogMatrixPayload>(`${BASE}/config/catalog-matrix`);
+}
+
+export async function putCatalogMatrix(payload: CatalogMatrixPayload): Promise<CatalogMatrixPayload> {
+  const res = await fetch(`${BASE}/config/catalog-matrix`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    if (res.status === 409) {
+      throw new Error("CONFLICT: " + (body || "catalog matrix modified elsewhere"));
+    }
+    throw new Error(body || `PUT catalog-matrix failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+// PRD-32: scenario overrides
+export async function listScenarioOverrides(): Promise<ScenarioOverrideEntry[]> {
+  return fetchJSON<ScenarioOverrideEntry[]>(`${BASE}/config/scenario-overrides`);
+}
+
+export async function putScenarioOverride(
+  scenarioID: string,
+  override: Partial<Omit<ScenarioOverride, "scenario_id" | "updated_at">>,
+): Promise<void> {
+  const res = await fetch(`${BASE}/config/scenario-overrides/${encodeURIComponent(scenarioID)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(override),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `PUT scenario-override failed: ${res.status}`);
+  }
+}
+
+export async function deleteScenarioOverride(scenarioID: string): Promise<void> {
+  const res = await fetch(`${BASE}/config/scenario-overrides/${encodeURIComponent(scenarioID)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(`DELETE scenario-override failed: ${res.status}`);
+  }
+}
+
+// PRD-32: registry card
+export async function getRegistry(): Promise<RegistryStatus> {
+  return fetchJSON<RegistryStatus>(`${BASE}/config/registry`);
+}
+
+// PRD-32: audit log
+export async function listAuditLog(limit = 50): Promise<AuditLogEntry[]> {
+  return fetchJSON<AuditLogEntry[]>(`${BASE}/config/audit-log?limit=${limit}`);
 }

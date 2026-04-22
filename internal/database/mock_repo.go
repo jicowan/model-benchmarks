@@ -22,6 +22,8 @@ type MockRepo struct {
 	modelCache      map[string]*ModelCache       // keyed by cache ID
 	catalogMatrix   *CatalogMatrix               // PRD-30 seeding matrix
 	catalogSeeds    map[string]*CatalogSeedStatus
+	scenarioOver    map[string]*ScenarioOverride // PRD-32
+	auditLog        []ConfigAuditEntry           // PRD-32
 	nextID          int
 }
 
@@ -951,4 +953,85 @@ func (m *MockRepo) GetActiveCatalogSeed(_ context.Context) (*CatalogSeedStatus, 
 		}
 	}
 	return nil, nil
+}
+
+// --- ConfigRepo mock methods (PRD-32) ---
+
+func (m *MockRepo) PutCatalogMatrix(_ context.Context, cm *CatalogMatrix, _ time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Mock ignores optimistic concurrency — tests can call directly.
+	cp := *cm
+	m.catalogMatrix = &cp
+	return nil
+}
+
+func (m *MockRepo) ListScenarioOverrides(_ context.Context) ([]ScenarioOverride, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ScenarioOverride, 0, len(m.scenarioOver))
+	for _, o := range m.scenarioOver {
+		out = append(out, *o)
+	}
+	return out, nil
+}
+
+func (m *MockRepo) GetScenarioOverride(_ context.Context, scenarioID string) (*ScenarioOverride, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if o, ok := m.scenarioOver[scenarioID]; ok {
+		cp := *o
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (m *MockRepo) UpsertScenarioOverride(_ context.Context, o *ScenarioOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.scenarioOver == nil {
+		m.scenarioOver = make(map[string]*ScenarioOverride)
+	}
+	cp := *o
+	cp.UpdatedAt = time.Now()
+	m.scenarioOver[o.ScenarioID] = &cp
+	return nil
+}
+
+func (m *MockRepo) DeleteScenarioOverride(_ context.Context, scenarioID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.scenarioOver, scenarioID)
+	return nil
+}
+
+func (m *MockRepo) InsertAuditLog(_ context.Context, action, summary string, actor *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.auditLog = append(m.auditLog, ConfigAuditEntry{
+		ID:      int64(len(m.auditLog) + 1),
+		At:      time.Now(),
+		Action:  action,
+		Actor:   actor,
+		Summary: summary,
+	})
+	return nil
+}
+
+func (m *MockRepo) ListAuditLog(_ context.Context, limit int) ([]ConfigAuditEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 {
+		limit = 50
+	}
+	// Reverse chronological.
+	n := len(m.auditLog)
+	if n > limit {
+		n = limit
+	}
+	out := make([]ConfigAuditEntry, n)
+	for i := 0; i < n; i++ {
+		out[i] = m.auditLog[len(m.auditLog)-1-i]
+	}
+	return out, nil
 }

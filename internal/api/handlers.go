@@ -133,6 +133,14 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/config/credentials/hf-token", s.handlePutHFToken)
 	mux.HandleFunc("DELETE /api/v1/config/credentials/hf-token", s.handleDeleteHFToken)
 	mux.HandleFunc("PUT /api/v1/config/credentials/dockerhub-token", s.handlePutDockerHubToken)
+	// PRD-32: Catalog matrix editor, scenario overrides, registry, audit log
+	mux.HandleFunc("GET /api/v1/config/catalog-matrix", s.handleGetCatalogMatrix)
+	mux.HandleFunc("PUT /api/v1/config/catalog-matrix", s.handlePutCatalogMatrix)
+	mux.HandleFunc("GET /api/v1/config/scenario-overrides", s.handleListScenarioOverrides)
+	mux.HandleFunc("PUT /api/v1/config/scenario-overrides/{id}", s.handlePutScenarioOverride)
+	mux.HandleFunc("DELETE /api/v1/config/scenario-overrides/{id}", s.handleDeleteScenarioOverride)
+	mux.HandleFunc("GET /api/v1/config/registry", s.handleGetRegistry)
+	mux.HandleFunc("GET /api/v1/config/audit-log", s.handleListAuditLog)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

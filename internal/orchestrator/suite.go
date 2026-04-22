@@ -10,7 +10,6 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
-	"github.com/accelbench/accelbench/internal/scenario"
 	"github.com/accelbench/accelbench/internal/testsuite"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -225,7 +224,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 
 // runScenario executes a single scenario and returns metrics.
 func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID, scenarioID string, cfg RunConfig) (*database.BenchmarkMetrics, string, error) {
-	s := scenario.Get(scenarioID)
+	s := o.resolveScenario(ctx, scenarioID)
 	if s == nil {
 		return nil, "", fmt.Errorf("unknown scenario: %s", scenarioID)
 	}

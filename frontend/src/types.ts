@@ -533,3 +533,80 @@ export interface CredentialsStatus {
   hf_token: CredentialMetadata;
   dockerhub_token: CredentialMetadata;
 }
+
+// PRD-32: catalog matrix editor
+export interface CatalogSeedDefaults {
+  framework_version: string;
+  scenario: string;
+  dataset: string;
+  min_duration_seconds: number;
+  updated_at?: string;
+}
+
+export interface CatalogModelEntry {
+  id?: number;
+  hf_id: string;
+  family?: string;
+  enabled: boolean;
+  updated_at?: string;
+}
+
+export interface CatalogInstanceTypeEntry {
+  id?: number;
+  name: string;
+  enabled: boolean;
+  updated_at?: string;
+}
+
+export interface CatalogMatrixPayload {
+  defaults: CatalogSeedDefaults;
+  models: CatalogModelEntry[];
+  instance_types: CatalogInstanceTypeEntry[];
+  version?: string;
+}
+
+// PRD-32: scenario overrides
+export interface ScenarioOverride {
+  scenario_id: string;
+  num_workers?: number | null;
+  streaming?: boolean | null;
+  input_mean?: number | null;
+  output_mean?: number | null;
+  updated_at?: string;
+}
+
+export interface ScenarioOverrideEntry {
+  scenario_id: string;
+  name: string;
+  defaults: {
+    num_workers: number;
+    streaming: boolean;
+    input_mean: number;
+    output_mean: number;
+  };
+  override?: ScenarioOverride;
+  updated_at?: string;
+}
+
+// PRD-32: registry card
+export interface RegistryRepoSummary {
+  name: string;
+  size_bytes: number;
+  last_pulled_at?: string;
+}
+
+export interface RegistryStatus {
+  enabled: boolean;
+  uri?: string;
+  repositories?: RegistryRepoSummary[];
+  helm_hint?: string;
+}
+
+// PRD-32: audit log
+export interface AuditLogEntry {
+  id: number;
+  at: string;
+  action: string;
+  actor?: string;
+  summary: string;
+}

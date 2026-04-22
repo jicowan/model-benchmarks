@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
+	github.com/aws/aws-sdk-go-v2/service/ecr v1.57.1
 	github.com/aws/aws-sdk-go-v2/service/pricing v1.40.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.0
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.6

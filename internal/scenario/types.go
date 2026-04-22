@@ -94,3 +94,52 @@ func inferAPIType(dataset string) string {
 		return "chat"
 	}
 }
+
+// Override is the subset of a Scenario that operators can tune from the
+// Configuration page (PRD-32). All fields are pointers so nil means
+// "inherit from the code-defined scenario".
+type Override struct {
+	NumWorkers *int
+	Streaming  *bool
+	InputMean  *int
+	OutputMean *int
+}
+
+// Merge returns a copy of s with any non-nil fields from ov applied.
+// When input_mean / output_mean are overridden, the std_dev/min/max
+// bounds are re-derived from the new mean using the same formula the
+// built-in scenarios use (std_dev = mean/4, min = mean/2, max = mean*2).
+// This keeps the distribution bounds internally consistent with the
+// new mean, and avoids giving operators four tightly-coupled knobs per
+// dimension.
+func (s *Scenario) Merge(ov *Override) *Scenario {
+	out := *s // copy
+	if ov == nil {
+		return &out
+	}
+	if ov.NumWorkers != nil {
+		out.NumWorkers = *ov.NumWorkers
+	}
+	if ov.Streaming != nil {
+		out.Streaming = *ov.Streaming
+	}
+	if ov.InputMean != nil {
+		out.Input = deriveDistribution(*ov.InputMean)
+	}
+	if ov.OutputMean != nil {
+		out.Output = deriveDistribution(*ov.OutputMean)
+	}
+	return &out
+}
+
+func deriveDistribution(mean int) Distribution {
+	if mean < 1 {
+		mean = 1
+	}
+	return Distribution{
+		Mean:   mean,
+		StdDev: mean / 4,
+		Min:    mean / 2,
+		Max:    mean * 2,
+	}
+}
