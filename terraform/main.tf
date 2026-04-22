@@ -152,6 +152,16 @@ resource "kubernetes_namespace" "accelbench" {
     }
   }
 
+  # Helm adds its own labels (app.kubernetes.io/version, helm.sh/chart)
+  # and hook annotations on every install/upgrade. Terraform owns the
+  # namespace's existence; Helm owns its per-release metadata.
+  lifecycle {
+    ignore_changes = [
+      metadata[0].labels,
+      metadata[0].annotations,
+    ]
+  }
+
   depends_on = [module.eks]
 }
 
