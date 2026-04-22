@@ -134,7 +134,7 @@ export default function ResultDetail() {
 
   const runningCaption =
     run.status === "running" || run.status === "pending"
-      ? "BENCHMARK RUNNING · RESULTS WILL APPEAR WHEN COMPLETE"
+      ? "RESULTS WILL APPEAR WHEN COMPLETE"
       : null;
 
   return (

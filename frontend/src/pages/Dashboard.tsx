@@ -380,7 +380,7 @@ export default function Dashboard() {
             <section className="flex flex-col flex-1 min-h-0">
               <SectionHeader
                 index="C"
-                label="Catalog"
+                label="Benchmarks"
                 action={
                   <Link to="/catalog" className="btn btn-ghost">
                     OPEN →
