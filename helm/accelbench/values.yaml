@@ -140,3 +140,10 @@ models:
   # -- S3 bucket name for cached/custom model weights (Run:ai Streamer)
   # Set from Terraform output: accelbench-models-<account-id>
   s3Bucket: ""
+
+# -- Container registry (ECR pull-through cache for Docker Hub)
+# When enabled, vLLM image pulls route through <account>.dkr.ecr.<region>.amazonaws.com/dockerhub/vllm/vllm-openai
+# instead of docker.io/vllm/vllm-openai. Requires Terraform resources from PRD-29.
+registry:
+  pullThroughEnabled: false
+  pullThroughURI: ""  # e.g. 820537372947.dkr.ecr.us-east-2.amazonaws.com

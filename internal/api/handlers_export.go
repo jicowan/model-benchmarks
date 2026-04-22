@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"text/template"
 
@@ -81,6 +82,7 @@ type manifestData struct {
 	CPURequest           string
 	MemoryRequest        string
 	ShmSize              string
+	PullThroughRegistry  string // ECR pull-through cache host (empty = direct Docker Hub)
 }
 
 func generateManifest(d *database.RunExportDetails) (string, error) {
@@ -96,6 +98,7 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		CPURequest:           fmt.Sprintf("%d", max(d.VCPUs/2, 4)),
 		MemoryRequest:        fmt.Sprintf("%dGi", max(d.MemoryGiB/2, 16)),
 		ShmSize:              "16Gi",
+		PullThroughRegistry:  os.Getenv("PULL_THROUGH_REGISTRY"),
 	}
 	if d.ModelS3URI != nil && *d.ModelS3URI != "" {
 		data.ModelS3URI = *d.ModelS3URI
@@ -196,7 +199,7 @@ spec:
       containers:
         - name: vllm
 {{- if eq .AcceleratorType "gpu" }}
-          image: vllm/vllm-openai:{{ .FrameworkVersion }}
+          image: {{ if .PullThroughRegistry }}{{ .PullThroughRegistry }}/dockerhub/{{ end }}vllm/vllm-openai:{{ .FrameworkVersion }}
 {{- else }}
           image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
 {{- end }}

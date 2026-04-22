@@ -61,6 +61,10 @@ spec:
             - name: CACHE_JOB_IMAGE
               value: "{{ .Values.image.cacheJob.repository }}:{{ .Values.image.cacheJob.tag }}"
             {{- end }}
+            {{- if and .Values.registry .Values.registry.pullThroughEnabled .Values.registry.pullThroughURI }}
+            - name: PULL_THROUGH_REGISTRY
+              value: "{{ .Values.registry.pullThroughURI }}"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

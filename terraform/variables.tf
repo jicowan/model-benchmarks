@@ -45,3 +45,16 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "dockerhub_username" {
+  description = "Docker Hub username for the ECR pull-through cache. Set via terraform.tfvars or -var."
+  type        = string
+  default     = ""
+}
+
+variable "dockerhub_access_token" {
+  description = "Docker Hub access token for the ECR pull-through cache. Set via terraform.tfvars or -var."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

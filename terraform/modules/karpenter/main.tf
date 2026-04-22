@@ -546,3 +546,25 @@ resource "kubectl_manifest" "dcgm_exporter" {
 
   depends_on = [kubectl_manifest.nvidia_device_plugin]
 }
+
+# ---------- ECR Pull-through Cache permissions for Karpenter nodes (PRD-29) ----------
+# AmazonEC2ContainerRegistryReadOnly covers normal ECR pulls but NOT the extra
+# actions required to hydrate a pull-through cache on first pull:
+#   ecr:CreateRepository         - auto-create the cached repo (e.g., dockerhub/vllm/vllm-openai)
+#   ecr:BatchImportUpstreamImage - fetch the image from the upstream registry into ECR
+resource "aws_iam_role_policy" "karpenter_node_ecr_pullthrough" {
+  name = "ECRPullThroughCache"
+  role = module.karpenter.node_iam_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ecr:CreateRepository",
+        "ecr:BatchImportUpstreamImage",
+      ]
+      Resource = "*"
+    }]
+  })
+}

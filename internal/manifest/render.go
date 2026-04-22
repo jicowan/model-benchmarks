@@ -45,6 +45,7 @@ type ModelDeploymentParams struct {
 	UseRunaiStreamer      bool   // true = --load-format runai_streamer
 	ModelServiceAccount   string // K8s service account for S3 access
 	StreamerConcurrency   int    // runai_streamer concurrency (default 16)
+	PullThroughRegistry   string // ECR pull-through cache host (empty = direct Docker Hub)
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.

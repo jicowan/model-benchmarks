@@ -398,3 +398,27 @@ resource "aws_iam_role_policy" "api_models_s3_read" {
     }]
   })
 }
+
+# ---------- ECR Pull-through Cache for Docker Hub (PRD-29) ----------
+# Mirrors docker.io/vllm/vllm-openai:<tag> into our private ECR on first pull,
+# serving subsequent pulls from AWS. Secret ARN must be under
+# ecr-pullthroughcache/* prefix per AWS requirement.
+resource "aws_secretsmanager_secret" "dockerhub_credential" {
+  name        = "ecr-pullthroughcache/dockerhub"
+  description = "Docker Hub credentials consumed by the ECR pull-through cache"
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "dockerhub_credential" {
+  secret_id = aws_secretsmanager_secret.dockerhub_credential.id
+  secret_string = jsonencode({
+    username    = var.dockerhub_username
+    accessToken = var.dockerhub_access_token
+  })
+}
+
+resource "aws_ecr_pull_through_cache_rule" "dockerhub" {
+  ecr_repository_prefix = "dockerhub"
+  upstream_registry_url = "registry-1.docker.io"
+  credential_arn        = aws_secretsmanager_secret.dockerhub_credential.arn
+}

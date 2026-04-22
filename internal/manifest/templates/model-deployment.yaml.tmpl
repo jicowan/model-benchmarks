@@ -38,7 +38,7 @@ spec:
       containers:
         - name: vllm
 {{- if eq .AcceleratorType "gpu" }}
-          image: vllm/vllm-openai:{{ .FrameworkVersion }}
+          image: {{ if .PullThroughRegistry }}{{ .PullThroughRegistry }}/dockerhub/{{ end }}vllm/vllm-openai:{{ .FrameworkVersion }}
 {{- else }}
           image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
 {{- end }}
