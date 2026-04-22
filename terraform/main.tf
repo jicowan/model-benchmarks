@@ -429,8 +429,12 @@ resource "aws_iam_role_policy" "api_config_secrets" {
 # pull-through cache and their size + last-pulled timestamps. Describe-only,
 # no mutation, resource="*" because ECR DescribeRepositories/DescribeImages
 # don't support prefix-scoped resource ARNs.
+#
+# PRD-33: ec2:DescribeCapacityReservations lets the Capacity Reservations
+# card validate attached ODCRs/CBRs against live EC2 state (instance type,
+# AZ, state, available count). Also resource="*" — no ARN scoping support.
 resource "aws_iam_role_policy" "api_ecr_describe" {
-  name = "ECRDescribe"
+  name = "DescribeReadOnly"
   role = aws_iam_role.api_pod.id
 
   policy = jsonencode({
@@ -440,6 +444,7 @@ resource "aws_iam_role_policy" "api_ecr_describe" {
       Action = [
         "ecr:DescribeRepositories",
         "ecr:DescribeImages",
+        "ec2:DescribeCapacityReservations",
       ]
       Resource = "*"
     }]

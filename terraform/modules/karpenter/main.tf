@@ -42,6 +42,10 @@ resource "helm_release" "karpenter" {
       clusterName: ${var.cluster_name}
       clusterEndpoint: ${var.cluster_endpoint}
       interruptionQueue: ${module.karpenter.queue_name}
+      # PRD-33: enables capacityReservationSelectorTerms on EC2NodeClass
+      # and 'reserved' as a capacity-type. Still beta in Karpenter 1.9.
+      featureGates:
+        reservedCapacity: true
     EOT
   ]
 
@@ -222,7 +226,10 @@ resource "kubectl_manifest" "gpu_node_pool" {
               values: ["g5", "g6", "g6e", "g7e", "gr6", "p4d", "p4de", "p5", "p5e", "p5en", "p6-b200", "p6-b300"]
             - key: karpenter.sh/capacity-type
               operator: In
-              values: ["on-demand"]
+              # PRD-33: include 'reserved' so ODCRs/Capacity Blocks attached
+              # to the NodeClass are actually consumed. Karpenter prioritizes
+              # reserved > on-demand, so non-reserved scale-outs keep working.
+              values: ["reserved", "on-demand"]
           taints:
             - key: nvidia.com/gpu
               effect: NoSchedule
@@ -258,7 +265,9 @@ resource "kubectl_manifest" "neuron_node_pool" {
               values: ["inf2", "trn1", "trn1n", "trn2"]
             - key: karpenter.sh/capacity-type
               operator: In
-              values: ["on-demand"]
+              # PRD-33: include 'reserved' so ODCRs/Capacity Blocks attached
+              # to the NodeClass are actually consumed.
+              values: ["reserved", "on-demand"]
           taints:
             - key: aws.amazon.com/neuron
               effect: NoSchedule

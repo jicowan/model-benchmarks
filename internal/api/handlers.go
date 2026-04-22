@@ -23,12 +23,14 @@ import (
 
 // Server holds dependencies for API handlers.
 type Server struct {
-	repo     database.Repo
-	orch     *orchestrator.Orchestrator
-	client   kubernetes.Interface
-	hfClient recommend.HFClientInterface
-	seeder   *seed.Seeder
-	secrets  SecretsStore
+	repo       database.Repo
+	orch       *orchestrator.Orchestrator
+	client     kubernetes.Interface
+	hfClient   recommend.HFClientInterface
+	seeder     *seed.Seeder
+	secrets    SecretsStore
+	ec2Client  EC2Client      // PRD-33
+	dynClient  DynamicClient  // PRD-33 — client-go/dynamic, typed via an interface for tests
 }
 
 // NewServer creates a new API server.
@@ -60,6 +62,14 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 func (s *Server) SetSecretsStore(store SecretsStore) {
 	s.secrets = store
 	s.orch.SetSecretsStore(store)
+}
+
+// SetReservationsClients injects the EC2 SDK client + K8s dynamic client
+// used by the Capacity Reservations card (PRD-33). Called from main after
+// construction; tests can leave these nil and the endpoints will 500.
+func (s *Server) SetReservationsClients(ec EC2Client, dyn DynamicClient) {
+	s.ec2Client = ec
+	s.dynClient = dyn
 }
 
 // RecoverOrphanedRuns attempts to complete any runs that were left in "running"
@@ -141,6 +151,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/config/scenario-overrides/{id}", s.handleDeleteScenarioOverride)
 	mux.HandleFunc("GET /api/v1/config/registry", s.handleGetRegistry)
 	mux.HandleFunc("GET /api/v1/config/audit-log", s.handleListAuditLog)
+	// PRD-33: Capacity Reservations card
+	mux.HandleFunc("GET /api/v1/config/capacity-reservations", s.handleListReservations)
+	mux.HandleFunc("POST /api/v1/config/capacity-reservations", s.handlePostReservation)
+	mux.HandleFunc("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", s.handleDeleteReservation)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

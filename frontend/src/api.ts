@@ -28,6 +28,7 @@ import type {
   ScenarioOverride,
   RegistryStatus,
   AuditLogEntry,
+  NodePoolReservations,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -379,4 +380,38 @@ export async function getRegistry(): Promise<RegistryStatus> {
 // PRD-32: audit log
 export async function listAuditLog(limit = 50): Promise<AuditLogEntry[]> {
   return fetchJSON<AuditLogEntry[]>(`${BASE}/config/audit-log?limit=${limit}`);
+}
+
+// PRD-33: capacity reservations
+export async function listCapacityReservations(): Promise<NodePoolReservations[]> {
+  return fetchJSON<NodePoolReservations[]>(`${BASE}/config/capacity-reservations`);
+}
+
+export async function attachCapacityReservation(
+  node_class: string,
+  reservation_id: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/config/capacity-reservations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_class, reservation_id }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `POST capacity-reservations failed: ${res.status}`);
+  }
+}
+
+export async function detachCapacityReservation(
+  node_class: string,
+  reservation_id: string,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/config/capacity-reservations/${encodeURIComponent(node_class)}/${encodeURIComponent(reservation_id)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `DELETE capacity-reservation failed: ${res.status}`);
+  }
 }

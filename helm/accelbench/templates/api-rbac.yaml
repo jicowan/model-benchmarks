@@ -29,6 +29,15 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch"]
+  # PRD-33: Capacity Reservations card patches Karpenter CRDs to attach
+  # ODCRs/CBRs to the GPU + Neuron EC2NodeClasses and keep the NodePools'
+  # capacity-type requirement including 'reserved'.
+  - apiGroups: ["karpenter.k8s.aws"]
+    resources: ["ec2nodeclasses"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["karpenter.sh"]
+    resources: ["nodepools"]
+    verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
