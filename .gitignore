@@ -16,6 +16,7 @@ vendor/
 *.tfstate
 *.tfstate.*
 *.tfplan
+tfplan
 *.tfvars
 .terraform.lock.hcl
 crash.log
