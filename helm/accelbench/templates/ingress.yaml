@@ -6,10 +6,28 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "accelbench.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
+    {{- if .Values.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
+    {{- end }}
+    {{- if and .Values.ingress.host .Values.auth.enabled }}
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.ingress.host | quote }}
+    {{- end }}
+    {{- if .Values.auth.enabled }}
+    # ALB OIDC authentication — Cognito.
+    # Unauthenticated requests are redirected to the Cognito Hosted UI.
+    # ALB target-group health checks bypass OIDC, so /healthz stays reachable
+    # for pod readiness probes without a separate ingress.
+    alb.ingress.kubernetes.io/auth-type: cognito
+    alb.ingress.kubernetes.io/auth-idp-cognito: |
+      {"UserPoolArn":"{{ .Values.auth.userPoolArn }}","UserPoolClientId":"{{ .Values.auth.userPoolClientId }}","UserPoolDomain":"{{ .Values.auth.userPoolDomain }}"}
+    alb.ingress.kubernetes.io/auth-scope: {{ .Values.auth.scope | default "openid" | quote }}
+    alb.ingress.kubernetes.io/auth-session-timeout: {{ .Values.auth.sessionTimeoutSeconds | default 28800 | quote }}
+    alb.ingress.kubernetes.io/auth-on-unauthenticated-request: authenticate
+    {{- end }}
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}

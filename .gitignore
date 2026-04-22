@@ -33,6 +33,7 @@ frontend/.env.local
 # IDE
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~

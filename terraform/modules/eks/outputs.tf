@@ -27,3 +27,8 @@ output "node_security_group_id" {
   description = "ID of the node shared security group"
   value       = module.eks.node_security_group_id
 }
+
+output "cluster_iam_role_name" {
+  description = "Name of the EKS cluster IAM role (assumed by the Auto Mode LB controller)"
+  value       = module.eks.cluster_iam_role_name
+}
