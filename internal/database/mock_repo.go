@@ -51,6 +51,15 @@ func (m *MockRepo) SeedModel(model *Model) {
 }
 
 // SeedInstanceType adds an instance type to the mock store.
+// SeedRun inserts a benchmark_run directly without regenerating ID or
+// timestamps — useful for tests that need a specific end state (e.g. a
+// run with started_at / completed_at already populated).
+func (m *MockRepo) SeedRun(r *BenchmarkRun) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runs[r.ID] = r
+}
+
 func (m *MockRepo) SeedInstanceType(it *InstanceType) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -517,6 +526,138 @@ func (m *MockRepo) ListPricing(_ context.Context, region string) ([]PricingRow, 
 		})
 	}
 	return rows, nil
+}
+
+// GetPricingForInstanceType (PRD-35) returns the most-recent pricing row for
+// the given instance + region by EffectiveDate string ordering.
+func (m *MockRepo) GetPricingForInstanceType(_ context.Context, instanceTypeID, region string) (*Pricing, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best *Pricing
+	for _, p := range m.pricing {
+		if p.InstanceTypeID != instanceTypeID || p.Region != region {
+			continue
+		}
+		if best == nil || p.EffectiveDate > best.EffectiveDate {
+			best = p
+		}
+	}
+	if best == nil {
+		return nil, nil
+	}
+	cp := *best
+	return &cp, nil
+}
+
+// UpdateRunCost (PRD-35) stores cost columns on the in-memory run.
+func (m *MockRepo) UpdateRunCost(_ context.Context, runID string, totalUSD, loadgenUSD *float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok {
+		return nil
+	}
+	run.TotalCostUSD = totalUSD
+	run.LoadgenCostUSD = loadgenUSD
+	return nil
+}
+
+// UpdateSuiteRunCost (PRD-35) stores the rolled-up cost on the suite.
+func (m *MockRepo) UpdateSuiteRunCost(_ context.Context, suiteRunID string, totalUSD *float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	suite, ok := m.suiteRuns[suiteRunID]
+	if !ok {
+		return nil
+	}
+	suite.TotalCostUSD = totalUSD
+	return nil
+}
+
+// DashboardStats (PRD-35) — in-memory aggregate matching the SQL query.
+func (m *MockRepo) DashboardStats(_ context.Context) (*DashboardStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stats := &DashboardStats{}
+	for _, r := range m.runs {
+		stats.TotalRuns++
+		stats.TotalSingle++
+		switch r.Status {
+		case "pending", "running":
+			stats.ActiveCount++
+		case "completed":
+			stats.CompletedCount++
+		case "failed":
+			stats.FailedCount++
+		}
+		if r.TotalCostUSD != nil {
+			stats.TotalCostUSD += *r.TotalCostUSD
+		}
+	}
+	for _, s := range m.suiteRuns {
+		stats.TotalRuns++
+		stats.TotalSuites++
+		switch s.Status {
+		case "pending", "running":
+			stats.ActiveCount++
+		case "completed":
+			stats.CompletedCount++
+		case "failed":
+			stats.FailedCount++
+		}
+		if s.TotalCostUSD != nil {
+			stats.TotalCostUSD += *s.TotalCostUSD
+		}
+	}
+	for _, mc := range m.modelCache {
+		if mc.Status == "cached" {
+			stats.CachedModels++
+		}
+	}
+	// cost_per_day: build 14 zero-filled UTC days ending today.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	buckets := make(map[string]float64)
+	for _, r := range m.runs {
+		if r.TotalCostUSD == nil {
+			continue
+		}
+		d := r.CreatedAt.UTC().Format("2006-01-02")
+		buckets[d] += *r.TotalCostUSD
+	}
+	for _, s := range m.suiteRuns {
+		if s.TotalCostUSD == nil {
+			continue
+		}
+		d := s.CreatedAt.UTC().Format("2006-01-02")
+		buckets[d] += *s.TotalCostUSD
+	}
+	for i := 13; i >= 0; i-- {
+		d := today.AddDate(0, 0, -i).Format("2006-01-02")
+		stats.CostPerDay = append(stats.CostPerDay, DayCost{Day: d, CostUSD: buckets[d]})
+	}
+	return stats, nil
+}
+
+// ModelCacheStats (PRD-35) — in-memory FILTER aggregate.
+func (m *MockRepo) ModelCacheStats(_ context.Context) (*ModelCacheStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stats := &ModelCacheStats{}
+	for _, mc := range m.modelCache {
+		stats.Total++
+		switch mc.Status {
+		case "cached":
+			stats.Cached++
+			if mc.SizeBytes != nil {
+				stats.TotalBytes += *mc.SizeBytes
+			}
+		case "caching", "pending":
+			stats.Caching++
+		case "failed":
+			stats.Failed++
+		}
+	}
+	return stats, nil
 }
 
 func (m *MockRepo) ListInstanceTypes(_ context.Context) ([]InstanceType, error) {

@@ -267,6 +267,32 @@ func (r *Repository) UpdateRunFailed(ctx context.Context, runID, reason string) 
 	return nil
 }
 
+// UpdateRunCost writes the cost columns for a benchmark_run (PRD-35). Both
+// args may be nil (e.g., pricing missing at completion time), in which case
+// the columns are set to NULL and aggregates COALESCE them to $0.
+func (r *Repository) UpdateRunCost(ctx context.Context, runID string, totalUSD, loadgenUSD *float64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE benchmark_runs SET total_cost_usd = $1, loadgen_cost_usd = $2 WHERE id = $3`,
+		totalUSD, loadgenUSD, runID)
+	if err != nil {
+		return fmt.Errorf("update run cost: %w", err)
+	}
+	return nil
+}
+
+// UpdateSuiteRunCost writes the rolled-up cost for a test_suite_run (PRD-35).
+// Called once when the whole suite reaches a terminal state, after every
+// child benchmark_run has already been cost-stamped.
+func (r *Repository) UpdateSuiteRunCost(ctx context.Context, suiteRunID string, totalUSD *float64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE test_suite_runs SET total_cost_usd = $1 WHERE id = $2`,
+		totalUSD, suiteRunID)
+	if err != nil {
+		return fmt.Errorf("update suite run cost: %w", err)
+	}
+	return nil
+}
+
 // UpdateLoadgenConfig stores the inference-perf configuration YAML for a benchmark run.
 func (r *Repository) UpdateLoadgenConfig(ctx context.Context, runID, config string) error {
 	_, err := r.pool.Exec(ctx, `UPDATE benchmark_runs SET loadgen_config = $1 WHERE id = $2`, config, runID)
@@ -399,13 +425,15 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
 		        run_type, min_duration_seconds, max_model_len, status, error_message, superseded,
-		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri
+		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
+		        total_cost_usd, loadgen_cost_usd
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
 		&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
-		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI)
+		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI,
+		&run.TotalCostUSD, &run.LoadgenCostUSD)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

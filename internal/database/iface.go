@@ -33,7 +33,17 @@ type Repo interface {
 	GetRunExportDetails(ctx context.Context, runID string) (*RunExportDetails, error)
 	UpsertPricing(ctx context.Context, p *Pricing) error
 	ListPricing(ctx context.Context, region string) ([]PricingRow, error)
+	// PRD-35: point lookup used by the orchestrator at run completion.
+	GetPricingForInstanceType(ctx context.Context, instanceTypeID, region string) (*Pricing, error)
 	ListInstanceTypes(ctx context.Context) ([]InstanceType, error)
+	// PRD-35: cost persistence. Suite cost is computed from the suite's own
+	// started_at → completed_at span (single shared EC2 node), not a sum of
+	// children — scenario_results rows don't reference benchmark_runs.
+	UpdateRunCost(ctx context.Context, runID string, totalUSD, loadgenUSD *float64) error
+	UpdateSuiteRunCost(ctx context.Context, suiteRunID string, totalUSD *float64) error
+	// PRD-35: aggregate endpoints.
+	DashboardStats(ctx context.Context) (*DashboardStats, error)
+	ModelCacheStats(ctx context.Context) (*ModelCacheStats, error)
 	// OOM event tracking
 	OOMRepo
 	// Test suite operations

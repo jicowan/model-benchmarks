@@ -33,6 +33,8 @@ import type {
   RegistryStatus,
   AuditLogEntry,
   NodePoolReservations,
+  DashboardStats,
+  ModelCacheStats,
 } from "./types";
 import type { Paginated } from "./lib/pagination";
 
@@ -369,6 +371,15 @@ export async function putDockerHubToken(username: string, access_token: string):
 export async function deleteDockerHubToken(): Promise<void> {
   const res = await fetch(`${BASE}/config/credentials/dockerhub-token`, { method: "DELETE" });
   if (!res.ok) throw new Error(`DELETE dockerhub-token failed: ${res.status}`);
+}
+
+// PRD-35: aggregate stats endpoints.
+export async function getDashboardStats(): Promise<DashboardStats> {
+  return fetchJSON<DashboardStats>(`${BASE}/dashboard/stats`);
+}
+
+export async function getModelCacheStats(): Promise<ModelCacheStats> {
+  return fetchJSON<ModelCacheStats>(`${BASE}/model-cache/stats`);
 }
 
 // PRD-34: tool versions (vLLM + inference-perf)

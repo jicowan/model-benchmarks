@@ -64,6 +64,19 @@ func (s *Server) handleListModelCache(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleModelCacheStats serves GET /api/v1/model-cache/stats (PRD-35).
+// The Models page stat cards used to compute these client-side from the list;
+// after PRD-36 paginated the list those counts broke. This replaces them
+// with a server-side aggregate.
+func (s *Server) handleModelCacheStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.repo.ModelCacheStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "model cache stats: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
 func (s *Server) handleGetModelCache(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	mc, err := s.repo.GetModelCache(r.Context(), id)

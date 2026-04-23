@@ -64,6 +64,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	if err != nil || suiteRun == nil {
 		log.Printf("[suite %s] failed to get suite run: %v", suiteRunID[:8], err)
 		o.repo.UpdateSuiteRunStatus(ctx, suiteRunID, "failed", nil)
+		o.persistSuiteCost(ctx, suiteRunID)
 		return
 	}
 
@@ -76,6 +77,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	if model == nil || instType == nil {
 		log.Printf("[suite %s] model or instance type not found", suiteRunID[:8])
 		o.repo.UpdateSuiteRunStatus(ctx, suiteRunID, "failed", nil)
+		o.persistSuiteCost(ctx, suiteRunID)
 		return
 	}
 
@@ -102,6 +104,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	if err := o.deployModel(ctx, ns, modelName, cfg); err != nil {
 		log.Printf("[suite %s] failed to deploy model: %v", suiteRunID[:8], err)
 		o.repo.UpdateSuiteRunStatus(ctx, suiteRunID, "failed", nil)
+		o.persistSuiteCost(ctx, suiteRunID)
 		return
 	}
 	defer o.teardownSuite(context.Background(), ns, modelName, suiteRunID)
@@ -111,6 +114,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	if err := o.waitForReady(ctx, ns, modelName, cfg); err != nil {
 		log.Printf("[suite %s] model not ready: %v", suiteRunID[:8], err)
 		o.repo.UpdateSuiteRunStatus(ctx, suiteRunID, "failed", nil)
+		o.persistSuiteCost(ctx, suiteRunID)
 		return
 	}
 
@@ -219,6 +223,10 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 
 	// Mark suite as completed
 	o.repo.UpdateSuiteRunStatus(ctx, suiteRunID, "completed", nil)
+	// PRD-35: freeze the suite's cost using its own started_at→completed_at
+	// window (all scenarios share one EC2 node, so this is the full billable
+	// lifetime).
+	o.persistSuiteCost(ctx, suiteRunID)
 	log.Printf("[suite %s] suite completed", suiteRunID[:8])
 }
 

@@ -143,6 +143,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
 	// PRD-20: Model cache management
 	mux.HandleFunc("GET /api/v1/model-cache", s.handleListModelCache)
+	mux.HandleFunc("GET /api/v1/model-cache/stats", s.handleModelCacheStats) // PRD-35
 	mux.HandleFunc("POST /api/v1/model-cache", s.handleCreateModelCache)
 	mux.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
 	mux.HandleFunc("DELETE /api/v1/model-cache/{id}", s.handleDeleteModelCache)
@@ -168,6 +169,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// PRD-34: Tool Versions (vLLM framework + inference-perf)
 	mux.HandleFunc("GET /api/v1/config/tool-versions", s.handleGetToolVersions)
 	mux.HandleFunc("PUT /api/v1/config/tool-versions", s.handlePutToolVersions)
+	// PRD-35: Dashboard aggregate stats (every card on the Dashboard).
+	mux.HandleFunc("GET /api/v1/dashboard/stats", s.handleDashboardStats)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

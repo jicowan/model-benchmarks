@@ -278,6 +278,14 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("update status to completed: %w", err)
 	}
 
+	// PRD-35: freeze cost now that completed_at is set. Failure here never
+	// blocks the run — the cost columns just stay NULL and the run is still
+	// displayed, just without a cost overline.
+	totalUSD, loadgenUSD := o.computeRunCost(ctx, cfg.RunID)
+	if err := o.repo.UpdateRunCost(ctx, cfg.RunID, totalUSD, loadgenUSD); err != nil {
+		log.Printf("[%s] update run cost: %v", cfg.RunID[:8], err)
+	}
+
 	log.Printf("[%s] benchmark completed successfully", cfg.RunID[:8])
 	return nil
 }
@@ -663,6 +671,13 @@ func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, key, data 
 func (o *Orchestrator) markFailed(ctx context.Context, runID, reason string) {
 	if err := o.repo.UpdateRunFailed(ctx, runID, reason); err != nil {
 		log.Printf("failed to mark run %s as failed: %v", runID, err)
+		return
+	}
+	// PRD-35: freeze cost on failure too. The node existed from started_at
+	// until markFailed set completed_at, so the time is billable.
+	totalUSD, loadgenUSD := o.computeRunCost(ctx, runID)
+	if err := o.repo.UpdateRunCost(ctx, runID, totalUSD, loadgenUSD); err != nil {
+		log.Printf("update failed run cost %s: %v", runID, err)
 	}
 }
 

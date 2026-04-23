@@ -46,6 +46,12 @@ export default function HeroBlock({
   metrics,
   statusBadge,
 }: Props) {
+  // Grid layout scales with the number of metrics. Up to 4 uses the original
+  // `md:grid-cols-4`; 5 metrics (PRD-35 added Total Cost) goes to
+  // `md:grid-cols-5` so the row stays single-line on wide screens.
+  const colClass =
+    metrics && metrics.length >= 5 ? "md:grid-cols-5" : "md:grid-cols-4";
+
   return (
     <div className="mb-10 flex flex-col gap-6 md:flex-row md:items-end md:justify-between border-b border-line pb-8">
       <div className="min-w-0">
@@ -63,7 +69,7 @@ export default function HeroBlock({
       </div>
 
       {metrics && metrics.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-8">
+        <div className={`grid grid-cols-2 ${colClass} gap-6 md:gap-8`}>
           {metrics.map((m, i) => (
             <div key={i} className="min-w-0">
               <div className="eyebrow mb-1 truncate">{m.label}</div>

@@ -66,6 +66,11 @@ export interface BenchmarkRun {
   // as-is regardless of origin.
   model_hf_id?: string;
   instance_type_name?: string;
+  // PRD-35: cost persisted at run completion. Null on historical rows and
+  // when pricing was unavailable — UI should omit the overline rather than
+  // show $0.
+  total_cost_usd?: number | null;
+  loadgen_cost_usd?: number | null;
 }
 
 export interface BenchmarkMetrics {
@@ -524,6 +529,9 @@ export interface TestSuiteRun {
   accelerator_name?: string;
   accelerator_count?: number;
   accelerator_memory_gib?: number;
+  // PRD-35: cost frozen at suite completion (hourly × own started→completed
+  // window; all scenarios share one EC2 node).
+  total_cost_usd?: number | null;
 }
 
 export interface ComponentStatus {
@@ -683,4 +691,30 @@ export interface NodePoolReservations {
   subnet_azs: string[];
   capacity_type_includes_reserved: boolean;
   reservations: ReservationSummary[];
+}
+
+// PRD-35: Dashboard aggregates. One server-side query replaces the
+// client-side tallies over listRuns() + listSuiteRuns() that used to power
+// the stat cards.
+export interface DashboardStats {
+  total_runs: number;      // benchmark_runs + test_suite_runs
+  total_single: number;
+  total_suites: number;
+  active_count: number;    // pending + running across both tables
+  completed_count: number;
+  failed_count: number;
+  success_rate: number;    // completed / (completed + failed) × 100
+  cached_models: number;
+  total_cost_usd: number;  // lifetime
+  cost_per_day: { day: string; cost_usd: number }[]; // 14 days, zero-filled
+}
+
+// PRD-35: ModelCache aggregates for the stat cards on the Models page.
+// Needed because PRD-36 paginated the list, breaking client-side tallies.
+export interface ModelCacheStats {
+  total: number;
+  cached: number;
+  caching: number;    // includes pending
+  failed: number;
+  total_bytes: number;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listRuns, listSuiteRuns, listModelCache, listCatalog } from "../api";
-import type { RunListItem, ModelCache, CatalogEntry } from "../types";
+import { listRuns, listSuiteRuns, listCatalog, getDashboardStats } from "../api";
+import type { RunListItem, CatalogEntry, DashboardStats } from "../types";
 import type { SuiteRunListItem } from "../api";
 import { useStatus } from "../hooks/useStatus";
 
@@ -42,13 +42,16 @@ function SectionHeader({ index, label, action }: { index: string; label: string;
 
 /* --------------------------- ActivityPulse ---------------------------- */
 
-// Generates a tiny bar chart from run timestamps (last N days).
+// Generates a tiny bar chart from run timestamps (last N days). PRD-35
+// adds a cost-per-day overlay on the hover caption + idle summary.
 function ActivityPulse({
   runTimestamps,
   suiteTimestamps,
+  costPerDay,
 }: {
   runTimestamps: string[];
   suiteTimestamps: string[];
+  costPerDay?: { day: string; cost_usd: number }[];
 }) {
   const DAYS = 14;
   const CHART_HEIGHT = 48;
@@ -60,6 +63,7 @@ function ActivityPulse({
   // double-booked into "today" instead of "yesterday".
   const runBuckets = Array(DAYS).fill(0);
   const suiteBuckets = Array(DAYS).fill(0);
+  const costBuckets = Array<number>(DAYS).fill(0);
   const bucketIndex = (ts: string) => {
     const now = new Date();
     const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -76,9 +80,17 @@ function ActivityPulse({
     const idx = bucketIndex(ts);
     if (idx >= 0 && idx < DAYS) suiteBuckets[idx]++;
   });
+  // costPerDay from the API is ordered oldest → newest (last 14 UTC days).
+  // Match that ordering so index 0 = -13d and index 13 = today.
+  if (costPerDay) {
+    for (let i = 0; i < Math.min(DAYS, costPerDay.length); i++) {
+      costBuckets[i] = costPerDay[i].cost_usd;
+    }
+  }
   const buckets = runBuckets.map((n, i) => n + suiteBuckets[i]);
   const max = Math.max(1, ...buckets);
   const total = buckets.reduce((a, b) => a + b, 0);
+  const cost14dSum = costBuckets.reduce((a, b) => a + b, 0);
 
   const hoveredLabel = (() => {
     if (hovered === null) return null;
@@ -118,9 +130,28 @@ function ActivityPulse({
               RUN{runBuckets[hovered] === 1 ? "" : "S"} ·{" "}
               <span className="text-ink-0 font-mono tabular">{suiteBuckets[hovered]}</span>{" "}
               SUITE{suiteBuckets[hovered] === 1 ? "" : "S"} · {hoveredLabel}
+              {costPerDay && (
+                <>
+                  {" · "}
+                  <span className="text-ink-0 font-mono tabular">
+                    ${costBuckets[hovered].toFixed(2)}
+                  </span>
+                </>
+              )}
             </>
           ) : (
-            <>{total} TOTAL · PEAK {max}/DAY</>
+            <>
+              {total} TOTAL · PEAK {max}/DAY
+              {costPerDay && (
+                <>
+                  {" · "}
+                  <span className="text-ink-0 font-mono tabular">
+                    ${cost14dSum.toFixed(2)}
+                  </span>{" "}
+                  (14D)
+                </>
+              )}
+            </>
           )}
         </span>
         <span className="caption">-{DAYS - 1}d ← today</span>
@@ -172,40 +203,34 @@ function heroFor(state: "ok" | "degraded" | "down" | "unknown") {
 }
 
 export default function Dashboard() {
+  // Runs + suites are fetched only for the "Recent runs" table and the
+  // activity-pulse timestamps — NOT for the stat cards. Cards come from
+  // the PRD-35 aggregate endpoint so they reflect lifetime totals, not a
+  // paginated slice.
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<SuiteRunListItem[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [models, setModels] = useState<ModelCache[]>([]);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const { state: healthState, detail: healthDetail } = useStatus();
   const hero = heroFor(healthState);
 
   useEffect(() => {
-    // PRD-36: listCatalog + listModelCache now return { rows, total } — unwrap
-    // to `.rows` here. These stat numbers are computed client-side from
-    // paginated fetches and are therefore only as accurate as the first page
-    // of results; PRD-35 replaces them with a server-side stats endpoint.
     Promise.all([
       listRuns({ limit: 100 }).catch(() => [] as RunListItem[]),
       listSuiteRuns().catch(() => [] as SuiteRunListItem[]),
+      // Top Models panel only — not for stat cards. The 100-row cap is fine
+      // here since it's a "most-common model" frequency view.
       listCatalog({ limit: 100 }).then((p) => p.rows).catch(() => [] as CatalogEntry[]),
-      listModelCache().then((p) => p.rows).catch(() => [] as ModelCache[]),
-    ]).then(([r, sr, c, m]) => {
+      getDashboardStats().catch(() => null),
+    ]).then(([r, sr, c, s]) => {
       setRuns(r);
       setSuiteRuns(sr);
       setCatalog(c);
-      setModels(m);
+      setStats(s);
       setLoading(false);
     });
   }, []);
-
-  const activeRuns = runs.filter((r) => r.status === "running" || r.status === "pending");
-  const activeSuiteRuns = suiteRuns.filter((s) => s.status === "running" || s.status === "pending");
-  const activeCount = activeRuns.length + activeSuiteRuns.length;
-  const failedCount = runs.filter((r) => r.status === "failed").length;
-  const completedCount = runs.filter((r) => r.status === "completed").length;
-  const successRate = runs.length > 0 ? ((completedCount / runs.length) * 100).toFixed(1) : "—";
-  const cachedCount = models.filter((m) => m.status === "cached").length;
 
   const recentRuns = runs.slice(0, 8);
 
@@ -244,9 +269,9 @@ export default function Dashboard() {
               </div>
             )}
             <p className="meta mt-3 max-w-md">
-              {loading
+              {loading || !stats
                 ? "Loading system state…"
-                : `${runs.length} runs recorded · ${activeCount} active · ${cachedCount} models in S3 cache`}
+                : `${stats.total_runs} runs recorded · ${stats.active_count} active · ${stats.cached_models} models in S3 cache`}
             </p>
           </div>
           <div className="flex gap-2">
@@ -262,40 +287,56 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Stat grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 border-l border-t border-line mb-12">
+        {/* Stat grid — driven by the server-side aggregate (PRD-35). */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-0 border-l border-t border-line mb-12">
           <div className="border-r border-b border-line">
             <StatCardPlain
               label="TOTAL RUNS"
-              value={loading ? "—" : runs.length}
-              sub={`${completedCount} completed · ${failedCount} failed`}
+              value={!stats ? "—" : stats.total_runs}
+              sub={
+                stats
+                  ? `${stats.total_single} single · ${stats.total_suites} suite`
+                  : "—"
+              }
               index="01"
             />
           </div>
           <div className="border-r border-b border-line">
             <StatCardPlain
               label="ACTIVE"
-              value={loading ? "—" : activeCount}
-              sub={activeCount > 0 ? "In progress now" : "Nothing running"}
-              accent={activeCount > 0 ? "signal" : undefined}
+              value={!stats ? "—" : stats.active_count}
+              sub={stats && stats.active_count > 0 ? "In progress now" : "Nothing running"}
+              accent={stats && stats.active_count > 0 ? "signal" : undefined}
               index="02"
             />
           </div>
           <div className="border-r border-b border-line">
             <StatCardPlain
               label="SUCCESS RATE"
-              value={loading ? "—" : `${successRate}%`}
-              sub={`${completedCount} / ${runs.length} runs`}
-              accent={failedCount > completedCount ? "warn" : "signal"}
+              value={!stats ? "—" : `${stats.success_rate.toFixed(1)}%`}
+              sub={
+                stats
+                  ? `${stats.completed_count} / ${stats.completed_count + stats.failed_count} finished`
+                  : "—"
+              }
+              accent={stats && stats.failed_count > stats.completed_count ? "warn" : "signal"}
               index="03"
             />
           </div>
           <div className="border-r border-b border-line">
             <StatCardPlain
               label="CACHED MODELS"
-              value={loading ? "—" : cachedCount}
+              value={!stats ? "—" : stats.cached_models}
               sub="In S3, ready to benchmark"
               index="04"
+            />
+          </div>
+          <div className="border-r border-b border-line">
+            <StatCardPlain
+              label="TOTAL SPEND"
+              value={!stats ? "—" : `$${stats.total_cost_usd.toFixed(2)}`}
+              sub="Lifetime, all runs + suites"
+              index="05"
             />
           </div>
         </div>
@@ -314,6 +355,7 @@ export default function Dashboard() {
               <ActivityPulse
                 runTimestamps={runs.map((r) => r.created_at)}
                 suiteTimestamps={suiteRuns.map((s) => s.created_at)}
+                costPerDay={stats?.cost_per_day}
               />
             )}
           </div>

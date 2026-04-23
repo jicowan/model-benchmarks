@@ -2,7 +2,10 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // PricingRow is a denormalized view of pricing joined with instance type name.
@@ -64,6 +67,32 @@ func (r *Repository) ListPricing(ctx context.Context, region string) ([]PricingR
 		result = append(result, pr)
 	}
 	return result, rows.Err()
+}
+
+// GetPricingForInstanceType returns the most recent pricing row for the given
+// (instance_type_id, region) pair, or nil if no row exists. Used by the
+// orchestrator at run completion (PRD-35) to freeze the hourly rate into
+// benchmark_runs.total_cost_usd.
+func (r *Repository) GetPricingForInstanceType(ctx context.Context, instanceTypeID, region string) (*Pricing, error) {
+	var p Pricing
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, instance_type_id, region, on_demand_hourly_usd,
+		       reserved_1yr_hourly_usd, reserved_3yr_hourly_usd,
+		       effective_date::text, created_at
+		FROM pricing
+		WHERE instance_type_id = $1 AND region = $2
+		ORDER BY effective_date DESC
+		LIMIT 1`, instanceTypeID, region).Scan(
+		&p.ID, &p.InstanceTypeID, &p.Region, &p.OnDemandHourlyUSD,
+		&p.Reserved1YrHourlyUSD, &p.Reserved3YrHourlyUSD,
+		&p.EffectiveDate, &p.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get pricing for instance type: %w", err)
+	}
+	return &p, nil
 }
 
 // ListInstanceTypes returns all instance types.

@@ -8,8 +8,8 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { listModelCache, createModelCache, deleteModelCache, registerCustomModel } from "../api";
-import type { ModelCache as ModelCacheEntry } from "../types";
+import { listModelCache, createModelCache, deleteModelCache, registerCustomModel, getModelCacheStats } from "../api";
+import type { ModelCache as ModelCacheEntry, ModelCacheStats } from "../types";
 import ModelCombobox from "../components/ModelCombobox";
 import Pagination from "../components/Pagination";
 import { PAGE_SIZE } from "../lib/pagination";
@@ -91,6 +91,9 @@ export default function Models() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // PRD-35: server-side aggregate for the stat cards. The list endpoint is
+  // paginated, so filtering `items` locally undercounts past page 1.
+  const [stats, setStats] = useState<ModelCacheStats | null>(null);
 
   const [formMode, setFormMode] = useState<FormMode>("none");
   const [formError, setFormError] = useState("");
@@ -126,9 +129,17 @@ export default function Models() {
       });
   }, [sorting, offset]);
 
+  const fetchStats = useCallback(() => {
+    getModelCacheStats().then(setStats).catch(() => setStats(null));
+  }, []);
+
   useEffect(() => {
     fetchItems();
   }, [fetchItems]);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
 
   // Reset to page 1 when sort changes.
   useEffect(() => {
@@ -158,6 +169,7 @@ export default function Models() {
       setCacheToken("");
       setFormMode("none");
       fetchItems();
+      fetchStats();
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Failed to start caching");
     } finally {
@@ -178,6 +190,7 @@ export default function Models() {
       setRegisterName("");
       setFormMode("none");
       fetchItems();
+      fetchStats();
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Failed to register model");
     } finally {
@@ -190,17 +203,17 @@ export default function Models() {
     try {
       await deleteModelCache(id);
       fetchItems();
+      fetchStats();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to delete");
     }
   }
 
-  // NOTE: these stats are computed over the current page only (PRD-36).
-  // A future endpoint can provide lifetime totals.
-  const cached = items.filter((i) => i.status === "cached");
-  const caching = items.filter((i) => i.status === "caching" || i.status === "pending");
-  const failed = items.filter((i) => i.status === "failed");
-  const totalBytes = cached.reduce((sum, i) => sum + (i.size_bytes ?? 0), 0);
+  // Stat values come from the aggregate endpoint (PRD-35) so they reflect
+  // the full registry even when the list below is paginated. The `caching`
+  // count on the current page is still used by the auto-refresh loop, since
+  // that check only needs to know "is anything on-screen actively caching".
+  const pageCaching = items.filter((i) => i.status === "caching" || i.status === "pending");
 
   const columns = useMemo<ColumnDef<ModelCacheEntry>[]>(
     () => [
@@ -354,28 +367,33 @@ export default function Models() {
           </p>
         </div>
 
-        {/* Stats */}
+        {/* Stats — driven by the server-side aggregate (PRD-35). */}
         <div className="grid grid-cols-4 border-l border-t border-line mb-8">
-          <StatCell label="TOTAL" value={loading ? "—" : total} sub="registered" index="01" />
+          <StatCell
+            label="TOTAL"
+            value={!stats ? "—" : stats.total}
+            sub="registered"
+            index="01"
+          />
           <StatCell
             label="CACHED"
-            value={loading ? "—" : cached.length}
-            sub={`${formatBytes(totalBytes)} in S3`}
+            value={!stats ? "—" : stats.cached}
+            sub={stats ? `${formatBytes(stats.total_bytes)} in S3` : "—"}
             index="02"
             accent="signal"
           />
           <StatCell
             label="CACHING"
-            value={loading ? "—" : caching.length}
-            sub={caching.length > 0 ? "In progress" : "Idle"}
-            accent={caching.length > 0 ? "warn" : undefined}
+            value={!stats ? "—" : stats.caching}
+            sub={stats && stats.caching > 0 ? "In progress" : "Idle"}
+            accent={stats && stats.caching > 0 ? "warn" : undefined}
             index="03"
           />
           <StatCell
             label="FAILED"
-            value={loading ? "—" : failed.length}
-            sub={failed.length > 0 ? "Review below" : "—"}
-            accent={failed.length > 0 ? "danger" : undefined}
+            value={!stats ? "—" : stats.failed}
+            sub={stats && stats.failed > 0 ? "Review below" : "—"}
+            accent={stats && stats.failed > 0 ? "danger" : undefined}
             index="04"
           />
         </div>
@@ -563,7 +581,7 @@ export default function Models() {
           loading={loading}
         />
 
-        {caching.length > 0 && (
+        {pageCaching.length > 0 && (
           <div className="mt-2 flex justify-end caption">
             <span className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 bg-warn animate-pulse_signal" />

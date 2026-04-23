@@ -126,6 +126,13 @@ export default function SuiteResults() {
                     precision: 1,
                     accent: suiteSuccessRate !== undefined && suiteSuccessRate < 99 ? "warn" : "signal",
                   },
+                  // PRD-35: persisted suite cost (one shared EC2 node lifetime).
+                  {
+                    label: "Total Cost",
+                    value: suiteRun.total_cost_usd ?? undefined,
+                    unit: "$",
+                    precision: 2,
+                  },
                 ]
               : undefined
           }

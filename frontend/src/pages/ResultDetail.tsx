@@ -119,7 +119,11 @@ export default function ResultDetail() {
   );
   const perRequestCost = costPerRequest(hourly, metrics?.requests_per_second);
   const per1MCost = costPer1MTokens(hourly, aggregateTps);
-  const spent = totalSpent(hourly, metrics?.total_duration_seconds);
+  // PRD-35: prefer the persisted total_cost_usd (frozen at completion, uses
+  // the full EC2 node lifetime). Fall back to the old loadgen-duration
+  // estimate only if the run predates the migration and has no stored cost.
+  const spent =
+    run.total_cost_usd ?? totalSpent(hourly, metrics?.total_duration_seconds);
 
   const instanceSummary = instanceType
     ? `${instanceType.name} · ${instanceType.accelerator_count}×${instanceType.accelerator_name} · ${instanceType.accelerator_memory_gib} GiB`
@@ -170,6 +174,15 @@ export default function ResultDetail() {
                     accent: successRate !== undefined && successRate < 99 ? "warn" : "signal",
                   },
                   { label: "Cost / 1M tok", value: per1MCost, unit: "$", precision: 2 },
+                  // PRD-35: persisted total cost for the full EC2 node
+                  // lifetime. `value: undefined` renders as "—" on historical
+                  // NULL-cost rows (matches the other metrics' loading state).
+                  {
+                    label: "Total Cost",
+                    value: run.total_cost_usd ?? undefined,
+                    unit: "$",
+                    precision: 2,
+                  },
                 ]
               : undefined
           }

@@ -175,3 +175,34 @@ func (r *Repository) DeleteModelCache(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// ModelCacheStats is the response for GET /api/v1/model-cache/stats (PRD-35).
+// The ModelCache page stat cards used to compute these client-side from the
+// list — after PRD-36 paginated the list, those numbers were wrong. This
+// endpoint returns full-registry totals.
+type ModelCacheStats struct {
+	Total      int   `json:"total"`
+	Cached     int   `json:"cached"`
+	Caching    int   `json:"caching"`     // status IN ('caching','pending')
+	Failed     int   `json:"failed"`
+	TotalBytes int64 `json:"total_bytes"` // SUM(size_bytes) where status='cached'
+}
+
+// ModelCacheStats returns the FILTER-aggregated row stats plus total S3
+// bytes across every cached model.
+func (r *Repository) ModelCacheStats(ctx context.Context) (*ModelCacheStats, error) {
+	var s ModelCacheStats
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*)                                                 AS total,
+			COUNT(*) FILTER (WHERE status = 'cached')                AS cached,
+			COUNT(*) FILTER (WHERE status IN ('caching','pending'))  AS caching,
+			COUNT(*) FILTER (WHERE status = 'failed')                AS failed,
+			COALESCE(SUM(size_bytes) FILTER (WHERE status = 'cached'), 0) AS total_bytes
+		FROM model_cache
+	`).Scan(&s.Total, &s.Cached, &s.Caching, &s.Failed, &s.TotalBytes)
+	if err != nil {
+		return nil, fmt.Errorf("model cache stats: %w", err)
+	}
+	return &s, nil
+}

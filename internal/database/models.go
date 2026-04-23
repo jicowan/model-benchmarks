@@ -50,6 +50,12 @@ type BenchmarkRun struct {
 	LoadgenStartedAt      *time.Time `json:"loadgen_started_at,omitempty"`
 	CompletedAt           *time.Time `json:"completed_at,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
+	// PRD-35: cost frozen at run completion. total_cost_usd covers the full
+	// EC2 node lifetime (pull + load + bench + teardown); loadgen_cost_usd
+	// covers just the inference-perf window. NULL on historical rows and on
+	// completions where pricing lookup failed — aggregates COALESCE to $0.
+	TotalCostUSD   *float64 `json:"total_cost_usd,omitempty"`
+	LoadgenCostUSD *float64 `json:"loadgen_cost_usd,omitempty"`
 }
 
 type BenchmarkMetrics struct {
@@ -154,6 +160,9 @@ type TestSuiteRun struct {
 	StartedAt            *time.Time `json:"started_at,omitempty"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 	CreatedAt            time.Time  `json:"created_at"`
+	// PRD-35: SUM of child benchmark_runs.total_cost_usd, written once when
+	// the suite marks itself completed. NULL if every child is NULL.
+	TotalCostUSD *float64 `json:"total_cost_usd,omitempty"`
 }
 
 // ScenarioResult represents the result of a single scenario within a suite run.
