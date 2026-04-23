@@ -236,8 +236,8 @@ export default function Run() {
 
     const modelId = detail.modelId;
     listModelCache()
-      .then((cache) => {
-        const match = cache.find(
+      .then((resp) => {
+        const match = resp.rows.find(
           (c) => c.hf_id === modelId && c.status === "cached"
         );
         setCachedModel(match || null);

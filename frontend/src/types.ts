@@ -154,9 +154,40 @@ export interface RunListItem {
   completed_at?: string;
 }
 
+// PRD-36: unified row shape returned by GET /api/v1/jobs. The Runs page
+// consumes these instead of merging single-runs + suite-runs client-side.
+export interface Job {
+  id: string;
+  type: "run" | "suite";
+  model_hf_id: string;
+  instance_type_name: string;
+  // For type="run" this is the vLLM framework string; for type="suite" it's
+  // the suite_id (e.g. "quick", "regression").
+  framework_or_suite: string;
+  status: string;
+  error_message?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface JobFilter {
+  type?: "run" | "suite";
+  status?: string;
+  model?: string;
+  sort?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+// Retained for backwards compatibility with any remaining callers; prefer
+// JobFilter going forward.
 export interface RunListFilter {
   status?: string;
   model?: string;
+  sort?: string;
+  order?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }
@@ -245,10 +276,20 @@ export interface CatalogSeedStatus {
 }
 
 export interface CatalogFilter {
+  ids?: string[]; // PRD-36: used by Compare to fetch selected rows only
   model?: string;
   model_family?: string;
   instance_family?: string;
   accelerator_type?: string;
+  sort?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+// PRD-36: ModelCache list filter for server-side pagination + sort.
+export interface ModelCacheFilter {
+  status?: string;
   sort?: string;
   order?: "asc" | "desc";
   limit?: number;

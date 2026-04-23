@@ -11,6 +11,25 @@ import { useNavigate } from "react-router-dom";
 import { listCatalog, seedCatalog, getCatalogSeedStatus, getCatalogMatrix } from "../api";
 import type { CatalogEntry, CatalogFilter, CatalogSeedStatus } from "../types";
 import FilterBar from "../components/FilterBar";
+import Pagination from "../components/Pagination";
+import { PAGE_SIZE } from "../lib/pagination";
+
+// Map react-table column IDs (the `accessorKey` on each ColumnDef) to the
+// user-facing sort keys the API accepts (see `allowedSortColumns` in
+// internal/database/catalog.go). Any key not in the map is dropped silently
+// and the server falls back to its default sort.
+const CATALOG_SORT_KEY: Record<string, string> = {
+  model_hf_id: "model",
+  instance_type_name: "instance",
+  ttft_p50_ms: "ttft_p50",
+  ttft_p99_ms: "ttft_p99",
+  e2e_latency_p50_ms: "e2e_latency_p50",
+  itl_p50_ms: "itl_p50",
+  throughput_aggregate_tps: "throughput_aggregate",
+  requests_per_second: "requests_per_second",
+  accelerator_utilization_avg_pct: "accelerator_utilization_avg",
+  sm_active_avg_pct: "sm_active_avg",
+};
 
 function fmtNum(v: number | undefined, d = 1): string {
   return v != null ? v.toFixed(d) : "--";
@@ -18,6 +37,9 @@ function fmtNum(v: number | undefined, d = 1): string {
 
 export default function Catalog() {
   const [data, setData] = useState<CatalogEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [filter, setFilter] = useState<CatalogFilter>({});
   const [loading, setLoading] = useState(true);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -27,13 +49,39 @@ export default function Catalog() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigate = useNavigate();
 
-  const fetchData = useCallback((filter: CatalogFilter = {}) => {
+  // Fetch a page of results. Sort and filter come from component state so
+  // fetchData is stable; re-runs happen via the dependency-tracking effect.
+  const fetchData = useCallback(() => {
     setLoading(true);
-    listCatalog({ ...filter, limit: 500 })
-      .then(setData)
+    const colId = sorting[0]?.id;
+    const sortKey = colId ? CATALOG_SORT_KEY[colId] : undefined;
+    const sortDir: "asc" | "desc" | undefined = sorting[0]
+      ? sorting[0].desc ? "desc" : "asc"
+      : undefined;
+    listCatalog({
+      ...filter,
+      sort: sortKey,
+      order: sortDir,
+      limit: PAGE_SIZE,
+      offset,
+    })
+      .then((resp) => {
+        setData(resp.rows);
+        setTotal(resp.total);
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+  }, [filter, sorting, offset]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Reset to first page when the filter or sort changes so the user doesn't
+  // stare at an empty page after narrowing results.
+  useEffect(() => {
+    setOffset(0);
+  }, [filter, sorting]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -68,21 +116,18 @@ export default function Catalog() {
     setSeedError(null);
 
     // Estimate how many new benchmarks will run so the confirm dialog can
-    // warn about cost. Total = enabled_models × enabled_instances; already-done
-    // is approximated from the catalog rows currently loaded (non-superseded
-    // completed runs). The seeder itself dedupes against all non-failed runs,
-    // so this is a rough estimate.
-    let total = 0;
+    // warn about cost. Matrix total = enabled_models × enabled_instances.
+    // Already-done is the catalog endpoint's total count (completed,
+    // non-superseded runs). The seeder dedupes server-side; this is
+    // approximate.
+    let matrixTotal = 0;
     let estimatedNew = 0;
     try {
       const matrix = await getCatalogMatrix();
       const models = matrix.models.filter((m) => m.enabled).length;
       const instances = matrix.instance_types.filter((i) => i.enabled).length;
-      total = models * instances;
-      const alreadyDone = new Set(
-        data.map((e) => `${e.model_hf_id}|${e.instance_type_name}`),
-      ).size;
-      estimatedNew = Math.max(0, total - alreadyDone);
+      matrixTotal = models * instances;
+      estimatedNew = Math.max(0, matrixTotal - total);
     } catch {
       // If we can't fetch the matrix, fall through with zeros — the warning
       // still appears but without numbers.
@@ -91,8 +136,8 @@ export default function Catalog() {
     const lines = [
       "Seed benchmarks?",
       "",
-      total > 0
-        ? `This will queue up to ~${estimatedNew} new benchmark(s) from a matrix of ${total} (model × instance) combinations. Pairs with an existing run are skipped.`
+      matrixTotal > 0
+        ? `This will queue up to ~${estimatedNew} new benchmark(s) from a matrix of ${matrixTotal} (model × instance) combinations. Pairs with an existing run are skipped.`
         : "This will queue benchmark runs for every enabled (model × instance) combination in the catalog matrix.",
       "",
       "Each benchmark provisions GPU/Neuron capacity via Karpenter for several minutes. This can incur significant AWS costs.",
@@ -114,14 +159,13 @@ export default function Catalog() {
   };
 
   useEffect(() => {
-    fetchData();
     // Check if a seed is already running on mount.
     getCatalogSeedStatus().then((s) => {
       setSeedStatus(s.status);
       if (s.status === "active") startPolling();
     }).catch(() => {});
     return stopPolling;
-  }, [fetchData, startPolling, stopPolling]);
+  }, [startPolling, stopPolling]);
 
   const columns = useMemo<ColumnDef<CatalogEntry>[]>(
     () => [
@@ -229,6 +273,10 @@ export default function Catalog() {
   const table = useReactTable({
     data,
     columns,
+    // PRD-36: server-side sort. Rows are already ordered by the API, so we
+    // skip react-table's local sorter and only use its sorting state to drive
+    // the header UI.
+    manualSorting: true,
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -277,7 +325,7 @@ export default function Catalog() {
         </div>
       </div>
 
-      <FilterBar onFilter={fetchData} />
+      <FilterBar onFilter={setFilter} />
 
       {/* Selection bar — appears when rows are selected */}
       {selected.size > 0 && (
@@ -371,6 +419,13 @@ export default function Catalog() {
           )}
         </div>
       )}
+      <Pagination
+        offset={offset}
+        pageSize={PAGE_SIZE}
+        total={total}
+        onOffsetChange={setOffset}
+        loading={loading}
+      />
       </div>
     </>
   );

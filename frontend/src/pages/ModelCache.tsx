@@ -1,8 +1,28 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  flexRender,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
 import { listModelCache, createModelCache, deleteModelCache, registerCustomModel } from "../api";
 import type { ModelCache as ModelCacheEntry } from "../types";
 import ModelCombobox from "../components/ModelCombobox";
+import Pagination from "../components/Pagination";
+import { PAGE_SIZE } from "../lib/pagination";
+
+// Map react-table column IDs to the sort keys the /model-cache endpoint
+// accepts (see internal/database/model_cache.go).
+const MODEL_CACHE_SORT_KEY: Record<string, string> = {
+  status: "status",
+  display_name: "hf_id", // no server-side column for display_name; fall back to hf_id
+  hf_id: "hf_id",
+  size_bytes: "size_bytes",
+  cached_at: "cached_at",
+};
 
 /* ----------------------------- Utilities ----------------------------- */
 
@@ -66,6 +86,9 @@ type FormMode = "none" | "cache" | "register";
 
 export default function Models() {
   const [items, setItems] = useState<ModelCacheEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [sorting, setSorting] = useState<SortingState>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -81,22 +104,38 @@ export default function Models() {
   const [registerName, setRegisterName] = useState("");
 
   const fetchItems = useCallback(() => {
-    listModelCache()
-      .then((data) => {
-        setItems(data || []);
+    const colId = sorting[0]?.id;
+    const sortKey = colId ? MODEL_CACHE_SORT_KEY[colId] : undefined;
+    const sortDir: "asc" | "desc" | undefined = sorting[0]
+      ? sorting[0].desc ? "desc" : "asc"
+      : undefined;
+    listModelCache({
+      sort: sortKey,
+      order: sortDir,
+      limit: PAGE_SIZE,
+      offset,
+    })
+      .then((resp) => {
+        setItems(resp.rows);
+        setTotal(resp.total);
         setLoading(false);
       })
       .catch((e) => {
         setError(e.message);
         setLoading(false);
       });
-  }, []);
+  }, [sorting, offset]);
 
   useEffect(() => {
     fetchItems();
   }, [fetchItems]);
 
-  // Poll while any entry is actively caching
+  // Reset to page 1 when sort changes.
+  useEffect(() => {
+    setOffset(0);
+  }, [sorting]);
+
+  // Poll while any entry on the current page is actively caching.
   useEffect(() => {
     const active = items.some((i) => i.status === "caching" || i.status === "pending");
     if (!active) return;
@@ -156,10 +195,126 @@ export default function Models() {
     }
   }
 
+  // NOTE: these stats are computed over the current page only (PRD-36).
+  // A future endpoint can provide lifetime totals.
   const cached = items.filter((i) => i.status === "cached");
   const caching = items.filter((i) => i.status === "caching" || i.status === "pending");
   const failed = items.filter((i) => i.status === "failed");
   const totalBytes = cached.reduce((sum, i) => sum + (i.size_bytes ?? 0), 0);
+
+  const columns = useMemo<ColumnDef<ModelCacheEntry>[]>(
+    () => [
+      {
+        accessorKey: "status",
+        header: "STATUS",
+        size: 140,
+        cell: ({ row }) => {
+          const item = row.original;
+          return (
+            <>
+              <div className="flex items-center">
+                <span className={`status-dot ${statusDotClass(item.status)}`} />
+                <span className="uppercase tracking-mech text-[11px]">{item.status}</span>
+              </div>
+              {item.status === "failed" && item.error_message && (
+                <p className="text-[10.5px] text-danger mt-1 max-w-xs truncate" title={item.error_message}>
+                  {item.error_message}
+                </p>
+              )}
+            </>
+          );
+        },
+      },
+      {
+        accessorKey: "display_name",
+        header: "NAME",
+        cell: ({ getValue }) => (
+          <div className="text-ink-0 truncate max-w-[280px]">{getValue<string>()}</div>
+        ),
+      },
+      {
+        accessorKey: "hf_id",
+        header: "HF ID",
+        cell: ({ getValue }) => {
+          const v = getValue<string | undefined>();
+          return (
+            <span className="path text-ink-1">
+              {v || <span className="text-ink-2 italic">CUSTOM</span>}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "s3_uri",
+        header: "S3 URI",
+        enableSorting: false,
+        cell: ({ getValue }) => {
+          const v = getValue<string>();
+          return (
+            <span className="path text-ink-1 truncate max-w-[360px] block" title={v}>
+              {v}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "size_bytes",
+        header: "SIZE",
+        size: 80,
+        cell: ({ getValue }) => (
+          <span className="num text-ink-1">{formatBytes(getValue<number | undefined>())}</span>
+        ),
+      },
+      {
+        accessorKey: "cached_at",
+        header: "CACHED",
+        size: 176,
+        cell: ({ getValue }) => (
+          <span className="text-ink-2 text-[11.5px]">{formatDate(getValue<string | undefined>())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        size: 96,
+        cell: ({ row }) => {
+          const item = row.original;
+          return (
+            <div className="flex gap-2 justify-end">
+              {item.hf_id && (
+                <Link
+                  to={`/run?model=${encodeURIComponent(item.hf_id)}`}
+                  className="text-[11px] font-mono tracking-mech text-signal hover:underline"
+                >
+                  RUN →
+                </Link>
+              )}
+              <button
+                onClick={() => handleDelete(item.id, item.display_name)}
+                className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger"
+              >
+                DEL
+              </button>
+            </div>
+          );
+        },
+      },
+    ],
+    // handleDelete is defined in closure and only uses stable setters + fetchItems.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const table = useReactTable({
+    data: items,
+    columns,
+    manualSorting: true, // rows are ordered by the API
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
 
   return (
     <>
@@ -201,7 +356,7 @@ export default function Models() {
 
         {/* Stats */}
         <div className="grid grid-cols-4 border-l border-t border-line mb-8">
-          <StatCell label="TOTAL" value={loading ? "—" : items.length} sub="registered" index="01" />
+          <StatCell label="TOTAL" value={loading ? "—" : total} sub="registered" index="01" />
           <StatCell
             label="CACHED"
             value={loading ? "—" : cached.length}
@@ -336,21 +491,35 @@ export default function Models() {
             <div className="flex items-baseline gap-3">
               <span className="eyebrow">[ REGISTRY ]</span>
               <span className="font-mono text-[12px] text-ink-1">
-                {loading ? "loading…" : `${items.length} entries`}
+                {loading ? "loading…" : `${total} entries`}
               </span>
             </div>
           </div>
           <table className="data-table">
             <thead>
-              <tr>
-                <th className="w-28">STATUS</th>
-                <th>NAME</th>
-                <th>HF ID</th>
-                <th>S3 URI</th>
-                <th className="w-20 num">SIZE</th>
-                <th className="w-44">CACHED</th>
-                <th className="w-20"></th>
-              </tr>
+              {table.getHeaderGroups().map((hg) => (
+                <tr key={hg.id}>
+                  {hg.headers.map((header) => {
+                    const canSort = header.column.getCanSort();
+                    return (
+                      <th
+                        key={header.id}
+                        onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                        className={`eyebrow text-left py-2 px-3 ${
+                          canSort ? "cursor-pointer select-none hover:text-ink-0 transition-colors" : ""
+                        }`}
+                        style={{ width: header.getSize() }}
+                      >
+                        <div className="flex items-center gap-1">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {canSort &&
+                            ({ asc: " ^", desc: " v" }[header.column.getIsSorted() as string] ?? "")}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              ))}
             </thead>
             <tbody>
               {loading ? (
@@ -372,52 +541,13 @@ export default function Models() {
                   </td>
                 </tr>
               ) : (
-                items.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <div className="flex items-center">
-                        <span className={`status-dot ${statusDotClass(item.status)}`} />
-                        <span className="uppercase tracking-mech text-[11px]">{item.status}</span>
-                      </div>
-                      {item.status === "failed" && item.error_message && (
-                        <p className="text-[10.5px] text-danger mt-1 max-w-xs truncate" title={item.error_message}>
-                          {item.error_message}
-                        </p>
-                      )}
-                    </td>
-                    <td>
-                      <div className="text-ink-0 truncate max-w-[280px]">{item.display_name}</div>
-                    </td>
-                    <td>
-                      <span className="path text-ink-1">
-                        {item.hf_id || <span className="text-ink-2 italic">CUSTOM</span>}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="path text-ink-1 truncate max-w-[360px] block" title={item.s3_uri}>
-                        {item.s3_uri}
-                      </span>
-                    </td>
-                    <td className="num text-ink-1">{formatBytes(item.size_bytes)}</td>
-                    <td className="text-ink-2 text-[11.5px]">{formatDate(item.cached_at)}</td>
-                    <td>
-                      <div className="flex gap-2 justify-end">
-                        {item.hf_id && (
-                          <Link
-                            to={`/run?model=${encodeURIComponent(item.hf_id)}`}
-                            className="text-[11px] font-mono tracking-mech text-signal hover:underline"
-                          >
-                            RUN →
-                          </Link>
-                        )}
-                        <button
-                          onClick={() => handleDelete(item.id, item.display_name)}
-                          className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger"
-                        >
-                          DEL
-                        </button>
-                      </div>
-                    </td>
+                table.getRowModel().rows.map((row) => (
+                  <tr key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <td key={cell.id} className="py-2.5 px-3">
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    ))}
                   </tr>
                 ))
               )}
@@ -425,18 +555,22 @@ export default function Models() {
           </table>
         </div>
 
-        {/* Footer */}
-        <div className="mt-4 flex justify-between caption">
-          <span>
-            {loading ? "LOADING…" : `${items.length} TOTAL · ${cached.length} CACHED · ${formatBytes(totalBytes)} S3`}
-          </span>
-          {caching.length > 0 && (
+        <Pagination
+          offset={offset}
+          pageSize={PAGE_SIZE}
+          total={total}
+          onOffsetChange={setOffset}
+          loading={loading}
+        />
+
+        {caching.length > 0 && (
+          <div className="mt-2 flex justify-end caption">
             <span className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 bg-warn animate-pulse_signal" />
               AUTO-REFRESH WHILE CACHING
             </span>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </>
   );

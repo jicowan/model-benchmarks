@@ -24,8 +24,10 @@ type Repo interface {
 	PersistMetrics(ctx context.Context, runID string, m *BenchmarkMetrics) error
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
-	ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, error)
+	ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, int, error)
 	ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, error)
+	// PRD-36: unified single-run + suite-run feed with pagination + sort.
+	ListJobs(ctx context.Context, f JobFilter) ([]Job, int, error)
 	GetRunsByStatus(ctx context.Context, status string) ([]BenchmarkRun, error)
 	DeleteRun(ctx context.Context, runID string) error
 	GetRunExportDetails(ctx context.Context, runID string) (*RunExportDetails, error)
@@ -138,7 +140,7 @@ type ModelCacheRepo interface {
 	CreateModelCache(ctx context.Context, m *ModelCache) (string, error)
 	GetModelCache(ctx context.Context, id string) (*ModelCache, error)
 	GetModelCacheByHfID(ctx context.Context, hfID, revision string) (*ModelCache, error)
-	ListModelCache(ctx context.Context) ([]ModelCache, error)
+	ListModelCache(ctx context.Context, f ModelCacheFilter) ([]ModelCache, int, error)
 	UpdateModelCacheStatus(ctx context.Context, id, status string, errMsg *string) error
 	UpdateModelCacheComplete(ctx context.Context, id string, sizeBytes int64) error
 	DeleteModelCache(ctx context.Context, id string) error

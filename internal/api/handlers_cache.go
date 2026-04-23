@@ -33,7 +33,24 @@ const (
 )
 
 func (s *Server) handleListModelCache(w http.ResponseWriter, r *http.Request) {
-	items, err := s.repo.ListModelCache(r.Context())
+	q := r.URL.Query()
+	f := database.ModelCacheFilter{
+		Status: q.Get("status"),
+		Sort:   q.Get("sort"),
+		Order:  q.Get("order"),
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
+		}
+	}
+
+	items, total, err := s.repo.ListModelCache(r.Context(), f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list model cache failed")
 		return
@@ -41,7 +58,10 @@ func (s *Server) handleListModelCache(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []database.ModelCache{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows":  items,
+		"total": total,
+	})
 }
 
 func (s *Server) handleGetModelCache(w http.ResponseWriter, r *http.Request) {

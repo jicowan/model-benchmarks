@@ -139,10 +139,12 @@ export default function Compare() {
   const axis = axisStyle(theme);
 
   useEffect(() => {
-    const ids = searchParams.get("ids")?.split(",") ?? [];
+    const ids = searchParams.get("ids")?.split(",").filter(Boolean) ?? [];
     if (ids.length === 0) return;
-    listCatalog({ limit: 500 }).then((all) => {
-      setEntries(all.filter((e) => ids.includes(e.run_id)));
+    // PRD-36: fetch only the selected rows via the new ids filter, so this
+    // doesn't depend on Catalog's default page size.
+    listCatalog({ ids, limit: ids.length }).then((resp) => {
+      setEntries(resp.rows);
     });
   }, [searchParams]);
 

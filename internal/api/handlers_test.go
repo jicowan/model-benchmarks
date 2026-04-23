@@ -313,8 +313,12 @@ func TestHandleListCatalog_All(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var entries []database.CatalogEntry
-	json.NewDecoder(w.Body).Decode(&entries)
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	entries := resp.Rows
 	if len(entries) != 3 {
 		t.Errorf("got %d entries, want 3", len(entries))
 	}
@@ -331,8 +335,12 @@ func TestHandleListCatalog_FilterModel(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var entries []database.CatalogEntry
-	json.NewDecoder(w.Body).Decode(&entries)
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	entries := resp.Rows
 	if len(entries) != 2 {
 		t.Errorf("got %d entries, want 2", len(entries))
 	}
@@ -349,8 +357,12 @@ func TestHandleListCatalog_FilterAcceleratorType(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var entries []database.CatalogEntry
-	json.NewDecoder(w.Body).Decode(&entries)
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	entries := resp.Rows
 	if len(entries) != 1 {
 		t.Errorf("got %d entries, want 1", len(entries))
 	}
@@ -367,8 +379,12 @@ func TestHandleListCatalog_FilterInstanceFamily(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var entries []database.CatalogEntry
-	json.NewDecoder(w.Body).Decode(&entries)
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	entries := resp.Rows
 	if len(entries) != 1 {
 		t.Errorf("got %d entries, want 1", len(entries))
 	}
@@ -381,8 +397,12 @@ func TestHandleListCatalog_Pagination(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	var entries []database.CatalogEntry
-	json.NewDecoder(w.Body).Decode(&entries)
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	entries := resp.Rows
 	if len(entries) != 2 {
 		t.Errorf("got %d entries, want 2", len(entries))
 	}
@@ -403,8 +423,12 @@ func TestHandleListCatalog_Empty(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var entries []database.CatalogEntry
-	json.NewDecoder(w.Body).Decode(&entries)
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	entries := resp.Rows
 	if len(entries) != 0 {
 		t.Errorf("got %d entries, want 0", len(entries))
 	}
@@ -446,8 +470,12 @@ func TestHandleListRuns_All(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var items []database.RunListItem
-	json.NewDecoder(w.Body).Decode(&items)
+	var resp struct {
+		Rows  []database.Job `json:"rows"`
+		Total int            `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	items := resp.Rows
 	if len(items) != 4 {
 		t.Errorf("expected 4 items, got %d", len(items))
 	}
@@ -464,8 +492,12 @@ func TestHandleListRuns_FilterByStatus(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var items []database.RunListItem
-	json.NewDecoder(w.Body).Decode(&items)
+	var resp struct {
+		Rows  []database.Job `json:"rows"`
+		Total int            `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	items := resp.Rows
 	if len(items) != 1 {
 		t.Errorf("expected 1 completed item, got %d", len(items))
 	}
@@ -482,8 +514,12 @@ func TestHandleListRuns_FilterByModel(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var items []database.RunListItem
-	json.NewDecoder(w.Body).Decode(&items)
+	var resp struct {
+		Rows  []database.Job `json:"rows"`
+		Total int            `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	items := resp.Rows
 	if len(items) != 4 {
 		t.Errorf("expected 4 llama items, got %d", len(items))
 	}
@@ -504,8 +540,12 @@ func TestHandleListRuns_Empty(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var items []database.RunListItem
-	json.NewDecoder(w.Body).Decode(&items)
+	var resp struct {
+		Rows  []database.Job `json:"rows"`
+		Total int            `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	items := resp.Rows
 	if len(items) != 0 {
 		t.Errorf("expected 0 items, got %d", len(items))
 	}
@@ -522,8 +562,12 @@ func TestHandleListRuns_Pagination(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var items []database.RunListItem
-	json.NewDecoder(w.Body).Decode(&items)
+	var resp struct {
+		Rows  []database.Job `json:"rows"`
+		Total int            `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	items := resp.Rows
 	if len(items) != 2 {
 		t.Errorf("expected 2 items with limit=2, got %d", len(items))
 	}

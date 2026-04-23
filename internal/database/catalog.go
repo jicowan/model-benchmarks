@@ -56,14 +56,15 @@ type CatalogEntry struct {
 
 // CatalogFilter holds optional filters for catalog queries.
 type CatalogFilter struct {
-	ModelHfID       string // substring ILIKE on model hf_id (UI is a free-text search)
-	ModelFamily     string // exact match on model_family
-	InstanceFamily  string // exact match on instance family (e.g. "p5")
-	AcceleratorType string // "gpu" or "neuron"
-	SortBy          string // column name to sort by
-	SortDesc        bool   // true for descending sort
-	Limit           int    // max results (0 = default 100)
-	Offset          int    // pagination offset
+	RunIDs          []string // exact match on br.id (used by Compare)
+	ModelHfID       string   // substring ILIKE on model hf_id (UI is a free-text search)
+	ModelFamily     string   // exact match on model_family
+	InstanceFamily  string   // exact match on instance family (e.g. "p5")
+	AcceleratorType string   // "gpu" or "neuron"
+	SortBy          string   // column name to sort by
+	SortDesc        bool     // true for descending sort
+	Limit           int      // max results (0 = default 100)
+	Offset          int      // pagination offset
 }
 
 // allowedSortColumns maps user-facing sort keys to SQL column expressions.
@@ -92,8 +93,10 @@ var allowedSortColumns = map[string]string{
 	"completed_at":                "br.completed_at",
 }
 
-// ListCatalog queries the catalog with optional filters and sorting.
-func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, error) {
+// ListCatalog queries the catalog with optional filters and sorting. Returns
+// the page plus the total number of matching rows so the UI can render
+// "showing X-Y of Z" without a second query.
+func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, int, error) {
 	var (
 		conditions []string
 		args       []any
@@ -104,6 +107,13 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 	conditions = append(conditions, "br.status = 'completed'")
 	conditions = append(conditions, "br.superseded = FALSE")
 
+	if len(f.RunIDs) > 0 {
+		argIdx++
+		// pgx accepts []string → ANY($N) so the Compare page can pass its
+		// 2-4 selected IDs in a single round-trip.
+		conditions = append(conditions, fmt.Sprintf("br.id = ANY($%d)", argIdx))
+		args = append(args, f.RunIDs)
+	}
 	if f.ModelHfID != "" {
 		argIdx++
 		conditions = append(conditions, fmt.Sprintf("m.hf_id ILIKE $%d", argIdx))
@@ -173,7 +183,8 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 			bm.accelerator_utilization_pct, bm.accelerator_utilization_avg_pct,
 			bm.accelerator_memory_peak_gib, bm.accelerator_memory_avg_gib,
 			bm.sm_active_avg_pct, bm.tensor_active_avg_pct,
-			bm.dram_active_avg_pct
+			bm.dram_active_avg_pct,
+			COUNT(*) OVER () AS total_count
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
 		JOIN instance_types it ON br.instance_type_id = it.id
@@ -185,11 +196,14 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query catalog: %w", err)
+		return nil, 0, fmt.Errorf("query catalog: %w", err)
 	}
 	defer rows.Close()
 
-	var entries []CatalogEntry
+	var (
+		entries []CatalogEntry
+		total   int
+	)
 	for rows.Next() {
 		var e CatalogEntry
 		err := rows.Scan(
@@ -210,11 +224,12 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 			&e.AcceleratorMemoryPeakGiB, &e.AcceleratorMemoryAvgGiB,
 			&e.SMActiveAvgPct, &e.TensorActiveAvgPct,
 			&e.DRAMActiveAvgPct,
+			&total,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("scan catalog row: %w", err)
+			return nil, 0, fmt.Errorf("scan catalog row: %w", err)
 		}
 		entries = append(entries, e)
 	}
-	return entries, rows.Err()
+	return entries, total, rows.Err()
 }

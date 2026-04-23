@@ -8,6 +8,9 @@ import type {
   RunRequest,
   RunListItem,
   RunListFilter,
+  Job,
+  JobFilter,
+  ModelCacheFilter,
   PricingRow,
   RecommendResponse,
   EstimateFilter,
@@ -31,6 +34,7 @@ import type {
   AuditLogEntry,
   NodePoolReservations,
 } from "./types";
+import type { Paginated } from "./lib/pagination";
 
 const BASE = "/api/v1";
 
@@ -54,10 +58,13 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// PRD-36: /api/v1/catalog now returns { rows, total } so paginated UIs can
+// render "showing X-Y of Z" without a second query.
 export async function listCatalog(
   filter: CatalogFilter = {}
-): Promise<CatalogEntry[]> {
+): Promise<Paginated<CatalogEntry>> {
   const params = new URLSearchParams();
+  if (filter.ids && filter.ids.length > 0) params.set("ids", filter.ids.join(","));
   if (filter.model) params.set("model", filter.model);
   if (filter.model_family) params.set("model_family", filter.model_family);
   if (filter.instance_family)
@@ -70,7 +77,7 @@ export async function listCatalog(
   if (filter.offset) params.set("offset", String(filter.offset));
 
   const qs = params.toString();
-  return fetchJSON<CatalogEntry[]>(`${BASE}/catalog${qs ? `?${qs}` : ""}`);
+  return fetchJSON<Paginated<CatalogEntry>>(`${BASE}/catalog${qs ? `?${qs}` : ""}`);
 }
 
 export async function getRun(id: string): Promise<BenchmarkRun> {
@@ -91,17 +98,42 @@ export async function createRun(
   });
 }
 
-export async function listRuns(
-  filter: RunListFilter = {}
-): Promise<RunListItem[]> {
+// PRD-36: /api/v1/jobs now returns a unified feed of single + suite runs as
+// { rows, total }. Use listJobs() for new callers; listRuns() is kept for
+// backwards compatibility with Dashboard which hasn't migrated yet.
+export async function listJobs(filter: JobFilter = {}): Promise<Paginated<Job>> {
   const params = new URLSearchParams();
+  if (filter.type) params.set("type", filter.type);
   if (filter.status) params.set("status", filter.status);
   if (filter.model) params.set("model", filter.model);
+  if (filter.sort) params.set("sort", filter.sort);
+  if (filter.order) params.set("order", filter.order);
   if (filter.limit) params.set("limit", String(filter.limit));
   if (filter.offset) params.set("offset", String(filter.offset));
 
   const qs = params.toString();
-  return fetchJSON<RunListItem[]>(`${BASE}/jobs${qs ? `?${qs}` : ""}`);
+  return fetchJSON<Paginated<Job>>(`${BASE}/jobs${qs ? `?${qs}` : ""}`);
+}
+
+// Legacy wrapper: old callers (Dashboard) expected a bare array of runs.
+// Filters the unified jobs feed down to type="run" and returns only rows.
+// New code should prefer listJobs().
+export async function listRuns(
+  filter: RunListFilter = {}
+): Promise<RunListItem[]> {
+  const jobs = await listJobs({ ...filter, type: "run" });
+  return jobs.rows.map((j) => ({
+    id: j.id,
+    model_hf_id: j.model_hf_id,
+    instance_type_name: j.instance_type_name,
+    framework: j.framework_or_suite,
+    run_type: "",
+    status: j.status,
+    error_message: j.error_message,
+    created_at: j.created_at,
+    started_at: j.started_at,
+    completed_at: j.completed_at,
+  }));
 }
 
 export async function listInstanceTypes(): Promise<InstanceType[]> {
@@ -261,8 +293,19 @@ export async function listSuiteRuns(): Promise<SuiteRunListItem[]> {
 }
 
 // PRD-21: Model Cache
-export async function listModelCache(): Promise<ModelCache[]> {
-  return fetchJSON<ModelCache[]>(`${BASE}/model-cache`);
+// PRD-36: response wrapped as { rows, total }. Autocomplete callers pass no
+// filter and get every row; the ModelCache page passes pagination params.
+export async function listModelCache(
+  filter: ModelCacheFilter = {}
+): Promise<Paginated<ModelCache>> {
+  const params = new URLSearchParams();
+  if (filter.status) params.set("status", filter.status);
+  if (filter.sort) params.set("sort", filter.sort);
+  if (filter.order) params.set("order", filter.order);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.offset) params.set("offset", String(filter.offset));
+  const qs = params.toString();
+  return fetchJSON<Paginated<ModelCache>>(`${BASE}/model-cache${qs ? `?${qs}` : ""}`);
 }
 
 export async function createModelCache(req: CacheModelRequest): Promise<{ id: string; status: string }> {

@@ -59,11 +59,16 @@ func (c *Client) ListCatalog(ctx context.Context, f database.CatalogFilter) ([]d
 		u += "?" + params.Encode()
 	}
 
-	var entries []database.CatalogEntry
-	if err := c.doGet(ctx, u, &entries); err != nil {
+	// PRD-36: /api/v1/catalog now returns { rows, total }. The CLI only
+	// needs the rows.
+	var resp struct {
+		Rows  []database.CatalogEntry `json:"rows"`
+		Total int                     `json:"total"`
+	}
+	if err := c.doGet(ctx, u, &resp); err != nil {
 		return nil, err
 	}
-	return entries, nil
+	return resp.Rows, nil
 }
 
 // CreateRun submits POST /api/v1/runs and returns the run ID and status.
