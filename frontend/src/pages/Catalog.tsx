@@ -8,7 +8,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { useNavigate } from "react-router-dom";
-import { listCatalog, seedCatalog, getCatalogSeedStatus } from "../api";
+import { listCatalog, seedCatalog, getCatalogSeedStatus, getCatalogMatrix } from "../api";
 import type { CatalogEntry, CatalogFilter, CatalogSeedStatus } from "../types";
 import FilterBar from "../components/FilterBar";
 
@@ -66,6 +66,43 @@ export default function Catalog() {
 
   const handleSeed = async () => {
     setSeedError(null);
+
+    // Estimate how many new benchmarks will run so the confirm dialog can
+    // warn about cost. Total = enabled_models × enabled_instances; already-done
+    // is approximated from the catalog rows currently loaded (non-superseded
+    // completed runs). The seeder itself dedupes against all non-failed runs,
+    // so this is a rough estimate.
+    let total = 0;
+    let estimatedNew = 0;
+    try {
+      const matrix = await getCatalogMatrix();
+      const models = matrix.models.filter((m) => m.enabled).length;
+      const instances = matrix.instance_types.filter((i) => i.enabled).length;
+      total = models * instances;
+      const alreadyDone = new Set(
+        data.map((e) => `${e.model_hf_id}|${e.instance_type_name}`),
+      ).size;
+      estimatedNew = Math.max(0, total - alreadyDone);
+    } catch {
+      // If we can't fetch the matrix, fall through with zeros — the warning
+      // still appears but without numbers.
+    }
+
+    const lines = [
+      "Seed benchmarks?",
+      "",
+      total > 0
+        ? `This will queue up to ~${estimatedNew} new benchmark(s) from a matrix of ${total} (model × instance) combinations. Pairs with an existing run are skipped.`
+        : "This will queue benchmark runs for every enabled (model × instance) combination in the catalog matrix.",
+      "",
+      "Each benchmark provisions GPU/Neuron capacity via Karpenter for several minutes. This can incur significant AWS costs.",
+      "",
+      "Proceed?",
+    ];
+    if (!window.confirm(lines.join("\n"))) {
+      return;
+    }
+
     try {
       await seedCatalog();
       setSeedStatus("active");
