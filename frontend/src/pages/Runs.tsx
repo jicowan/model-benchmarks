@@ -1,30 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { listRuns, listSuiteRuns, cancelRun, deleteRun } from "../api";
-
-/* ----------------------------- Types ----------------------------- */
-
-interface JobItem {
-  id: string;
-  type: "run" | "suite";
-  model_hf_id: string;
-  instance_type_name: string;
-  framework_or_suite: string;
-  status: string;
-  error_message?: string;
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
-}
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  flexRender,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
+import { listJobs, cancelRun, deleteRun } from "../api";
+import type { Job } from "../types";
+import Pagination from "../components/Pagination";
+import { PAGE_SIZE } from "../lib/pagination";
 
 const STATUSES = ["all", "running", "pending", "completed", "failed"] as const;
 type StatusFilter = (typeof STATUSES)[number];
+type TypeFilter = "all" | "run" | "suite";
 
-const PAGE_SIZE = 50;
+// Map react-table column IDs to the sort keys /api/v1/jobs accepts
+// (see internal/database/jobs.go:jobsAllowedSortColumns).
+const JOBS_SORT_KEY: Record<string, string> = {
+  status: "status",
+  model_hf_id: "model",
+  instance_type_name: "instance",
+  duration: "duration",
+  created_at: "created_at",
+};
 
 /* --------------------------- Utilities --------------------------- */
 
-function formatDuration(item: JobItem): string {
+function formatDuration(item: Job): string {
   if (!item.started_at) return "—";
   const start = new Date(item.started_at).getTime();
   const end = item.completed_at
@@ -49,6 +54,10 @@ function timeAgo(iso: string): string {
 
 function statusDotClass(s: string): string {
   return "status-" + (s === "pending" ? "pending" : s);
+}
+
+function targetFor(j: Job): string {
+  return j.type === "suite" ? `/suite-runs/${j.id}` : `/results/${j.id}`;
 }
 
 /* ------------------------- PageHeader --------------------------- */
@@ -80,94 +89,53 @@ function PageHeader({
 /* ----------------------------- Runs ----------------------------- */
 
 export default function Runs() {
-  const [jobs, setJobs] = useState<JobItem[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "created_at", desc: true },
+  ]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [modelSearch, setModelSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | "run" | "suite">("all");
-  const [offset, setOffset] = useState(0);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     setError("");
+    const colId = sorting[0]?.id;
+    const sortKey = colId ? JOBS_SORT_KEY[colId] : undefined;
+    const sortDir: "asc" | "desc" | undefined = sorting[0]
+      ? sorting[0].desc ? "desc" : "asc"
+      : undefined;
     try {
-      const [runs, suiteRuns] = await Promise.all([
-        listRuns({
-          status: status === "all" ? undefined : status,
-          model: modelSearch || undefined,
-          limit: PAGE_SIZE,
-          offset,
-        }),
-        listSuiteRuns(),
-      ]);
-
-      const runItems: JobItem[] = runs.map((r) => ({
-        id: r.id,
-        type: "run" as const,
-        model_hf_id: r.model_hf_id,
-        instance_type_name: r.instance_type_name,
-        framework_or_suite: r.framework,
-        status: r.status,
-        error_message: r.error_message,
-        created_at: r.created_at,
-        started_at: r.started_at,
-        completed_at: r.completed_at,
-      }));
-
-      let suiteItems: JobItem[] = suiteRuns.map((s) => ({
-        id: s.id,
-        type: "suite" as const,
-        model_hf_id: s.model_hf_id,
-        instance_type_name: s.instance_type_name,
-        framework_or_suite: s.suite_id,
-        status: s.status,
-        created_at: s.created_at,
-        started_at: s.started_at,
-        completed_at: s.completed_at,
-      }));
-
-      if (status !== "all") {
-        suiteItems = suiteItems.filter((s) => s.status === status);
-      }
-      if (modelSearch) {
-        const q = modelSearch.toLowerCase();
-        suiteItems = suiteItems.filter((s) => s.model_hf_id.toLowerCase().includes(q));
-      }
-
-      const combined = [...runItems, ...suiteItems].sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-
-      setJobs(combined);
+      const resp = await listJobs({
+        type: typeFilter === "all" ? undefined : typeFilter,
+        status: status === "all" ? undefined : status,
+        model: modelSearch || undefined,
+        sort: sortKey,
+        order: sortDir,
+        limit: PAGE_SIZE,
+        offset,
+      });
+      setJobs(resp.rows);
+      setTotal(resp.total);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
-  }, [status, modelSearch, offset]);
+  }, [status, modelSearch, typeFilter, sorting, offset]);
 
   useEffect(() => {
     fetchJobs();
   }, [fetchJobs]);
 
+  // Reset to page 1 whenever a filter or sort changes.
   useEffect(() => {
     setOffset(0);
-  }, [status, modelSearch]);
-
-  const filteredJobs = useMemo(() => {
-    if (typeFilter === "all") return jobs;
-    return jobs.filter((j) => j.type === typeFilter);
-  }, [jobs, typeFilter]);
-
-  const counts = useMemo(() => {
-    const all = jobs.length;
-    const running = jobs.filter((j) => j.status === "running").length;
-    const pending = jobs.filter((j) => j.status === "pending").length;
-    const completed = jobs.filter((j) => j.status === "completed").length;
-    const failed = jobs.filter((j) => j.status === "failed").length;
-    return { all, running, pending, completed, failed };
-  }, [jobs]);
+  }, [status, modelSearch, typeFilter, sorting]);
 
   const handleCancel = async (id: string) => {
     if (!window.confirm(`Cancel job ${id.slice(0, 8)}?`)) return;
@@ -189,6 +157,145 @@ export default function Runs() {
     }
   };
 
+  const columns = useMemo<ColumnDef<Job>[]>(
+    () => [
+      {
+        accessorKey: "status",
+        header: "STATUS",
+        size: 112,
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <Link to={targetFor(j)} className="flex items-center" title={j.error_message}>
+              <span className={`status-dot ${statusDotClass(j.status)}`} />
+              <span className="uppercase tracking-mech text-[11px]">{j.status}</span>
+            </Link>
+          );
+        },
+      },
+      {
+        id: "type",
+        header: "TYPE",
+        size: 56,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <span
+              className={`font-mono text-[10px] tracking-widemech px-1.5 py-0.5 border ${
+                j.type === "suite"
+                  ? "border-info/40 text-info"
+                  : "border-line-strong text-ink-1"
+              }`}
+            >
+              {j.type === "suite" ? "SUITE" : "RUN"}
+            </span>
+          );
+        },
+      },
+      {
+        id: "id_short",
+        header: "ID",
+        size: 80,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <Link to={targetFor(j)} className="path hover:text-signal">
+              {j.id.slice(0, 8)}
+            </Link>
+          );
+        },
+      },
+      {
+        accessorKey: "model_hf_id",
+        header: "MODEL",
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <div className="flex flex-col min-w-0">
+              <Link to={targetFor(j)} className="path truncate max-w-[320px] hover:text-signal">
+                {j.model_hf_id}
+              </Link>
+              {j.error_message && (
+                <span className="text-[10.5px] text-danger truncate max-w-[320px]" title={j.error_message}>
+                  {j.error_message}
+                </span>
+              )}
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: "instance_type_name",
+        header: "INSTANCE",
+        cell: ({ getValue }) => (
+          <span className="text-ink-1">{getValue<string>()}</span>
+        ),
+      },
+      {
+        id: "duration",
+        header: "DURATION",
+        size: 96,
+        cell: ({ row }) => (
+          <span className="num text-ink-1">{formatDuration(row.original)}</span>
+        ),
+      },
+      {
+        accessorKey: "created_at",
+        header: "AGE",
+        size: 96,
+        cell: ({ getValue }) => (
+          <span className="text-ink-2">{timeAgo(getValue<string>())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        size: 80,
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <div className="flex gap-1 justify-end">
+              {(j.status === "running" || j.status === "pending") && (
+                <button
+                  onClick={() => handleCancel(j.id)}
+                  className="text-[11px] font-mono tracking-mech text-warn hover:text-danger px-1"
+                  title="Cancel"
+                >
+                  STOP
+                </button>
+              )}
+              <button
+                onClick={() => handleDelete(j.id)}
+                className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger px-1"
+                title="Delete"
+              >
+                DEL
+              </button>
+            </div>
+          );
+        },
+      },
+    ],
+    // handleCancel/handleDelete are stable closures over fetchJobs; safe to
+    // skip as deps (react-table only needs a fresh column array on data shape
+    // changes).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const table = useReactTable({
+    data: jobs,
+    columns,
+    manualSorting: true, // server-side sort
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
   return (
     <>
       <PageHeader
@@ -207,26 +314,24 @@ export default function Runs() {
         {/* Filter strip */}
         <div className="mb-6 panel">
           <div className="flex items-center border-b border-line">
-            {/* Status tabs */}
+            {/* Status tabs. Counts are no longer shown because the Runs feed
+                is server-paginated and we don't have a per-status count for
+                free; the Dashboard owns those stats (see PRD-35). */}
             <div className="flex">
-              {STATUSES.map((s) => {
-                const n = counts[s === "all" ? "all" : s] ?? 0;
-                return (
-                  <button
-                    key={s}
-                    onClick={() => setStatus(s)}
-                    className={`h-11 px-5 font-mono text-[11.5px] tracking-mech uppercase border-r border-line flex items-center gap-2 transition-colors ${
-                      status === s
-                        ? "text-ink-0 bg-surface-2"
-                        : "text-ink-1 hover:text-ink-0 hover:bg-surface-2/60"
-                    }`}
-                  >
-                    {s !== "all" && <span className={`status-dot ${statusDotClass(s)}`} />}
-                    <span>{s}</span>
-                    <span className="font-mono text-[10px] text-ink-2 tabular">{n}</span>
-                  </button>
-                );
-              })}
+              {STATUSES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setStatus(s)}
+                  className={`h-11 px-5 font-mono text-[11.5px] tracking-mech uppercase border-r border-line flex items-center gap-2 transition-colors ${
+                    status === s
+                      ? "text-ink-0 bg-surface-2"
+                      : "text-ink-1 hover:text-ink-0 hover:bg-surface-2/60"
+                  }`}
+                >
+                  {s !== "all" && <span className={`status-dot ${statusDotClass(s)}`} />}
+                  <span>{s}</span>
+                </button>
+              ))}
             </div>
 
             {/* Search */}
@@ -263,7 +368,6 @@ export default function Runs() {
               ))}
             </div>
           </div>
-
         </div>
 
         {error && (
@@ -276,128 +380,70 @@ export default function Runs() {
         <div className="panel overflow-x-auto">
           <table className="data-table">
             <thead>
-              <tr>
-                <th className="w-28">STATUS</th>
-                <th className="w-14">TYPE</th>
-                <th className="w-20">ID</th>
-                <th>MODEL</th>
-                <th>INSTANCE</th>
-                <th className="w-24">DURATION</th>
-                <th className="w-24">AGE</th>
-                <th className="w-20"></th>
-              </tr>
+              {table.getHeaderGroups().map((hg) => (
+                <tr key={hg.id}>
+                  {hg.headers.map((header) => {
+                    const canSort = header.column.getCanSort();
+                    return (
+                      <th
+                        key={header.id}
+                        onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                        className={`eyebrow text-left py-2 px-3 ${
+                          canSort
+                            ? "cursor-pointer select-none hover:text-ink-0 transition-colors"
+                            : ""
+                        }`}
+                        style={{ width: header.getSize() }}
+                      >
+                        <div className="flex items-center gap-1">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {canSort &&
+                            ({ asc: " ^", desc: " v" }[header.column.getIsSorted() as string] ?? "")}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              ))}
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 caption">
+                  <td colSpan={columns.length} className="text-center py-12 caption">
                     <span className="inline-flex items-center gap-2">
                       <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
                       LOADING…
                     </span>
                   </td>
                 </tr>
-              ) : filteredJobs.length === 0 ? (
+              ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-16 caption">
+                  <td colSpan={columns.length} className="text-center py-16 caption">
                     NO RUNS MATCH CURRENT FILTERS
                   </td>
                 </tr>
               ) : (
-                filteredJobs.map((j) => {
-                  const target = j.type === "suite" ? `/suite-runs/${j.id}` : `/results/${j.id}`;
-                  return (
-                    <tr key={`${j.type}-${j.id}`}>
-                      <td>
-                        <Link to={target} className="flex items-center" title={j.error_message}>
-                          <span className={`status-dot ${statusDotClass(j.status)}`} />
-                          <span className="uppercase tracking-mech text-[11px]">{j.status}</span>
-                        </Link>
+                table.getRowModel().rows.map((row) => (
+                  <tr key={`${row.original.type}-${row.original.id}`}>
+                    {row.getVisibleCells().map((cell) => (
+                      <td key={cell.id} className="py-2.5 px-3">
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
-                      <td>
-                        <span
-                          className={`font-mono text-[10px] tracking-widemech px-1.5 py-0.5 border ${
-                            j.type === "suite"
-                              ? "border-info/40 text-info"
-                              : "border-line-strong text-ink-1"
-                          }`}
-                        >
-                          {j.type === "suite" ? "SUITE" : "RUN"}
-                        </span>
-                      </td>
-                      <td>
-                        <Link to={target} className="path hover:text-signal">
-                          {j.id.slice(0, 8)}
-                        </Link>
-                      </td>
-                      <td>
-                        <div className="flex flex-col min-w-0">
-                          <Link to={target} className="path truncate max-w-[320px] hover:text-signal">
-                            {j.model_hf_id}
-                          </Link>
-                          {j.error_message && (
-                            <span className="text-[10.5px] text-danger truncate max-w-[320px]" title={j.error_message}>
-                              {j.error_message}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="text-ink-1">{j.instance_type_name}</td>
-                      <td className="num text-ink-1">{formatDuration(j)}</td>
-                      <td className="text-ink-2">{timeAgo(j.created_at)}</td>
-                      <td>
-                        <div className="flex gap-1 justify-end">
-                          {(j.status === "running" || j.status === "pending") && (
-                            <button
-                              onClick={() => handleCancel(j.id)}
-                              className="text-[11px] font-mono tracking-mech text-warn hover:text-danger px-1"
-                              title="Cancel"
-                            >
-                              STOP
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDelete(j.id)}
-                            className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger px-1"
-                            title="Delete"
-                          >
-                            DEL
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                    ))}
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
 
-        {/* Footer */}
-        <div className="mt-4 flex items-center justify-between caption">
-          <span>
-            {loading
-              ? "LOADING…"
-              : `SHOWING ${filteredJobs.length} OF ${jobs.length} JOBS`}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-              disabled={offset === 0}
-              className="btn btn-ghost"
-            >
-              ← PREV
-            </button>
-            <span className="tabular">OFFSET {offset}</span>
-            <button
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-              disabled={jobs.length < PAGE_SIZE}
-              className="btn btn-ghost"
-            >
-              NEXT →
-            </button>
-          </div>
-        </div>
+        <Pagination
+          offset={offset}
+          pageSize={PAGE_SIZE}
+          total={total}
+          onOffsetChange={setOffset}
+          loading={loading}
+        />
       </div>
     </>
   );

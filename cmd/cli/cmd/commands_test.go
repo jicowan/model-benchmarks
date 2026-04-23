@@ -47,7 +47,7 @@ func TestQueryCommand_Table(t *testing.T) {
 	}
 
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 
 	outputFormat = "table"
@@ -76,7 +76,7 @@ func TestQueryCommand_JSON(t *testing.T) {
 	}
 
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 
 	outputFormat = "json"
@@ -90,7 +90,7 @@ func TestQueryCommand_JSON(t *testing.T) {
 
 func TestQueryCommand_NoResults(t *testing.T) {
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]database.CatalogEntry{})
+		json.NewEncoder(w).Encode(map[string]any{"rows": []database.CatalogEntry{}, "total": 0})
 	}))
 
 	outputFormat = "table"
@@ -226,7 +226,7 @@ func TestCompareCommand(t *testing.T) {
 	}
 
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 
 	outputFormat = "table"
@@ -245,7 +245,7 @@ func TestCompareCommand_NoFilter(t *testing.T) {
 		{RunID: "r2", InstanceTypeName: "g6e.48xlarge"},
 	}
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 
 	outputFormat = "table"
@@ -263,7 +263,7 @@ func TestExportCommand_JSON(t *testing.T) {
 		{RunID: "r1", ModelHfID: "test/m", InstanceTypeName: "p5.48xlarge"},
 	}
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 
 	outputFormat = "json"
@@ -282,7 +282,7 @@ func TestExportCommand_CSV(t *testing.T) {
 		{RunID: "r1", ModelHfID: "test/m", InstanceTypeName: "p5.48xlarge", Framework: "vllm", FrameworkVersion: "0.4"},
 	}
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 
 	outputFormat = "csv"
@@ -298,7 +298,7 @@ func TestExportCommand_CSV(t *testing.T) {
 
 func TestExportCommand_NoResults(t *testing.T) {
 	setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]database.CatalogEntry{})
+		json.NewEncoder(w).Encode(map[string]any{"rows": []database.CatalogEntry{}, "total": 0})
 	}))
 
 	outputFormat = "json"

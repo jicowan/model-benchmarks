@@ -64,7 +64,7 @@ func seedCatalogRepo() *MockRepo {
 
 func TestListCatalog_AllEntries(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{})
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{})
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestListCatalog_AllEntries(t *testing.T) {
 
 func TestListCatalog_FilterByModel(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
 		ModelHfID: "meta-llama/Llama-3.1-8B",
 	})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestListCatalog_FilterByModel(t *testing.T) {
 
 func TestListCatalog_FilterByModelFamily(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
 		ModelFamily: "mistral",
 	})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestListCatalog_FilterByModelFamily(t *testing.T) {
 
 func TestListCatalog_FilterByInstanceFamily(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
 		InstanceFamily: "p5",
 	})
 	if err != nil {
@@ -124,7 +124,7 @@ func TestListCatalog_FilterByInstanceFamily(t *testing.T) {
 
 func TestListCatalog_FilterByAcceleratorType(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
 		AcceleratorType: "neuron",
 	})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestListCatalog_FilterByAcceleratorType(t *testing.T) {
 
 func TestListCatalog_CombinedFilters(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
 		ModelFamily:     "llama",
 		AcceleratorType: "gpu",
 	})
@@ -155,7 +155,7 @@ func TestListCatalog_CombinedFilters(t *testing.T) {
 
 func TestListCatalog_Limit(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
 		Limit: 2,
 	})
 	if err != nil {
@@ -168,8 +168,8 @@ func TestListCatalog_Limit(t *testing.T) {
 
 func TestListCatalog_Offset(t *testing.T) {
 	repo := seedCatalogRepo()
-	all, _ := repo.ListCatalog(context.Background(), CatalogFilter{})
-	paged, err := repo.ListCatalog(context.Background(), CatalogFilter{Offset: 2, Limit: 100})
+	all, _, _ := repo.ListCatalog(context.Background(), CatalogFilter{})
+	paged, _, err := repo.ListCatalog(context.Background(), CatalogFilter{Offset: 2, Limit: 100})
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestListCatalog_Offset(t *testing.T) {
 
 func TestListCatalog_MetricsPresent(t *testing.T) {
 	repo := seedCatalogRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{Limit: 1})
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{Limit: 1})
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestListCatalog_MetricsPresent(t *testing.T) {
 
 func TestListCatalog_Empty(t *testing.T) {
 	repo := NewMockRepo()
-	entries, err := repo.ListCatalog(context.Background(), CatalogFilter{})
+	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{})
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
 	}

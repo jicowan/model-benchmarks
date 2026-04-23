@@ -37,7 +37,7 @@ export default function ModelCombobox({
 
   useEffect(() => {
     listModelCache()
-      .then((items) => setCachedModels(items.filter((m) => m.status === "cached")))
+      .then((resp) => setCachedModels(resp.rows.filter((m) => m.status === "cached")))
       .catch(() => {});
   }, []);
 

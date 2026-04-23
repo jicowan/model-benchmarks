@@ -180,6 +180,15 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 		SortBy:          q.Get("sort"),
 		SortDesc:        q.Get("order") == "desc",
 	}
+	if ids := q.Get("ids"); ids != "" {
+		// Compare passes a comma-separated list of run IDs so it can fetch
+		// exactly the rows it needs without a full catalog scan.
+		for _, id := range strings.Split(ids, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				f.RunIDs = append(f.RunIDs, id)
+			}
+		}
+	}
 	if v := q.Get("limit"); v != "" {
 		fmt.Sscanf(v, "%d", &f.Limit)
 	}
@@ -187,7 +196,7 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(v, "%d", &f.Offset)
 	}
 
-	entries, err := s.repo.ListCatalog(r.Context(), f)
+	entries, total, err := s.repo.ListCatalog(r.Context(), f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "catalog query failed")
 		return
@@ -195,7 +204,10 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []database.CatalogEntry{}
 	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows":  entries,
+		"total": total,
+	})
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -376,11 +388,18 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
+// handleListRuns serves GET /api/v1/jobs. Despite the name, it returns the
+// unified feed of single benchmark runs + test-suite runs introduced by
+// PRD-36. Response shape is { rows, total } so the UI can render a
+// "showing X-Y of Z" indicator without a second query.
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := database.RunFilter{
-		Status:  q.Get("status"),
-		ModelID: q.Get("model"),
+	f := database.JobFilter{
+		Type:   q.Get("type"),
+		Status: q.Get("status"),
+		Model:  q.Get("model"),
+		Sort:   q.Get("sort"),
+		Order:  q.Get("order"),
 	}
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -393,15 +412,18 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items, err := s.repo.ListRuns(r.Context(), f)
+	items, total, err := s.repo.ListJobs(r.Context(), f)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list runs failed")
+		writeError(w, http.StatusInternalServerError, "list jobs failed")
 		return
 	}
 	if items == nil {
-		items = []database.RunListItem{}
+		items = []database.Job{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows":  items,
+		"total": total,
+	})
 }
 
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {

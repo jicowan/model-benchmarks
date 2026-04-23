@@ -444,20 +444,13 @@ func (s *Server) resolveCompareParams(
 		tier = "on_demand"
 	}
 
-	// Fetch catalog rows and filter to selected ids (mirrors the UI).
-	all, err := s.repo.ListCatalog(r.Context(), database.CatalogFilter{Limit: 500})
+	// Fetch only the catalog rows for the selected ids (PRD-36).
+	entries, _, err := s.repo.ListCatalog(r.Context(), database.CatalogFilter{
+		RunIDs: cleaned,
+		Limit:  len(cleaned),
+	})
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("list catalog: %w", err)
-	}
-	idSet := make(map[string]bool, len(cleaned))
-	for _, id := range cleaned {
-		idSet[id] = true
-	}
-	var entries []database.CatalogEntry
-	for _, e := range all {
-		if idSet[e.RunID] {
-			entries = append(entries, e)
-		}
 	}
 	if len(entries) < 2 {
 		return nil, nil, "", "", fmt.Errorf("need at least two resolvable run ids")

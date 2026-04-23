@@ -29,7 +29,7 @@ func TestListCatalog(t *testing.T) {
 			t.Errorf("expected model filter, got query: %s", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(entries)
+		json.NewEncoder(w).Encode(map[string]any{"rows": entries, "total": len(entries)})
 	}))
 	defer srv.Close()
 
@@ -67,7 +67,7 @@ func TestListCatalog_AllFilters(t *testing.T) {
 			t.Errorf("expected order=desc, got %s", q.Get("order"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]database.CatalogEntry{})
+		json.NewEncoder(w).Encode(map[string]any{"rows": []database.CatalogEntry{}, "total": 0})
 	}))
 	defer srv.Close()
 

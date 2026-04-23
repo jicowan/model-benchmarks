@@ -307,6 +307,126 @@ func (m *MockRepo) ListRuns(_ context.Context, f RunFilter) ([]RunListItem, erro
 	return items, nil
 }
 
+// ListJobs is the in-memory equivalent of the UNION query in jobs.go. Combines
+// single benchmark_runs + test_suite_runs into one feed, applies the filter
+// and sort, and paginates (PRD-36).
+func (m *MockRepo) ListJobs(_ context.Context, f JobFilter) ([]Job, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	lookupModel := func(id string) string {
+		for _, mdl := range m.models {
+			if mdl.ID == id {
+				return mdl.HfID
+			}
+		}
+		return ""
+	}
+	lookupInst := func(id string) string {
+		for _, it := range m.instTypes {
+			if it.ID == id {
+				return it.Name
+			}
+		}
+		return ""
+	}
+
+	var items []Job
+	if f.Type != "suite" {
+		for _, run := range m.runs {
+			items = append(items, Job{
+				ID:               run.ID,
+				Type:             "run",
+				ModelHfID:        lookupModel(run.ModelID),
+				InstanceTypeName: lookupInst(run.InstanceTypeID),
+				FrameworkOrSuite: run.Framework,
+				Status:           run.Status,
+				ErrorMessage:     run.ErrorMessage,
+				CreatedAt:        run.CreatedAt,
+				StartedAt:        run.StartedAt,
+				CompletedAt:      run.CompletedAt,
+			})
+		}
+	}
+	if f.Type != "run" {
+		for _, s := range m.suiteRuns {
+			items = append(items, Job{
+				ID:               s.ID,
+				Type:             "suite",
+				ModelHfID:        lookupModel(s.ModelID),
+				InstanceTypeName: lookupInst(s.InstanceTypeID),
+				FrameworkOrSuite: s.SuiteID,
+				Status:           s.Status,
+				CreatedAt:        s.CreatedAt,
+				StartedAt:        s.StartedAt,
+				CompletedAt:      s.CompletedAt,
+			})
+		}
+	}
+
+	// Apply Status + Model filters.
+	filtered := items[:0]
+	for _, j := range items {
+		if f.Status != "" && j.Status != f.Status {
+			continue
+		}
+		if f.Model != "" && !strings.Contains(strings.ToLower(j.ModelHfID), strings.ToLower(f.Model)) {
+			continue
+		}
+		filtered = append(filtered, j)
+	}
+	items = filtered
+	total := len(items)
+
+	// Sort. Mirrors jobsAllowedSortColumns in jobs.go; unknown column falls
+	// back to created_at. For tests, default direction is DESC.
+	desc := !strings.EqualFold(f.Order, "asc")
+	sortFn := func(a, b Job) bool {
+		switch f.Sort {
+		case "status":
+			if desc {
+				return a.Status > b.Status
+			}
+			return a.Status < b.Status
+		case "model":
+			if desc {
+				return a.ModelHfID > b.ModelHfID
+			}
+			return a.ModelHfID < b.ModelHfID
+		case "instance":
+			if desc {
+				return a.InstanceTypeName > b.InstanceTypeName
+			}
+			return a.InstanceTypeName < b.InstanceTypeName
+		default:
+			if desc {
+				return a.CreatedAt.After(b.CreatedAt)
+			}
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+	}
+	// Simple insertion sort — stable, readable, fine for mock sizes.
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && sortFn(items[j], items[j-1]); j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+
+	limit := 25
+	if f.Limit > 0 && f.Limit <= 200 {
+		limit = f.Limit
+	}
+	if f.Offset > 0 && f.Offset < len(items) {
+		items = items[f.Offset:]
+	} else if f.Offset >= len(items) {
+		return nil, total, nil
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, total, nil
+}
+
 // DeleteRun removes a benchmark run and its metrics from the mock store.
 func (m *MockRepo) DeleteRun(_ context.Context, runID string) error {
 	m.mu.Lock()
@@ -450,7 +570,7 @@ func (m *MockRepo) GetOOMHistory(_ context.Context, modelHfID, instanceType stri
 
 // ListCatalog returns catalog entries matching the given filter.
 // This is a simplified in-memory implementation for testing.
-func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEntry, error) {
+func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEntry, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -489,6 +609,18 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 		}
 
 		// Apply filters.
+		if len(f.RunIDs) > 0 {
+			matched := false
+			for _, id := range f.RunIDs {
+				if id == runID {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
 		if f.ModelHfID != "" && !strings.Contains(
 			strings.ToLower(model.HfID),
 			strings.ToLower(f.ModelHfID),
@@ -538,7 +670,10 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 		})
 	}
 
-	// Apply limit.
+	total := len(entries)
+
+	// Apply limit / offset against the filtered set; the total (for the
+	// "X of Y" indicator) is computed before paging.
 	limit := 100
 	if f.Limit > 0 && f.Limit <= 500 {
 		limit = f.Limit
@@ -546,13 +681,13 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 	if f.Offset > 0 && f.Offset < len(entries) {
 		entries = entries[f.Offset:]
 	} else if f.Offset >= len(entries) {
-		return nil, nil
+		return nil, total, nil
 	}
 	if len(entries) > limit {
 		entries = entries[:limit]
 	}
 
-	return entries, nil
+	return entries, total, nil
 }
 
 // Test Suite methods
@@ -746,14 +881,31 @@ func (m *MockRepo) GetModelCacheByHfID(_ context.Context, hfID, revision string)
 	return nil, nil
 }
 
-func (m *MockRepo) ListModelCache(_ context.Context) ([]ModelCache, error) {
+func (m *MockRepo) ListModelCache(_ context.Context, f ModelCacheFilter) ([]ModelCache, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var items []ModelCache
 	for _, mc := range m.modelCache {
+		if f.Status != "" && mc.Status != f.Status {
+			continue
+		}
 		items = append(items, *mc)
 	}
-	return items, nil
+	total := len(items)
+
+	// Autocomplete path: no limit → return everything.
+	if f.Limit <= 0 {
+		return items, total, nil
+	}
+	if f.Offset > 0 && f.Offset < len(items) {
+		items = items[f.Offset:]
+	} else if f.Offset >= len(items) {
+		return nil, total, nil
+	}
+	if len(items) > f.Limit {
+		items = items[:f.Limit]
+	}
+	return items, total, nil
 }
 
 func (m *MockRepo) UpdateModelCacheStatus(_ context.Context, id, status string, errMsg *string) error {

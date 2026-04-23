@@ -181,11 +181,15 @@ export default function Dashboard() {
   const hero = heroFor(healthState);
 
   useEffect(() => {
+    // PRD-36: listCatalog + listModelCache now return { rows, total } — unwrap
+    // to `.rows` here. These stat numbers are computed client-side from
+    // paginated fetches and are therefore only as accurate as the first page
+    // of results; PRD-35 replaces them with a server-side stats endpoint.
     Promise.all([
       listRuns({ limit: 100 }).catch(() => [] as RunListItem[]),
       listSuiteRuns().catch(() => [] as SuiteRunListItem[]),
-      listCatalog({ limit: 100 }).catch(() => [] as CatalogEntry[]),
-      listModelCache().catch(() => [] as ModelCache[]),
+      listCatalog({ limit: 100 }).then((p) => p.rows).catch(() => [] as CatalogEntry[]),
+      listModelCache().then((p) => p.rows).catch(() => [] as ModelCache[]),
     ]).then(([r, sr, c, m]) => {
       setRuns(r);
       setSuiteRuns(sr);
