@@ -426,14 +426,14 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        input_sequence_length, output_sequence_length, dataset_name,
 		        run_type, min_duration_seconds, max_model_len, status, error_message, superseded,
 		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
-		        total_cost_usd, loadgen_cost_usd
+		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
 		&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
 		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI,
-		&run.TotalCostUSD, &run.LoadgenCostUSD)
+		&run.TotalCostUSD, &run.LoadgenCostUSD, &run.OwnerPod, &run.CancelRequested)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

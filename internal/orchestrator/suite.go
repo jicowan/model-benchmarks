@@ -31,6 +31,12 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 		o.mu.Unlock()
 	}()
 
+	// PRD-40: claim ownership + start cross-pod cancel poller.
+	if err := o.repo.ClaimSuiteRun(ctx, suiteRunID, o.hostname); err != nil {
+		log.Printf("[suite %s] claim: %v", suiteRunID[:8], err)
+	}
+	o.startCancelPoller(ctx, suiteRunID, cancel)
+
 	suite := testsuite.Get(req.SuiteID)
 	if suite == nil {
 		log.Printf("[suite %s] unknown suite: %s", suiteRunID[:8], req.SuiteID)

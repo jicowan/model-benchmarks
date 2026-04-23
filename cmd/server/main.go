@@ -51,7 +51,16 @@ func main() {
 		log.Fatalf("create dynamic kubernetes client: %v", err)
 	}
 
-	srv := api.NewServer(repo, k8sClient)
+	// PRD-40: pod identity for replica coordination. os.Hostname() returns
+	// the pod's name inside Kubernetes — stable for the pod's lifetime and
+	// unique across replicas.
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("get hostname: %v", err)
+	}
+	log.Printf("api pod hostname = %s", hostname)
+
+	srv := api.NewServer(repo, k8sClient, hostname)
 
 	// PRD-31: wire up AWS Secrets Manager for HF / Docker Hub credentials.
 	// Non-fatal if construction fails — the credentials endpoints will
@@ -71,8 +80,11 @@ func main() {
 		srv.SetReservationsClients(ec2.NewFromConfig(awsCfg), dynClient)
 	}
 
-	// Recover any runs left in "running" status from a previous crash
-	go srv.RecoverOrphanedRuns(ctx)
+	// PRD-40: heartbeat + ownership-aware orphan recovery. Replaces the old
+	// startup-only "mark everything running as failed" recovery path, which
+	// used to false-positive during rolling deploys.
+	srv.Orchestrator().StartHeartbeatLoop(ctx)
+	srv.Orchestrator().StartOrphanRecoveryLoop(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

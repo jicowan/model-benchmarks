@@ -20,7 +20,7 @@ import (
 
 func setupPRD32Server(fs *fakeSecrets) (*database.MockRepo, *http.ServeMux) {
 	repo := database.NewMockRepo()
-	srv := NewServer(repo, fake.NewSimpleClientset())
+	srv := NewServer(repo, fake.NewSimpleClientset(), "test-pod")
 	if fs != nil {
 		srv.SetSecretsStore(fs)
 	}

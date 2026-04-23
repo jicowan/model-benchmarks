@@ -39,7 +39,7 @@ func seedRepo() *database.MockRepo {
 func setupServer() (*Server, *http.ServeMux) {
 	repo := seedRepo()
 	client := fake.NewSimpleClientset()
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 	return srv, mux
@@ -154,7 +154,7 @@ func TestHandleCreateRun_InstanceNotFound(t *testing.T) {
 func TestHandleGetRun_Found(t *testing.T) {
 	repo := seedRepo()
 	client := fake.NewSimpleClientset()
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -213,7 +213,7 @@ func TestHandleGetMetrics_NotFound(t *testing.T) {
 func TestHandleGetMetrics_Found(t *testing.T) {
 	repo := seedRepo()
 	client := fake.NewSimpleClientset()
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -296,7 +296,7 @@ func seedCatalogServer() (*database.MockRepo, *http.ServeMux) {
 		repo.PersistMetrics(ctx, id, &database.BenchmarkMetrics{TTFTP50Ms: &ttft})
 	}
 
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 	return repo, mux
@@ -411,7 +411,7 @@ func TestHandleListCatalog_Pagination(t *testing.T) {
 func TestHandleListCatalog_Empty(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -453,7 +453,7 @@ func seedJobsServer() (*database.MockRepo, *http.ServeMux) {
 		repo.CreateBenchmarkRun(ctx, run)
 	}
 
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 	return repo, mux
@@ -528,7 +528,7 @@ func TestHandleListRuns_FilterByModel(t *testing.T) {
 func TestHandleListRuns_Empty(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -614,12 +614,16 @@ func TestHandleCancelRun_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+	// PRD-40: cancel is asynchronous. Handler sets cancel_requested and
+	// returns 202; the owning pod's goroutine writes the terminal status
+	// later (not visible in this handler-only test because no goroutine
+	// is running).
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
 	}
-
-	if got := repo.GetRunStatus(items[0].ID); got != "failed" {
-		t.Errorf("status = %s, want failed", got)
+	requested, _ := repo.IsCancelRequested(nil, items[0].ID)
+	if !requested {
+		t.Errorf("expected cancel_requested=true after handleCancelRun")
 	}
 }
 
@@ -693,7 +697,7 @@ func emptyMatrixRepo() *database.MockRepo {
 
 func setupSeedServer(repo *database.MockRepo) *http.ServeMux {
 	client := fake.NewSimpleClientset()
-	srv := NewServer(repo, client)
+	srv := NewServer(repo, client, "test-pod")
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 	return mux

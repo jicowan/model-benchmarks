@@ -56,7 +56,7 @@ func TestComputeRunCost_HappyPath(t *testing.T) {
 	loadgen := 1800.0 // 30min
 	repo, runID := seedRunForCost(t, 3600.0, &loadgen, true) // 1hr node lifetime
 
-	o := New(fake.NewSimpleClientset(), repo)
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
 	total, loadgenCost := o.computeRunCost(context.Background(), runID)
 
 	if total == nil || *total < 0.99 || *total > 1.01 {
@@ -72,7 +72,7 @@ func TestComputeRunCost_MissingPricing(t *testing.T) {
 	loadgen := 60.0
 	repo, runID := seedRunForCost(t, 600.0, &loadgen, false) // no pricing
 
-	o := New(fake.NewSimpleClientset(), repo)
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
 	total, loadgenCost := o.computeRunCost(context.Background(), runID)
 	if total != nil || loadgenCost != nil {
 		t.Errorf("expected (nil, nil) on missing pricing, got total=%v loadgen=%v", total, loadgenCost)
@@ -84,7 +84,7 @@ func TestComputeRunCost_FailedRunWithoutMetrics(t *testing.T) {
 	// nodeSec > 0, but loadgenSec is nil → no metrics row persisted.
 	repo, runID := seedRunForCost(t, 1800.0, nil, true)
 
-	o := New(fake.NewSimpleClientset(), repo)
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
 	total, loadgenCost := o.computeRunCost(context.Background(), runID)
 
 	// Total cost still computed from node window — the node existed, it's billable.
@@ -109,7 +109,7 @@ func TestComputeRunCost_NoCompletedAt(t *testing.T) {
 	})
 	os.Unsetenv("AWS_REGION")
 
-	o := New(fake.NewSimpleClientset(), repo)
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
 	total, loadgenCost := o.computeRunCost(context.Background(), "r")
 	if total != nil || loadgenCost != nil {
 		t.Errorf("expected (nil, nil) on in-flight run, got total=%v loadgen=%v", total, loadgenCost)

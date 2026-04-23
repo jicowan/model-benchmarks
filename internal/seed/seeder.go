@@ -32,6 +32,8 @@ type Repo interface {
 	CompleteCatalogSeedStatus(ctx context.Context, id string) error
 	FailCatalogSeedStatus(ctx context.Context, id, errMsg string) error
 	GetActiveCatalogSeed(ctx context.Context) (*database.CatalogSeedStatus, error)
+	// PRD-40: claim ownership on the seed row.
+	ClaimSeed(ctx context.Context, seedID, pod string) error
 }
 
 // ServerDeps is the subset of the api.Server surface the seeder needs.
@@ -47,13 +49,15 @@ type ServerDeps interface {
 
 // Seeder walks the DB-backed catalog matrix and dispatches benchmark runs.
 type Seeder struct {
-	repo Repo
-	deps ServerDeps
+	repo     Repo
+	deps     ServerDeps
+	hostname string // PRD-40: claimed on seed rows for ownership-aware recovery
 }
 
-// New returns a Seeder with the given dependencies.
-func New(repo Repo, deps ServerDeps) *Seeder {
-	return &Seeder{repo: repo, deps: deps}
+// New returns a Seeder with the given dependencies. hostname identifies the
+// API pod running the seed (PRD-40).
+func New(repo Repo, deps ServerDeps, hostname string) *Seeder {
+	return &Seeder{repo: repo, deps: deps, hostname: hostname}
 }
 
 // Start creates a seed status row and launches the seed loop in a goroutine.
@@ -78,6 +82,10 @@ func (s *Seeder) Start(ctx context.Context, opts Options) (string, error) {
 	id := uuid.NewString()
 	if err := s.repo.CreateCatalogSeedStatus(ctx, id, total, opts.DryRun); err != nil {
 		return "", fmt.Errorf("create seed status: %w", err)
+	}
+	// PRD-40: claim ownership so orphan recovery on sibling pods leaves it alone.
+	if err := s.repo.ClaimSeed(ctx, id, s.hostname); err != nil {
+		log.Printf("seed %s: claim ownership: %v", id, err)
 	}
 
 	go s.run(id, opts)

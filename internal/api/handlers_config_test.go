@@ -64,7 +64,7 @@ func (f *fakeSecrets) DeleteDockerHub(_ context.Context) error {
 }
 
 func setupConfigServer(fs *fakeSecrets) *http.ServeMux {
-	srv := NewServer(database.NewMockRepo(), fake.NewSimpleClientset())
+	srv := NewServer(database.NewMockRepo(), fake.NewSimpleClientset(), "test-pod")
 	if fs != nil {
 		srv.SetSecretsStore(fs)
 	}
