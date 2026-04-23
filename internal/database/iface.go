@@ -44,6 +44,23 @@ type Repo interface {
 	// PRD-35: aggregate endpoints.
 	DashboardStats(ctx context.Context) (*DashboardStats, error)
 	ModelCacheStats(ctx context.Context) (*ModelCacheStats, error)
+	// PRD-40: multi-replica coordination.
+	ClaimRun(ctx context.Context, runID, pod string) error
+	ClaimSuiteRun(ctx context.Context, suiteRunID, pod string) error
+	ClaimSeed(ctx context.Context, seedID, pod string) error
+	// RequestCancel flips cancel_requested=TRUE on benchmark_runs OR
+	// test_suite_runs (whichever matches the id). The owning pod's
+	// goroutine polls IsCancelRequested and self-cancels.
+	RequestCancel(ctx context.Context, runID string) error
+	IsCancelRequested(ctx context.Context, runID string) (bool, error)
+	Heartbeat(ctx context.Context, pod string) error
+	LiveAPIPods(ctx context.Context, ttl time.Duration) ([]string, error)
+	DeleteStaleHeartbeats(ctx context.Context, olderThan time.Duration) error
+	// Orphan scans used by the heartbeat-driven recovery loop. Each excludes
+	// NULL owners (pre-migration rows) and rows whose owner is in livePods.
+	GetOrphanedRuns(ctx context.Context, livePods []string) ([]BenchmarkRun, error)
+	GetOrphanedSuiteRuns(ctx context.Context, livePods []string) ([]TestSuiteRun, error)
+	GetOrphanedSeeds(ctx context.Context, livePods []string) ([]CatalogSeedStatus, error)
 	// OOM event tracking
 	OOMRepo
 	// Test suite operations

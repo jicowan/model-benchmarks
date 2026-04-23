@@ -56,6 +56,11 @@ type BenchmarkRun struct {
 	// completions where pricing lookup failed — aggregates COALESCE to $0.
 	TotalCostUSD   *float64 `json:"total_cost_usd,omitempty"`
 	LoadgenCostUSD *float64 `json:"loadgen_cost_usd,omitempty"`
+	// PRD-40: replica coordination. OwnerPod is the API pod orchestrating
+	// this run; CancelRequested is the cross-pod cancel flag polled by the
+	// owning pod's goroutine.
+	OwnerPod        *string `json:"owner_pod,omitempty"`
+	CancelRequested bool    `json:"cancel_requested"`
 }
 
 type BenchmarkMetrics struct {
@@ -163,6 +168,9 @@ type TestSuiteRun struct {
 	// PRD-35: SUM of child benchmark_runs.total_cost_usd, written once when
 	// the suite marks itself completed. NULL if every child is NULL.
 	TotalCostUSD *float64 `json:"total_cost_usd,omitempty"`
+	// PRD-40: replica coordination (see BenchmarkRun).
+	OwnerPod        *string `json:"owner_pod,omitempty"`
+	CancelRequested bool    `json:"cancel_requested"`
 }
 
 // ScenarioResult represents the result of a single scenario within a suite run.
@@ -304,6 +312,9 @@ type CatalogSeedStatus struct {
 	StartedAt    time.Time  `json:"started_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	// PRD-40: API pod running the seed. Used by ownership-aware orphan
+	// recovery so a restarted sibling pod doesn't wipe a live seed.
+	OwnerPod *string `json:"owner_pod,omitempty"`
 }
 
 // RunKey is a (model_hf_id, instance_type_name) dedup key for the seeder.

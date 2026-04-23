@@ -53,7 +53,7 @@ func testRunConfig(runID string) RunConfig {
 func TestNew(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 	if o == nil {
 		t.Fatal("New returned nil")
 	}
@@ -62,7 +62,7 @@ func TestNew(t *testing.T) {
 func TestDeployModel_CreatesResources(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	ctx := context.Background()
@@ -85,7 +85,7 @@ func TestDeployModel_CreatesResources(t *testing.T) {
 func TestWaitForReady_AlreadyReady(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	ctx := context.Background()
@@ -109,7 +109,7 @@ func TestWaitForReady_AlreadyReady(t *testing.T) {
 func TestWaitForReady_ContextCancelled(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	ctx := context.Background()
@@ -131,7 +131,7 @@ func TestWaitForReady_ContextCancelled(t *testing.T) {
 func TestLaunchLoadgen_CreatesJob(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	ctx := context.Background()
@@ -153,7 +153,7 @@ func TestLaunchLoadgen_CreatesJob(t *testing.T) {
 func TestWaitAndCollect_JobFailed(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	ctx := context.Background()
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
@@ -184,7 +184,7 @@ func TestWaitAndCollect_JobFailed(t *testing.T) {
 func TestTeardown(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	ctx := context.Background()
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
@@ -218,7 +218,7 @@ func TestTeardown(t *testing.T) {
 func TestMarkFailed(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	// Seed a run.
 	run := &database.BenchmarkRun{
@@ -250,7 +250,7 @@ func TestDerefStr(t *testing.T) {
 func TestLaunchLoadgen_HighConcurrency(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	cfg.Request.Concurrency = 64 // > 32, should use concurrency*10 = 640
@@ -284,7 +284,7 @@ func makeLoadgenJSON() []byte {
 func TestDeployModel_LargeInstance(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	cfg.InstanceType.MemoryGiB = 512 // > 256, should use larger CPU/mem
@@ -299,7 +299,7 @@ func TestDeployModel_LargeInstance(t *testing.T) {
 func TestDeployModel_NeuronInstance(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	repo := database.NewMockRepo()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 	cfg.InstanceType.AcceleratorType = "neuron"
@@ -316,7 +316,7 @@ func TestDeployModel_NeuronInstance(t *testing.T) {
 func TestCancelRun_Found(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	// Simulate registering a cancel func (normally done in Execute).
 	ctx, cancel := context.WithCancel(context.Background())
@@ -339,7 +339,7 @@ func TestCancelRun_Found(t *testing.T) {
 func TestCancelRun_NotFound(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	if o.CancelRun("nonexistent") {
 		t.Error("expected CancelRun to return false for unknown run")
@@ -349,7 +349,7 @@ func TestCancelRun_NotFound(t *testing.T) {
 func TestCancelRun_CleanedUpAfterUse(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()
-	o := New(client, repo)
+	o := New(client, repo, "test-pod")
 
 	_, cancel := context.WithCancel(context.Background())
 	o.mu.Lock()

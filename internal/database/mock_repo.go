@@ -25,6 +25,7 @@ type MockRepo struct {
 	scenarioOver    map[string]*ScenarioOverride // PRD-32
 	auditLog        []ConfigAuditEntry           // PRD-32
 	toolVersions    *ToolVersions                // PRD-34
+	heartbeats      map[string]time.Time         // PRD-40: pod_name → last_seen_at
 	nextID          int
 }
 
@@ -1366,4 +1367,163 @@ func (m *MockRepo) PutToolVersions(_ context.Context, tv *ToolVersions) error {
 	cp.UpdatedAt = time.Now()
 	m.toolVersions = &cp
 	return nil
+}
+
+// --- PRD-40: replica coordination mocks ---
+
+func (m *MockRepo) ClaimRun(_ context.Context, runID, pod string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.runs[runID]; ok {
+		p := pod
+		r.OwnerPod = &p
+	}
+	return nil
+}
+
+func (m *MockRepo) ClaimSuiteRun(_ context.Context, suiteRunID, pod string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.suiteRuns[suiteRunID]; ok {
+		p := pod
+		s.OwnerPod = &p
+	}
+	return nil
+}
+
+func (m *MockRepo) ClaimSeed(_ context.Context, seedID, pod string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.catalogSeeds[seedID]; ok {
+		p := pod
+		s.OwnerPod = &p
+	}
+	return nil
+}
+
+func (m *MockRepo) RequestCancel(_ context.Context, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.runs[runID]; ok {
+		r.CancelRequested = true
+		return nil
+	}
+	if s, ok := m.suiteRuns[runID]; ok {
+		s.CancelRequested = true
+	}
+	return nil
+}
+
+func (m *MockRepo) IsCancelRequested(_ context.Context, runID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.runs[runID]; ok {
+		return r.CancelRequested, nil
+	}
+	if s, ok := m.suiteRuns[runID]; ok {
+		return s.CancelRequested, nil
+	}
+	return false, nil
+}
+
+func (m *MockRepo) Heartbeat(_ context.Context, pod string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.heartbeats == nil {
+		m.heartbeats = make(map[string]time.Time)
+	}
+	m.heartbeats[pod] = time.Now()
+	return nil
+}
+
+func (m *MockRepo) LiveAPIPods(_ context.Context, ttl time.Duration) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-ttl)
+	var out []string
+	for pod, seen := range m.heartbeats {
+		if seen.After(cutoff) {
+			out = append(out, pod)
+		}
+	}
+	return out, nil
+}
+
+func (m *MockRepo) DeleteStaleHeartbeats(_ context.Context, olderThan time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-olderThan)
+	for pod, seen := range m.heartbeats {
+		if seen.Before(cutoff) {
+			delete(m.heartbeats, pod)
+		}
+	}
+	return nil
+}
+
+// containsPod is a small helper for the mock's orphan scans.
+func containsPod(list []string, pod string) bool {
+	for _, p := range list {
+		if p == pod {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MockRepo) GetOrphanedRuns(_ context.Context, livePods []string) ([]BenchmarkRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []BenchmarkRun
+	for _, r := range m.runs {
+		if r.Status != "pending" && r.Status != "running" {
+			continue
+		}
+		if r.OwnerPod == nil {
+			continue
+		}
+		if containsPod(livePods, *r.OwnerPod) {
+			continue
+		}
+		out = append(out, *r)
+	}
+	return out, nil
+}
+
+func (m *MockRepo) GetOrphanedSuiteRuns(_ context.Context, livePods []string) ([]TestSuiteRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []TestSuiteRun
+	for _, s := range m.suiteRuns {
+		if s.Status != "pending" && s.Status != "running" {
+			continue
+		}
+		if s.OwnerPod == nil {
+			continue
+		}
+		if containsPod(livePods, *s.OwnerPod) {
+			continue
+		}
+		out = append(out, *s)
+	}
+	return out, nil
+}
+
+func (m *MockRepo) GetOrphanedSeeds(_ context.Context, livePods []string) ([]CatalogSeedStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []CatalogSeedStatus
+	for _, s := range m.catalogSeeds {
+		if s.Status != "active" {
+			continue
+		}
+		if s.OwnerPod == nil {
+			continue
+		}
+		if containsPod(livePods, *s.OwnerPod) {
+			continue
+		}
+		out = append(out, *s)
+	}
+	return out, nil
 }

@@ -17,7 +17,7 @@ func TestResolveInferencePerfImage_UsesDBTag(t *testing.T) {
 		FrameworkVersion:     "v0.19.0",
 		InferencePerfVersion: "v0.3.0",
 	})
-	o := New(fake.NewSimpleClientset(), repo)
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
 
 	got, err := o.resolveInferencePerfImage(context.Background())
 	if err != nil {
@@ -37,7 +37,7 @@ func TestResolveInferencePerfImage_EnvOverrideWins(t *testing.T) {
 		FrameworkVersion:     "v0.19.0",
 		InferencePerfVersion: "v0.2.0", // should be ignored
 	})
-	o := New(fake.NewSimpleClientset(), repo)
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
 
 	got, err := o.resolveInferencePerfImage(context.Background())
 	if err != nil {

@@ -46,6 +46,7 @@ func (f *fakeRepo) CreateCatalogSeedStatus(_ context.Context, id string, total i
 	f.activeSeed = &database.CatalogSeedStatus{ID: id, Status: "active", Total: total, DryRun: dryRun}
 	return nil
 }
+func (f *fakeRepo) ClaimSeed(_ context.Context, _, _ string) error { return nil }
 func (f *fakeRepo) UpdateCatalogSeedProgress(_ context.Context, _ string, completed int) error {
 	f.progress = append(f.progress, completed)
 	return nil
@@ -123,7 +124,7 @@ func waitForSeed(t *testing.T, r *fakeRepo) {
 func TestSeeder_DryRunCreatesNoRuns(t *testing.T) {
 	repo := &fakeRepo{matrix: simpleMatrix()}
 	deps := &fakeDeps{}
-	s := New(repo, deps)
+	s := New(repo, deps, "test-pod")
 
 	id, err := s.Start(context.Background(), Options{DryRun: true})
 	if err != nil {
@@ -155,7 +156,7 @@ func TestSeeder_CachedModelPopulatesS3URI(t *testing.T) {
 		},
 	}
 	deps := &fakeDeps{}
-	s := New(repo, deps)
+	s := New(repo, deps, "test-pod")
 
 	_, err := s.Start(context.Background(), Options{})
 	if err != nil {
@@ -196,7 +197,7 @@ func TestSeeder_DedupsAgainstExistingRuns(t *testing.T) {
 		},
 	}
 	deps := &fakeDeps{}
-	s := New(repo, deps)
+	s := New(repo, deps, "test-pod")
 
 	_, err := s.Start(context.Background(), Options{})
 	if err != nil {
@@ -218,7 +219,7 @@ func TestSeeder_RejectsConcurrentStart(t *testing.T) {
 			Status: "active",
 		},
 	}
-	s := New(repo, &fakeDeps{})
+	s := New(repo, &fakeDeps{}, "test-pod")
 
 	_, err := s.Start(context.Background(), Options{})
 	if !errors.Is(err, ErrSeedAlreadyRunning) {
@@ -229,7 +230,7 @@ func TestSeeder_RejectsConcurrentStart(t *testing.T) {
 func TestSeeder_FetchConfigErrorSkipsModelRow(t *testing.T) {
 	repo := &fakeRepo{matrix: simpleMatrix()}
 	deps := &fakeDeps{fetchErr: errors.New("HF 401")}
-	s := New(repo, deps)
+	s := New(repo, deps, "test-pod")
 
 	_, err := s.Start(context.Background(), Options{})
 	if err != nil {
@@ -253,7 +254,7 @@ func TestSeeder_DisabledRowsSkipped(t *testing.T) {
 	m.InstanceTypes[1].Enabled = false // p5 disabled
 	repo := &fakeRepo{matrix: m}
 	deps := &fakeDeps{}
-	s := New(repo, deps)
+	s := New(repo, deps, "test-pod")
 
 	_, err := s.Start(context.Background(), Options{})
 	if err != nil {

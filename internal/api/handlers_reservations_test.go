@@ -136,7 +136,7 @@ func neuronNodePool() *unstructured.Unstructured {
 // setupReservationsServer wires a Server with fake EC2 + dynamic K8s clients.
 func setupReservationsServer(ec *fakeEC2, objs ...runtime.Object) (*database.MockRepo, *http.ServeMux) {
 	repo := database.NewMockRepo()
-	srv := NewServer(repo, k8sfake.NewSimpleClientset())
+	srv := NewServer(repo, k8sfake.NewSimpleClientset(), "test-pod")
 
 	scheme := runtime.NewScheme()
 	gvrToList := map[schema.GroupVersionResource]string{
@@ -419,7 +419,7 @@ func TestReservations_List_CapacityBlockDrainWarning(t *testing.T) {
 
 func TestReservations_Post_MissingClients500(t *testing.T) {
 	repo := database.NewMockRepo()
-	srv := NewServer(repo, k8sfake.NewSimpleClientset())
+	srv := NewServer(repo, k8sfake.NewSimpleClientset(), "test-pod")
 	// Do NOT call SetReservationsClients.
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)

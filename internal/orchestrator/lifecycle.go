@@ -59,15 +59,20 @@ type Orchestrator struct {
 	secrets     HFTokenResolver // optional; nil = no auto-injection
 	mu          sync.Mutex
 	cancels     map[string]context.CancelFunc // runID → cancel
+	// PRD-40: this pod's hostname. Written into benchmark_runs.owner_pod +
+	// test_suite_runs.owner_pod when Execute starts so orphan recovery on
+	// sibling pods can attribute ownership.
+	hostname string
 }
 
 // New creates a new Orchestrator.
-func New(client kubernetes.Interface, repo database.Repo) *Orchestrator {
+func New(client kubernetes.Interface, repo database.Repo, hostname string) *Orchestrator {
 	return &Orchestrator{
 		client:      client,
 		repo:        repo,
 		oomDetector: oom.NewDetector(client, defaultNamespace),
 		cancels:     make(map[string]context.CancelFunc),
+		hostname:    hostname,
 	}
 }
 
@@ -146,6 +151,14 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		delete(o.cancels, cfg.RunID)
 		o.mu.Unlock()
 	}()
+
+	// PRD-40: claim ownership so orphan recovery on sibling pods leaves this
+	// run alone, and start a background poller that watches for cross-pod
+	// cancel requests via the cancel_requested DB flag.
+	if err := o.repo.ClaimRun(ctx, cfg.RunID, o.hostname); err != nil {
+		log.Printf("[%s] claim run: %v", cfg.RunID[:8], err)
+	}
+	o.startCancelPoller(ctx, cfg.RunID, cancel)
 
 	ns := defaultNamespace
 	modelName := fmt.Sprintf("bench-%s", cfg.RunID[:8])
@@ -669,14 +682,21 @@ func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, key, data 
 }
 
 func (o *Orchestrator) markFailed(ctx context.Context, runID, reason string) {
-	if err := o.repo.UpdateRunFailed(ctx, runID, reason); err != nil {
+	// PRD-40: the caller's ctx is frequently the run's context, which may
+	// be cancelled by the time we arrive here (cross-pod cancel, client
+	// disconnect, etc.). Terminal-state writes must succeed anyway — use a
+	// detached context with a short timeout so they don't hang.
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := o.repo.UpdateRunFailed(bgCtx, runID, reason); err != nil {
 		log.Printf("failed to mark run %s as failed: %v", runID, err)
 		return
 	}
 	// PRD-35: freeze cost on failure too. The node existed from started_at
 	// until markFailed set completed_at, so the time is billable.
-	totalUSD, loadgenUSD := o.computeRunCost(ctx, runID)
-	if err := o.repo.UpdateRunCost(ctx, runID, totalUSD, loadgenUSD); err != nil {
+	totalUSD, loadgenUSD := o.computeRunCost(bgCtx, runID)
+	if err := o.repo.UpdateRunCost(bgCtx, runID, totalUSD, loadgenUSD); err != nil {
 		log.Printf("update failed run cost %s: %v", runID, err)
 	}
 }
@@ -830,11 +850,18 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 }
 
 func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
+	// PRD-40: if the caller's ctx is cancelled, Kubernetes Delete calls
+	// bail out before hitting the API server and resources leak. Use a
+	// detached context with a generous timeout instead; teardown is best-
+	// effort and idempotent.
+	_ = ctx // kept for compatibility with callers that expect a ctx param
+	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	ns := defaultNamespace
 	modelName := fmt.Sprintf("bench-%s", runID[:8])
 	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
 	configMapName := fmt.Sprintf("loadgen-config-%s", runID[:8])
-	o.teardown(ctx, ns, modelName, loadgenName, configMapName)
+	o.teardown(bgCtx, ns, modelName, loadgenName, configMapName)
 }
 
 // getModelPodNodeIP returns the node IP where the model pod is running.

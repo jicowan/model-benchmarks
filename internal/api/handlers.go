@@ -31,31 +31,40 @@ type Server struct {
 	secrets    SecretsStore
 	ec2Client  EC2Client      // PRD-33
 	dynClient  DynamicClient  // PRD-33 — client-go/dynamic, typed via an interface for tests
+	hostname   string         // PRD-40 — this pod's identifier for replica coordination
 }
 
-// NewServer creates a new API server.
-func NewServer(repo database.Repo, client kubernetes.Interface) *Server {
+// NewServer creates a new API server. hostname is the running pod's name
+// (os.Hostname in production, any stable string in tests); used for PRD-40
+// replica coordination.
+func NewServer(repo database.Repo, client kubernetes.Interface, hostname string) *Server {
 	s := &Server{
 		repo:     repo,
-		orch:     orchestrator.New(client, repo),
+		orch:     orchestrator.New(client, repo, hostname),
 		client:   client,
 		hfClient: recommend.NewHFClient(),
+		hostname: hostname,
 	}
-	s.seeder = seed.New(repo, s)
+	s.seeder = seed.New(repo, s, hostname)
 	return s
 }
 
 // NewServerWithHFClient creates a new API server with a custom HFClient (for testing).
-func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfClient recommend.HFClientInterface) *Server {
+func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfClient recommend.HFClientInterface, hostname string) *Server {
 	s := &Server{
 		repo:     repo,
-		orch:     orchestrator.New(client, repo),
+		orch:     orchestrator.New(client, repo, hostname),
 		client:   client,
 		hfClient: hfClient,
+		hostname: hostname,
 	}
-	s.seeder = seed.New(repo, s)
+	s.seeder = seed.New(repo, s, hostname)
 	return s
 }
+
+// Orchestrator returns the underlying orchestrator so startup code can wire
+// the PRD-40 heartbeat + orphan-recovery loops.
+func (s *Server) Orchestrator() *orchestrator.Orchestrator { return s.orch }
 
 // SetSecretsStore injects the AWS Secrets Manager wrapper. Called from main
 // after construction so tests can leave it nil and the handlers will 500.
@@ -72,14 +81,17 @@ func (s *Server) SetReservationsClients(ec EC2Client, dyn DynamicClient) {
 	s.dynClient = dyn
 }
 
-// RecoverOrphanedRuns attempts to complete any runs that were left in "running"
-// status due to an API restart. Call this on server startup. Also marks any
-// in-flight seed goroutines as interrupted (PRD-30).
+// RecoverOrphanedRuns is retained for test compatibility but no longer
+// called from startup — the PRD-40 heartbeat-driven loop
+// (Orchestrator.StartOrphanRecoveryLoop) replaces both this and the
+// InterruptActiveCatalogSeeds path. If called directly, it runs one pass
+// of the new ownership-aware recovery.
 func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
+	// The underlying orchestrator method still scans by status (not owner)
+	// and is scheduled to be removed once all callers migrate. Until then,
+	// it's safe to call: it uses the same markFailed + cleanup path as the
+	// new loop.
 	s.orch.RecoverOrphanedRuns(ctx)
-	if err := s.repo.InterruptActiveCatalogSeeds(ctx); err != nil {
-		log.Printf("interrupt active catalog seeds: %v", err)
-	}
 }
 
 // FetchModelConfig returns a ModelConfig for modelID. Resolution order:
@@ -429,54 +441,56 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCancelRun sets cancel_requested on whichever table holds the id and
+// best-effort invokes the local cancel function. The owning pod's goroutine
+// (which may be this pod or a sibling) picks up the DB flag within 5s via
+// its cancel poller and drives the normal teardown path — that's what
+// writes the terminal "failed" status. So this handler responds with 202
+// "cancelling" rather than "failed" to reflect the asynchronous reality
+// (PRD-40).
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	ctx := r.Context()
 
-	// Try benchmark run first
+	// Terminal-state precheck. Look at whichever table holds the id.
 	run, err := s.repo.GetBenchmarkRun(ctx, runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-
 	if run != nil {
-		// Found a benchmark run
 		if run.Status != "pending" && run.Status != "running" {
 			writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel run with status %q", run.Status))
 			return
 		}
-		s.orch.CancelRun(runID)
-		if err := s.repo.UpdateRunStatus(ctx, runID, "failed"); err != nil {
-			writeError(w, http.StatusInternalServerError, "update status failed")
+	} else {
+		suiteRun, err := s.repo.GetTestSuiteRun(ctx, runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "query failed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"id": runID, "status": "failed"})
-		return
+		if suiteRun == nil {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		if suiteRun.Status != "pending" && suiteRun.Status != "running" {
+			writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel suite run with status %q", suiteRun.Status))
+			return
+		}
 	}
 
-	// Try suite run
-	suiteRun, err := s.repo.GetTestSuiteRun(ctx, runID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed")
+	// Set the DB flag — the owning pod's poller will see it and cancel.
+	if err := s.repo.RequestCancel(ctx, runID); err != nil {
+		writeError(w, http.StatusInternalServerError, "request cancel: "+err.Error())
 		return
 	}
-	if suiteRun == nil {
-		writeError(w, http.StatusNotFound, "run not found")
-		return
-	}
-	if suiteRun.Status != "pending" && suiteRun.Status != "running" {
-		writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel suite run with status %q", suiteRun.Status))
-		return
-	}
+	// Fast-path: if we happen to be the owning pod, short-circuit the 5s poll.
 	s.orch.CancelRun(runID)
-	// Forcibly clean up Kubernetes resources in case the goroutine is stuck
-	s.orch.CleanupSuiteResources(runID)
-	if err := s.repo.UpdateSuiteRunStatus(ctx, runID, "failed", nil); err != nil {
-		writeError(w, http.StatusInternalServerError, "update status failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": runID, "status": "failed"})
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"id":     runID,
+		"status": "cancelling",
+	})
 }
 
 func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
