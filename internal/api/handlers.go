@@ -165,6 +165,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/config/capacity-reservations", s.handleListReservations)
 	mux.HandleFunc("POST /api/v1/config/capacity-reservations", s.handlePostReservation)
 	mux.HandleFunc("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", s.handleDeleteReservation)
+	// PRD-34: Tool Versions (vLLM framework + inference-perf)
+	mux.HandleFunc("GET /api/v1/config/tool-versions", s.handleGetToolVersions)
+	mux.HandleFunc("PUT /api/v1/config/tool-versions", s.handlePutToolVersions)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -519,6 +522,10 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	}
 	if maxMLStr := r.URL.Query().Get("max_model_len"); maxMLStr != "" {
 		fmt.Sscanf(maxMLStr, "%d", &opts.MaxModelLenOverride)
+	}
+	// Make the transformers-compat warning reflect the configured vLLM tag.
+	if tv, err := s.repo.GetToolVersions(r.Context()); err == nil && tv != nil {
+		opts.VLLMVersion = tv.FrameworkVersion
 	}
 
 	// Look up instance type from DB.

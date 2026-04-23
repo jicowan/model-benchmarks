@@ -33,7 +33,7 @@ func TestCatalogMatrix_Get(t *testing.T) {
 	repo, mux := setupPRD32Server(nil)
 	repo.SeedCatalogMatrix(&database.CatalogMatrix{
 		Defaults: database.CatalogSeedDefaults{
-			FrameworkVersion: "v0.19.0", Scenario: "chatbot", Dataset: "synthetic",
+			Scenario: "chatbot", Dataset: "synthetic",
 			MinDurationSeconds: 180, UpdatedAt: time.Now(),
 		},
 		Models: []database.CatalogModel{
@@ -50,8 +50,8 @@ func TestCatalogMatrix_Get(t *testing.T) {
 	}
 	var resp catalogMatrixResponse
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.Defaults.FrameworkVersion != "v0.19.0" {
-		t.Errorf("framework_version = %q", resp.Defaults.FrameworkVersion)
+	if resp.Defaults.Scenario != "chatbot" {
+		t.Errorf("scenario = %q", resp.Defaults.Scenario)
 	}
 	if len(resp.Models) != 1 {
 		t.Errorf("models len = %d", len(resp.Models))
@@ -64,7 +64,8 @@ func TestCatalogMatrix_Get(t *testing.T) {
 func TestCatalogMatrix_PutValidation(t *testing.T) {
 	_, mux := setupPRD32Server(nil)
 
-	body := strings.NewReader(`{"defaults":{"framework_version":"","scenario":"chatbot","dataset":"synthetic","min_duration_seconds":180}}`)
+	// Empty scenario should fail validation.
+	body := strings.NewReader(`{"defaults":{"scenario":"","dataset":"synthetic","min_duration_seconds":180}}`)
 	req := httptest.NewRequest("PUT", "/api/v1/config/catalog-matrix", body)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -78,7 +79,7 @@ func TestCatalogMatrix_PutDuplicateModel(t *testing.T) {
 	_, mux := setupPRD32Server(nil)
 
 	body := strings.NewReader(`{
-		"defaults":{"framework_version":"v0.19.0","scenario":"chatbot","dataset":"synthetic","min_duration_seconds":180},
+		"defaults":{"scenario":"chatbot","dataset":"synthetic","min_duration_seconds":180},
 		"models":[
 			{"hf_id":"meta-llama/Llama-3.1-8B","enabled":true},
 			{"hf_id":"meta-llama/Llama-3.1-8B","enabled":true}

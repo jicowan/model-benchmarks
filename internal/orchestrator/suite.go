@@ -260,9 +260,9 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 	defer o.client.CoreV1().ConfigMaps(ns).Delete(ctx, configMapName, metav1.DeleteOptions{})
 
 	// Create loadgen job
-	inferencePerfImage := os.Getenv("INFERENCE_PERF_IMAGE")
-	if inferencePerfImage == "" {
-		inferencePerfImage = "quay.io/inference-perf/inference-perf:v0.2.0"
+	inferencePerfImage, err := o.resolveInferencePerfImage(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve inference-perf image: %w", err)
 	}
 
 	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")

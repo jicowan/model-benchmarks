@@ -241,9 +241,6 @@ func latestVersion(m *database.CatalogMatrix) time.Time {
 }
 
 func validateCatalogMatrix(req *putCatalogMatrixRequest) error {
-	if req.Defaults.FrameworkVersion == "" {
-		return fmt.Errorf("defaults.framework_version is required")
-	}
 	if req.Defaults.Scenario == "" {
 		return fmt.Errorf("defaults.scenario is required")
 	}
@@ -422,4 +419,80 @@ func (s *Server) handleListAuditLog(w http.ResponseWriter, r *http.Request) {
 		entries = []database.ConfigAuditEntry{}
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// ============================================================================
+// /api/v1/config/tool-versions  (PRD-34)
+// ============================================================================
+
+type toolVersionsResponse struct {
+	FrameworkVersion     string    `json:"framework_version"`
+	InferencePerfVersion string    `json:"inference_perf_version"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	// EnvOverrideActive is true when the orchestrator will ignore
+	// inference_perf_version in favor of the INFERENCE_PERF_IMAGE env var.
+	// The UI surfaces a warning banner when set.
+	EnvOverrideActive bool   `json:"env_override_active"`
+	EnvOverrideImage  string `json:"env_override_image,omitempty"`
+}
+
+func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
+	tv, err := s.repo.GetToolVersions(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load tool versions: "+err.Error())
+		return
+	}
+	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
+	writeJSON(w, http.StatusOK, toolVersionsResponse{
+		FrameworkVersion:     tv.FrameworkVersion,
+		InferencePerfVersion: tv.InferencePerfVersion,
+		UpdatedAt:            tv.UpdatedAt,
+		EnvOverrideActive:    envImage != "",
+		EnvOverrideImage:     envImage,
+	})
+}
+
+type putToolVersionsRequest struct {
+	FrameworkVersion     string `json:"framework_version"`
+	InferencePerfVersion string `json:"inference_perf_version"`
+}
+
+func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
+	var req putToolVersionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.FrameworkVersion = strings.TrimSpace(req.FrameworkVersion)
+	req.InferencePerfVersion = strings.TrimSpace(req.InferencePerfVersion)
+	if req.FrameworkVersion == "" {
+		writeError(w, http.StatusBadRequest, "framework_version is required")
+		return
+	}
+	if req.InferencePerfVersion == "" {
+		writeError(w, http.StatusBadRequest, "inference_perf_version is required")
+		return
+	}
+
+	tv := &database.ToolVersions{
+		FrameworkVersion:     req.FrameworkVersion,
+		InferencePerfVersion: req.InferencePerfVersion,
+	}
+	if err := s.repo.PutToolVersions(r.Context(), tv); err != nil {
+		writeError(w, http.StatusInternalServerError, "update tool versions: "+err.Error())
+		return
+	}
+	s.audit(r.Context(), "PUT /api/v1/config/tool-versions",
+		fmt.Sprintf("framework_version=%s inference_perf_version=%s",
+			req.FrameworkVersion, req.InferencePerfVersion))
+
+	fresh, _ := s.repo.GetToolVersions(r.Context())
+	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
+	writeJSON(w, http.StatusOK, toolVersionsResponse{
+		FrameworkVersion:     fresh.FrameworkVersion,
+		InferencePerfVersion: fresh.InferencePerfVersion,
+		UpdatedAt:            fresh.UpdatedAt,
+		EnvOverrideActive:    envImage != "",
+		EnvOverrideImage:     envImage,
+	})
 }

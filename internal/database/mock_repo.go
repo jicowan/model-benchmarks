@@ -24,6 +24,7 @@ type MockRepo struct {
 	catalogSeeds    map[string]*CatalogSeedStatus
 	scenarioOver    map[string]*ScenarioOverride // PRD-32
 	auditLog        []ConfigAuditEntry           // PRD-32
+	toolVersions    *ToolVersions                // PRD-34
 	nextID          int
 }
 
@@ -1034,4 +1035,39 @@ func (m *MockRepo) ListAuditLog(_ context.Context, limit int) ([]ConfigAuditEntr
 		out[i] = m.auditLog[len(m.auditLog)-1-i]
 	}
 	return out, nil
+}
+
+// --- ToolVersionsRepo mock methods (PRD-34) ---
+
+// SeedToolVersions lets tests preload the tool_versions singleton.
+func (m *MockRepo) SeedToolVersions(tv *ToolVersions) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *tv
+	m.toolVersions = &cp
+}
+
+func (m *MockRepo) GetToolVersions(_ context.Context) (*ToolVersions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.toolVersions == nil {
+		// Match the migration-seeded defaults so tests that haven't called
+		// SeedToolVersions still get a valid row.
+		return &ToolVersions{
+			FrameworkVersion:     "v0.19.0",
+			InferencePerfVersion: "v0.2.0",
+			UpdatedAt:            time.Now(),
+		}, nil
+	}
+	cp := *m.toolVersions
+	return &cp, nil
+}
+
+func (m *MockRepo) PutToolVersions(_ context.Context, tv *ToolVersions) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *tv
+	cp.UpdatedAt = time.Now()
+	m.toolVersions = &cp
+	return nil
 }

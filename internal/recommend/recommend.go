@@ -122,7 +122,9 @@ const (
 // isTransformersVersionUnsupported checks if the model requires a transformers
 // version that's too new for the current vLLM version.
 // Returns (true, reason) if unsupported, (false, "") if supported or unknown.
-func isTransformersVersionUnsupported(version string) (bool, string) {
+// vllmVersion is the configured vLLM image tag; empty string produces a
+// generic message without a specific version.
+func isTransformersVersionUnsupported(version, vllmVersion string) (bool, string) {
 	if version == "" {
 		return false, "" // Unknown version, assume compatible
 	}
@@ -134,10 +136,14 @@ func isTransformersVersionUnsupported(version string) (bool, string) {
 	}
 
 	if major > maxSupportedTransformersMajor {
+		vllmDesc := "the configured vLLM"
+		if vllmVersion != "" {
+			vllmDesc = "vLLM " + vllmVersion
+		}
 		return true, fmt.Sprintf(
-			"Model requires transformers %s but vLLM 0.19.0 only supports transformers 4.x. "+
+			"Model requires transformers %s but %s only supports transformers %d.x. "+
 				"This model architecture is too new. Wait for a newer vLLM release or use a different model.",
-			version)
+			version, vllmDesc, maxSupportedTransformersMajor)
 	}
 
 	return false, ""
@@ -287,9 +293,14 @@ func roundDownContext(tokens int) int {
 
 // RecommendOptions holds optional overrides for the recommendation algorithm.
 type RecommendOptions struct {
-	TPOverride         int     // Force specific tensor parallel degree (0 = auto)
-	OverheadGiB        float64 // Override calculated overhead (0 = auto-calculate)
-	MaxModelLenOverride int    // Force specific max_model_len (0 = auto); concurrency adjusts to fit
+	TPOverride          int     // Force specific tensor parallel degree (0 = auto)
+	OverheadGiB         float64 // Override calculated overhead (0 = auto-calculate)
+	MaxModelLenOverride int     // Force specific max_model_len (0 = auto); concurrency adjusts to fit
+	// VLLMVersion is the currently-configured vLLM image tag. Used only in
+	// the transformers-compatibility error message so it reflects what's
+	// actually running instead of a hardcoded "vLLM 0.19.0" string. Empty
+	// string falls back to a generic wording.
+	VLLMVersion string
 }
 
 // DefaultOverheadGiB calculates the default runtime overhead for a model based on its dimensions.
@@ -302,8 +313,9 @@ func DefaultOverheadGiB(cfg ModelConfig) float64 {
 // allInstances is used to suggest a larger instance when the model doesn't fit.
 func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, opts RecommendOptions) *Recommendation {
 	// Check if the model requires a transformers version that's too new for vLLM.
-	// vLLM 0.19.0 bundles transformers 4.x; models requiring 5.x won't work.
-	if unsupported, reason := isTransformersVersionUnsupported(cfg.TransformersVersion); unsupported {
+	// maxSupportedTransformersMajor is a hardcoded constant (4) — bump it and
+	// remove this comment when vLLM ships a release that supports transformers 5.x.
+	if unsupported, reason := isTransformersVersionUnsupported(cfg.TransformersVersion, opts.VLLMVersion); unsupported {
 		return &Recommendation{
 			ModelInfo: ModelInfo{
 				ParameterCount:        cfg.ParameterCount,

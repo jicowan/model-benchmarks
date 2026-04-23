@@ -42,6 +42,14 @@ type Repo interface {
 	CatalogMatrixRepo
 	// Configuration — scenario overrides, audit log, matrix PUT (PRD-32)
 	ConfigRepo
+	// Tool versions — vLLM + inference-perf singleton (PRD-34)
+	ToolVersionsRepo
+}
+
+// ToolVersionsRepo exposes the tool_versions singleton row (PRD-34).
+type ToolVersionsRepo interface {
+	GetToolVersions(ctx context.Context) (*ToolVersions, error)
+	PutToolVersions(ctx context.Context, tv *ToolVersions) error
 }
 
 // ConfigRepo covers the Configuration-page storage introduced in PRD-32.

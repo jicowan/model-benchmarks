@@ -518,11 +518,21 @@ func TestTransformersVersionCheck(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		unsupported, reason := isTransformersVersionUnsupported(tc.version)
+		unsupported, reason := isTransformersVersionUnsupported(tc.version, "v0.19.0")
 		if unsupported != tc.unsupported {
 			t.Errorf("isTransformersVersionUnsupported(%q) = %v, want %v (reason: %s)",
 				tc.version, unsupported, tc.unsupported, reason)
 		}
+	}
+
+	// Verify the message reflects the configured vLLM version, not a hardcode.
+	_, reason := isTransformersVersionUnsupported("5.5.0.dev0", "v0.20.0")
+	if !strings.Contains(reason, "vLLM v0.20.0") {
+		t.Errorf("expected message to include 'vLLM v0.20.0', got: %s", reason)
+	}
+	_, reason = isTransformersVersionUnsupported("5.5.0.dev0", "")
+	if !strings.Contains(reason, "configured vLLM") {
+		t.Errorf("expected fallback wording 'configured vLLM', got: %s", reason)
 	}
 }
 

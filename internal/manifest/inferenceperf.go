@@ -36,8 +36,25 @@ type LoadStage struct {
 }
 
 // RenderInferencePerfConfig renders the inference-perf configuration YAML.
+// Translates the internal dataset identifier to the exact casing inference-perf's
+// pydantic enum expects (e.g. "sharegpt" → "shareGPT"). The translation happens
+// only at this boundary; the rest of the codebase keeps the snake_case form.
 func RenderInferencePerfConfig(params InferencePerfConfigParams) (string, error) {
+	params.DatasetType = toInferencePerfDatasetType(params.DatasetType)
 	return renderTemplate("inferenceperf-config.yaml.tmpl", params)
+}
+
+// toInferencePerfDatasetType maps our internal dataset IDs to the exact enum
+// values inference-perf accepts. Unknown values pass through unchanged so new
+// datasets added upstream don't require a code change here unless their casing
+// differs from ours.
+func toInferencePerfDatasetType(ds string) string {
+	switch ds {
+	case "sharegpt":
+		return "shareGPT"
+	default:
+		return ds
+	}
 }
 
 // NewDefaultInferencePerfConfig creates a default config for a single-stage constant load.

@@ -22,6 +22,7 @@ type Options struct {
 // Repo is the subset of the database interface the seeder needs.
 type Repo interface {
 	LoadCatalogMatrix(ctx context.Context) (*database.CatalogMatrix, error)
+	GetToolVersions(ctx context.Context) (*database.ToolVersions, error)
 	ModelCacheByHfID(ctx context.Context) (map[string]database.ModelCache, error)
 	ListRunKeys(ctx context.Context) ([]database.RunKey, error)
 	GetInstanceTypeByName(ctx context.Context, name string) (*database.InstanceType, error)
@@ -115,6 +116,11 @@ func (s *Seeder) run(id string, opts Options) {
 		s.finish(ctx, id, fmt.Errorf("load model cache: %w", err))
 		return
 	}
+	tv, err := s.repo.GetToolVersions(ctx)
+	if err != nil {
+		s.finish(ctx, id, fmt.Errorf("load tool versions: %w", err))
+		return
+	}
 
 	completed := 0
 	for _, m := range matrix.Models {
@@ -169,7 +175,7 @@ func (s *Seeder) run(id string, opts Options) {
 				ModelHfRevision:    "main",
 				InstanceTypeName:   it.Name,
 				Framework:          frameworkFor(it.Name),
-				FrameworkVersion:   matrix.Defaults.FrameworkVersion,
+				FrameworkVersion:   tv.FrameworkVersion,
 				DatasetName:        matrix.Defaults.Dataset,
 				RunType:            "catalog",
 				ScenarioID:         matrix.Defaults.Scenario,

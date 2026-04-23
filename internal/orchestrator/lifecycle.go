@@ -512,9 +512,9 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		return fmt.Errorf("create configmap: %w", err)
 	}
 
-	inferencePerfImage := os.Getenv("INFERENCE_PERF_IMAGE")
-	if inferencePerfImage == "" {
-		inferencePerfImage = "quay.io/inference-perf/inference-perf:v0.2.0"
+	inferencePerfImage, err := o.resolveInferencePerfImage(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve inference-perf image: %w", err)
 	}
 
 	// Use S3 for results to avoid container log truncation

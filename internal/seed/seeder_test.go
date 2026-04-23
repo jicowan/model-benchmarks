@@ -26,6 +26,12 @@ type fakeRepo struct {
 func (f *fakeRepo) LoadCatalogMatrix(_ context.Context) (*database.CatalogMatrix, error) {
 	return f.matrix, nil
 }
+func (f *fakeRepo) GetToolVersions(_ context.Context) (*database.ToolVersions, error) {
+	return &database.ToolVersions{
+		FrameworkVersion:     "v0.19.0",
+		InferencePerfVersion: "v0.2.0",
+	}, nil
+}
 func (f *fakeRepo) ModelCacheByHfID(_ context.Context) (map[string]database.ModelCache, error) {
 	return f.cache, nil
 }
@@ -86,7 +92,6 @@ func (f *fakeDeps) CreateRun(_ context.Context, req *database.RunRequest) (strin
 func simpleMatrix() *database.CatalogMatrix {
 	return &database.CatalogMatrix{
 		Defaults: database.CatalogSeedDefaults{
-			FrameworkVersion:   "v0.19.0",
 			Scenario:           "chatbot",
 			Dataset:            "synthetic",
 			MinDurationSeconds: 180,

@@ -301,6 +301,34 @@ func TestRenderInferencePerfConfig_MultiStage(t *testing.T) {
 	}
 }
 
+// inference-perf's pydantic enum expects "shareGPT" with a capital GPT. Our
+// internal ID is "sharegpt" for consistency with snake_case peers. Verify the
+// render step translates at the boundary.
+func TestRenderInferencePerfConfig_ShareGPTCasing(t *testing.T) {
+	params := InferencePerfConfigParams{
+		ModelHfID:   "meta-llama/Llama-3.1-8B-Instruct",
+		TargetHost:  "bench",
+		TargetPort:  8000,
+		Streaming:   true,
+		DatasetType: "sharegpt",
+		InputMean:   256, InputStdDev: 64, InputMin: 128, InputMax: 512,
+		OutputMean: 128, OutputStdDev: 32, OutputMin: 64, OutputMax: 256,
+		LoadType:   "constant",
+		Stages:     []LoadStage{{Rate: 5, Duration: 60}},
+		NumWorkers: 4,
+	}
+	out, err := RenderInferencePerfConfig(params)
+	if err != nil {
+		t.Fatalf("RenderInferencePerfConfig: %v", err)
+	}
+	if !strings.Contains(out, "type: shareGPT") {
+		t.Errorf("expected 'type: shareGPT' in rendered YAML, got:\n%s", out)
+	}
+	if strings.Contains(out, "type: sharegpt") {
+		t.Errorf("lowercase 'sharegpt' leaked into rendered YAML")
+	}
+}
+
 func TestRenderModelDeployment_S3Runai(t *testing.T) {
 	params := ModelDeploymentParams{
 		Name:                 "bench-s3",

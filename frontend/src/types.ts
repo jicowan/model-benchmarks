@@ -536,11 +536,19 @@ export interface CredentialsStatus {
 
 // PRD-32: catalog matrix editor
 export interface CatalogSeedDefaults {
-  framework_version: string;
   scenario: string;
   dataset: string;
   min_duration_seconds: number;
   updated_at?: string;
+}
+
+// PRD-34: tool versions (vLLM + inference-perf) singleton.
+export interface ToolVersions {
+  framework_version: string;
+  inference_perf_version: string;
+  updated_at: string;
+  env_override_active: boolean;
+  env_override_image?: string;
 }
 
 export interface CatalogModelEntry {

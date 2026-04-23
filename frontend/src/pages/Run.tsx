@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createRun, createSuiteRun, getRecommendation, listInstanceTypes, listScenarios, listTestSuites, getMemoryBreakdown, getOOMHistory, listModelCache } from "../api";
+import { createRun, createSuiteRun, getRecommendation, listInstanceTypes, listScenarios, listTestSuites, getMemoryBreakdown, getOOMHistory, listModelCache, getToolVersions } from "../api";
 import type { InstanceType, RecommendResponse, MemoryBreakdownResponse, OOMHistory, Scenario, TestSuite, ModelCache } from "../types";
+import { datasetOptions } from "../constants/datasets";
 import { validateToken } from "../hfApi";
 import type { HfModelDetail } from "../hfApi";
 import ModelCombobox from "../components/ModelCombobox";
@@ -44,18 +45,8 @@ export default function Run() {
   const [selectedSuite, setSelectedSuite] = useState<string>("quick");
   const [selectedDataset, setSelectedDataset] = useState<string>("synthetic");
 
-  // Supported inference-perf dataset types
-  const datasetOptions = [
-    { value: "synthetic", label: "Synthetic", description: "Controlled input/output distributions" },
-    { value: "sharegpt", label: "ShareGPT", description: "Real-world conversational data" },
-    { value: "random", label: "Random", description: "Random token data" },
-    { value: "shared_prefix", label: "Shared Prefix", description: "Prefix caching scenarios" },
-    { value: "cnn_dailymail", label: "CNN DailyMail", description: "Summarization use cases" },
-    { value: "billsum_conversations", label: "Billsum", description: "Long context prefill-heavy" },
-    { value: "infinity_instruct", label: "Infinity Instruct", description: "Long context decode-heavy" },
-  ];
-
-  // Initialize form with URL params (from Estimate page) or defaults
+  // Initialize form with URL params (from Estimate page) or defaults.
+  // framework_version starts blank and is filled from getToolVersions() on mount.
   const [form, setForm] = useState(() => {
     const instance = searchParams.get("instance") || "";
     const isNeuron = /^(inf|trn)/.test(instance);
@@ -64,7 +55,7 @@ export default function Run() {
       model_hf_revision: "main",
       instance_type_name: instance,
       framework: isNeuron ? "vllm-neuron" : "vllm",
-      framework_version: "v0.19.0",
+      framework_version: "",
       tensor_parallel_degree: Number(searchParams.get("tp")) || 1,
       quantization: searchParams.get("quantization") || "",
       concurrency: Number(searchParams.get("concurrency")) || 16,
@@ -83,11 +74,21 @@ export default function Run() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  // Load instance types, scenarios, and test suites on mount
+  // Load instance types, scenarios, test suites, and the platform vLLM
+  // version (PRD-34) on mount. Tool versions seed the form default; users
+  // can still override per-run.
   useEffect(() => {
     listInstanceTypes().then(setInstanceTypes).catch(() => {});
     listScenarios().then(setScenarios).catch(() => {});
     listTestSuites().then(setTestSuites).catch(() => {});
+    getToolVersions()
+      .then((tv) => {
+        setForm((prev) => (prev.framework_version ? prev : { ...prev, framework_version: tv.framework_version }));
+      })
+      .catch(() => {
+        // Fall back to a sensible placeholder if the config endpoint fails.
+        setForm((prev) => (prev.framework_version ? prev : { ...prev, framework_version: "v0.19.0" }));
+      });
   }, []);
 
   // PRD-15: Auto-recommend when model and instance are both selected
@@ -580,14 +581,18 @@ export default function Run() {
           </div>
           <div>
             <label className="eyebrow block mb-1.5">
-              Framework
+              vLLM Version
             </label>
             <input
               type="text"
-              value={form.framework}
-              readOnly
-              className="input w-full bg-surface-2 text-ink-1"
+              value={form.framework_version}
+              onChange={(e) => set("framework_version", e.target.value)}
+              placeholder="v0.19.0"
+              className="input w-full"
             />
+            <p className="mt-1 caption">
+              Default from Configuration → Tool Versions. Override to test a specific release.
+            </p>
           </div>
         </div>
 

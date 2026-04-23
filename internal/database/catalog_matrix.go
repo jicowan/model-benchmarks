@@ -16,11 +16,10 @@ func (r *Repository) LoadCatalogMatrix(ctx context.Context) (*CatalogMatrix, err
 
 	// Defaults (singleton).
 	err := r.pool.QueryRow(ctx,
-		`SELECT framework_version, scenario, dataset, min_duration_seconds, updated_at
+		`SELECT scenario, dataset, min_duration_seconds, updated_at
 		   FROM catalog_seed_defaults WHERE id = 1`).
-		Scan(&m.Defaults.FrameworkVersion, &m.Defaults.Scenario,
-			&m.Defaults.Dataset, &m.Defaults.MinDurationSeconds,
-			&m.Defaults.UpdatedAt)
+		Scan(&m.Defaults.Scenario, &m.Defaults.Dataset,
+			&m.Defaults.MinDurationSeconds, &m.Defaults.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("load catalog_seed_defaults: %w", err)
 	}

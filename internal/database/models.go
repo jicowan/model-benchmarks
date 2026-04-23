@@ -262,11 +262,19 @@ type CatalogInstanceType struct {
 
 // CatalogSeedDefaults is the singleton row of per-seed-run defaults.
 type CatalogSeedDefaults struct {
-	FrameworkVersion   string    `json:"framework_version"`
 	Scenario           string    `json:"scenario"`
 	Dataset            string    `json:"dataset"`
 	MinDurationSeconds int       `json:"min_duration_seconds"`
 	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// ToolVersions is the singleton row holding platform-wide tool versions
+// (PRD-34). framework_version is the vLLM image tag; inference_perf_version
+// is the inference-perf image tag. Both apply to every new benchmark run.
+type ToolVersions struct {
+	FrameworkVersion     string    `json:"framework_version"`
+	InferencePerfVersion string    `json:"inference_perf_version"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // CatalogMatrix bundles the full matrix for the seeder.

@@ -157,6 +157,12 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Tag the transformers-compat warning with the configured vLLM version.
+	var recOpts recommend.RecommendOptions
+	if tv, err := s.repo.GetToolVersions(r.Context()); err == nil && tv != nil {
+		recOpts.VLLMVersion = tv.FrameworkVersion
+	}
+
 	// Generate estimates for each instance type
 	var estimates []EstimateRow
 	var feasibleNative, feasibleQuantized, infeasible int
@@ -193,7 +199,7 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(it.AcceleratorType, "neuron") {
 			rec = recommend.RecommendNeuron(*modelCfg, inst)
 		} else {
-			rec = recommend.Recommend(*modelCfg, inst, allSpecs, recommend.RecommendOptions{})
+			rec = recommend.Recommend(*modelCfg, inst, allSpecs, recOpts)
 		}
 
 		row := EstimateRow{

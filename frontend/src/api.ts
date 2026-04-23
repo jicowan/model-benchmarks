@@ -24,6 +24,7 @@ import type {
   StatusResponse,
   CredentialsStatus,
   CatalogMatrixPayload,
+  ToolVersions,
   ScenarioOverrideEntry,
   ScenarioOverride,
   RegistryStatus,
@@ -325,6 +326,27 @@ export async function putDockerHubToken(username: string, access_token: string):
 export async function deleteDockerHubToken(): Promise<void> {
   const res = await fetch(`${BASE}/config/credentials/dockerhub-token`, { method: "DELETE" });
   if (!res.ok) throw new Error(`DELETE dockerhub-token failed: ${res.status}`);
+}
+
+// PRD-34: tool versions (vLLM + inference-perf)
+export async function getToolVersions(): Promise<ToolVersions> {
+  return fetchJSON<ToolVersions>(`${BASE}/config/tool-versions`);
+}
+
+export async function putToolVersions(payload: {
+  framework_version: string;
+  inference_perf_version: string;
+}): Promise<ToolVersions> {
+  const res = await fetch(`${BASE}/config/tool-versions`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `PUT tool-versions failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 // PRD-32: catalog matrix editor

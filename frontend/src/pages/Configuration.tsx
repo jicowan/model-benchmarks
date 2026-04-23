@@ -13,9 +13,12 @@ import {
   getRegistry,
   listAuditLog,
   listInstanceTypes,
+  listScenarios,
   listCapacityReservations,
   attachCapacityReservation,
   detachCapacityReservation,
+  getToolVersions,
+  putToolVersions,
 } from "../api";
 import type {
   CredentialsStatus,
@@ -28,7 +31,10 @@ import type {
   InstanceType,
   NodePoolReservations,
   ReservationSummary,
+  ToolVersions,
+  Scenario,
 } from "../types";
+import { datasetOptions } from "../constants/datasets";
 import ModelCombobox from "../components/ModelCombobox";
 
 /* ----------------------------- PageHeader ----------------------------- */
@@ -344,6 +350,7 @@ function CredentialsCard({
 function SeedingMatrixCard() {
   const [matrix, setMatrix] = useState<CatalogMatrixPayload | null>(null);
   const [availableInstances, setAvailableInstances] = useState<InstanceType[]>([]);
+  const [availableScenarios, setAvailableScenarios] = useState<Scenario[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -359,10 +366,11 @@ function SeedingMatrixCard() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Accelerated instance types for the dropdown — pulled from the same
-  // endpoint the Run form uses.
+  // Accelerated instance types and scenarios for the dropdowns — pulled from
+  // the same endpoints the Run form uses so both pages stay in sync.
   useEffect(() => {
     listInstanceTypes().then(setAvailableInstances).catch(() => {});
+    listScenarios().then(setAvailableScenarios).catch(() => {});
   }, []);
 
   async function handleSave() {
@@ -430,21 +438,37 @@ function SeedingMatrixCard() {
       <div className="panel p-5 mb-4">
         <div className="eyebrow mb-3">DEFAULTS</div>
         <div className="grid grid-cols-2 gap-4">
-          <LabeledInput
-            label="Framework Version"
-            value={matrix.defaults.framework_version}
-            onChange={(v) => setMatrix({ ...matrix, defaults: { ...matrix.defaults, framework_version: v } })}
-          />
-          <LabeledInput
-            label="Scenario (default)"
-            value={matrix.defaults.scenario}
-            onChange={(v) => setMatrix({ ...matrix, defaults: { ...matrix.defaults, scenario: v } })}
-          />
-          <LabeledInput
-            label="Dataset"
-            value={matrix.defaults.dataset}
-            onChange={(v) => setMatrix({ ...matrix, defaults: { ...matrix.defaults, dataset: v } })}
-          />
+          <label className="block">
+            <div className="caption mb-1">Scenario (default)</div>
+            <select
+              value={matrix.defaults.scenario}
+              onChange={(e) => setMatrix({ ...matrix, defaults: { ...matrix.defaults, scenario: e.target.value } })}
+              className="input w-full"
+            >
+              {availableScenarios.length === 0 && (
+                <option value={matrix.defaults.scenario}>{matrix.defaults.scenario || "—"}</option>
+              )}
+              {availableScenarios.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <div className="caption mb-1">Dataset</div>
+            <select
+              value={matrix.defaults.dataset}
+              onChange={(e) => setMatrix({ ...matrix, defaults: { ...matrix.defaults, dataset: e.target.value } })}
+              className="input w-full"
+            >
+              {datasetOptions.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <LabeledInput
             label="Min Duration (seconds)"
             value={String(matrix.defaults.min_duration_seconds)}
@@ -454,6 +478,9 @@ function SeedingMatrixCard() {
             type="number"
           />
         </div>
+        <p className="meta mt-3">
+          vLLM and inference-perf versions are platform-wide — edit them in the Tool Versions section below.
+        </p>
       </div>
 
       <div className="panel p-5 mb-4">
@@ -1018,7 +1045,7 @@ function AuditLogAccordion() {
   }, [requested]);
 
   return (
-    <CollapsibleSection index="F" label="Audit Log">
+    <CollapsibleSection index="G" label="Audit Log">
       <div className="panel p-5">
         {entries === null && !error && <p className="caption">Loading…</p>}
         {error && <p className="caption text-danger">{error}</p>}
@@ -1035,6 +1062,114 @@ function AuditLogAccordion() {
           </div>
         )}
       </div>
+    </CollapsibleSection>
+  );
+}
+
+/* -------------------- Tool Versions card (PRD-34) --------------------- */
+
+function ToolVersionsCard() {
+  const [tv, setTV] = useState<ToolVersions | null>(null);
+  const [framework, setFramework] = useState("");
+  const [inferencePerf, setInferencePerf] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      const fresh = await getToolVersions();
+      setTV(fresh);
+      setFramework(fresh.framework_version);
+      setInferencePerf(fresh.inference_perf_version);
+    } catch (err: any) {
+      setError(err.message || "Failed to load tool versions");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  async function handleSave() {
+    setSaving(true);
+    setError(null);
+    try {
+      const fresh = await putToolVersions({
+        framework_version: framework.trim(),
+        inference_perf_version: inferencePerf.trim(),
+      });
+      setTV(fresh);
+      setFramework(fresh.framework_version);
+      setInferencePerf(fresh.inference_perf_version);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2000);
+    } catch (err: any) {
+      setError(err.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const dirty =
+    tv != null &&
+    (framework.trim() !== tv.framework_version ||
+      inferencePerf.trim() !== tv.inference_perf_version);
+
+  return (
+    <CollapsibleSection
+      index="F"
+      label="Tool Versions"
+      action={
+        <div className="flex items-center gap-3">
+          {savedFlash && <span className="font-mono text-[11px] tracking-mech uppercase text-signal">SAVED</span>}
+          {error && <span className="font-mono text-[11.5px] text-danger">{error}</span>}
+          <button
+            onClick={handleSave}
+            disabled={saving || loading || !dirty || !framework.trim() || !inferencePerf.trim()}
+            className="btn btn-primary"
+          >
+            {saving ? "SAVING…" : "SAVE"}
+          </button>
+        </div>
+      }
+    >
+      {loading ? (
+        <div className="panel p-5 caption">Loading…</div>
+      ) : (
+        <div className="panel p-5">
+          <div className="grid grid-cols-2 gap-4 mb-3">
+            <LabeledInput
+              label="Framework Version (vLLM)"
+              value={framework}
+              onChange={setFramework}
+            />
+            <LabeledInput
+              label="Inference-Perf Version"
+              value={inferencePerf}
+              onChange={setInferencePerf}
+            />
+          </div>
+          <p className="meta">
+            Applies to all new benchmark runs. Existing runs retain the version they were submitted with.
+            vLLM can still be overridden per-run from the new-benchmark page; inference-perf is platform-wide.
+          </p>
+          {tv?.env_override_active && (
+            <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
+              <div className="caption text-warn mb-1">INFERENCE_PERF_IMAGE ENV OVERRIDE ACTIVE</div>
+              <div className="font-mono text-[11.5px] text-ink-0 break-all">
+                {tv.env_override_image}
+              </div>
+              <p className="caption mt-1">
+                The API pod has the <code>INFERENCE_PERF_IMAGE</code> env var set — it wins over the DB value.
+                Edits to Inference-Perf Version above will be saved but ignored at runtime until the env var is removed.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </CollapsibleSection>
   );
 }
@@ -1082,6 +1217,7 @@ export default function Configuration() {
             <ScenarioOverridesCard />
             <RegistryCard />
             <CapacityReservationsCard />
+            <ToolVersionsCard />
             <AuditLogAccordion />
           </>
         )}
