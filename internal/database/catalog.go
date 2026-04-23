@@ -56,7 +56,7 @@ type CatalogEntry struct {
 
 // CatalogFilter holds optional filters for catalog queries.
 type CatalogFilter struct {
-	ModelHfID       string // exact match on model hf_id
+	ModelHfID       string // substring ILIKE on model hf_id (UI is a free-text search)
 	ModelFamily     string // exact match on model_family
 	InstanceFamily  string // exact match on instance family (e.g. "p5")
 	AcceleratorType string // "gpu" or "neuron"
@@ -106,8 +106,8 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 
 	if f.ModelHfID != "" {
 		argIdx++
-		conditions = append(conditions, fmt.Sprintf("m.hf_id = $%d", argIdx))
-		args = append(args, f.ModelHfID)
+		conditions = append(conditions, fmt.Sprintf("m.hf_id ILIKE $%d", argIdx))
+		args = append(args, "%"+f.ModelHfID+"%")
 	}
 	if f.ModelFamily != "" {
 		argIdx++

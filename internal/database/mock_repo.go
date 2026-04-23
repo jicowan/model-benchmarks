@@ -489,7 +489,10 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 		}
 
 		// Apply filters.
-		if f.ModelHfID != "" && model.HfID != f.ModelHfID {
+		if f.ModelHfID != "" && !strings.Contains(
+			strings.ToLower(model.HfID),
+			strings.ToLower(f.ModelHfID),
+		) {
 			continue
 		}
 		if f.ModelFamily != "" && (model.ModelFamily == nil || *model.ModelFamily != f.ModelFamily) {
