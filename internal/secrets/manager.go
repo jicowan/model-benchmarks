@@ -141,6 +141,24 @@ func (m *Manager) PutDockerHub(ctx context.Context, username, accessToken string
 		"Docker Hub credentials consumed by the ECR pull-through cache")
 }
 
+// DeleteDockerHub removes the secret (no recovery window). Note: the
+// pull-through cache can't hydrate new Docker Hub images without this
+// credential; operators should re-PUT before the next fresh image pull.
+func (m *Manager) DeleteDockerHub(ctx context.Context) error {
+	_, err := m.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
+		SecretId:                   aws.String(DockerHubSecretID),
+		ForceDeleteWithoutRecovery: aws.Bool(true),
+	})
+	if err != nil {
+		var nf *smtypes.ResourceNotFoundException
+		if errors.As(err, &nf) {
+			return nil
+		}
+		return fmt.Errorf("delete %s: %w", DockerHubSecretID, err)
+	}
+	return nil
+}
+
 // --- internals ---------------------------------------------------------------
 
 func (m *Manager) getSecretString(ctx context.Context, id string) (string, error) {

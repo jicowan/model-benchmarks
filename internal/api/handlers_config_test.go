@@ -58,6 +58,10 @@ func (f *fakeSecrets) PutDockerHub(_ context.Context, _, _ string) error {
 	f.dhUpdated = time.Now()
 	return nil
 }
+func (f *fakeSecrets) DeleteDockerHub(_ context.Context) error {
+	f.dhSet = false
+	return nil
+}
 
 func setupConfigServer(fs *fakeSecrets) *http.ServeMux {
 	srv := NewServer(database.NewMockRepo(), fake.NewSimpleClientset())

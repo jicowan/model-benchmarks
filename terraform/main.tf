@@ -52,6 +52,17 @@ provider "kubectl" {
   }
 }
 
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", local.cluster_name]
+  }
+}
+
 # ---------- VPC ----------
 module "vpc" {
   source = "./modules/vpc"
@@ -98,6 +109,75 @@ module "aurora" {
   max_capacity               = var.aurora_max_capacity
 
   tags = local.tags
+}
+
+# ---------- Kubernetes namespace + DB secret (Helm-owned) ----------
+# Creates the accelbench namespace with Helm ownership metadata AND the
+# DATABASE_URL secret the API + migration jobs read at runtime. Reads the
+# live Aurora password from Secrets Manager (populated by the RDS-managed
+# master user secret) and URL-encodes it before building the Postgres URI.
+#
+# If Aurora ever rotates the password, run `terraform apply` to refresh.
+
+data "aws_secretsmanager_secret_version" "aurora_master" {
+  secret_id = module.aurora.cluster_master_user_secret[0].secret_arn
+}
+
+locals {
+  aurora_creds    = jsondecode(data.aws_secretsmanager_secret_version.aurora_master.secret_string)
+  aurora_password = local.aurora_creds.password
+  aurora_username = local.aurora_creds.username
+  # urlencode() percent-encodes every char except the RFC 3986 unreserved
+  # set, which matches what we need for the password in a Postgres URI.
+  database_url = format(
+    "postgres://%s:%s@%s:%d/accelbench?sslmode=require",
+    local.aurora_username,
+    urlencode(local.aurora_password),
+    module.aurora.cluster_endpoint,
+    module.aurora.cluster_port,
+  )
+}
+
+resource "kubernetes_namespace" "accelbench" {
+  count = var.manage_accelbench_namespace ? 1 : 0
+
+  metadata {
+    name = "accelbench"
+    labels = {
+      "app.kubernetes.io/managed-by" = "Helm"
+    }
+    annotations = {
+      "meta.helm.sh/release-name"      = "accelbench"
+      "meta.helm.sh/release-namespace" = "accelbench"
+    }
+  }
+
+  # Helm adds its own labels (app.kubernetes.io/version, helm.sh/chart)
+  # and hook annotations on every install/upgrade. Terraform owns the
+  # namespace's existence; Helm owns its per-release metadata.
+  lifecycle {
+    ignore_changes = [
+      metadata[0].labels,
+      metadata[0].annotations,
+    ]
+  }
+
+  depends_on = [module.eks]
+}
+
+resource "kubernetes_secret" "accelbench_db" {
+  count = var.manage_accelbench_namespace ? 1 : 0
+
+  metadata {
+    name      = "accelbench-db"
+    namespace = kubernetes_namespace.accelbench[0].metadata[0].name
+  }
+
+  data = {
+    DATABASE_URL = local.database_url
+  }
+
+  type = "Opaque"
 }
 
 # ---------- API Pod Identity (pricing:GetProducts for CronJob) ----------
@@ -421,6 +501,32 @@ resource "aws_iam_role_policy" "api_config_secrets" {
         "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:accelbench/config/*",
         "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:ecr-pullthroughcache/*",
       ]
+    }]
+  })
+}
+
+# PRD-32: Registry card on the Configuration page lists cached repos in the
+# pull-through cache and their size + last-pulled timestamps. Describe-only,
+# no mutation, resource="*" because ECR DescribeRepositories/DescribeImages
+# don't support prefix-scoped resource ARNs.
+#
+# PRD-33: ec2:DescribeCapacityReservations lets the Capacity Reservations
+# card validate attached ODCRs/CBRs against live EC2 state (instance type,
+# AZ, state, available count). Also resource="*" — no ARN scoping support.
+resource "aws_iam_role_policy" "api_ecr_describe" {
+  name = "DescribeReadOnly"
+  role = aws_iam_role.api_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
+        "ec2:DescribeCapacityReservations",
+      ]
+      Resource = "*"
     }]
   })
 }

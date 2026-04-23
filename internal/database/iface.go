@@ -40,6 +40,24 @@ type Repo interface {
 	ModelCacheRepo
 	// Catalog seeding matrix (PRD-30)
 	CatalogMatrixRepo
+	// Configuration — scenario overrides, audit log, matrix PUT (PRD-32)
+	ConfigRepo
+}
+
+// ConfigRepo covers the Configuration-page storage introduced in PRD-32.
+type ConfigRepo interface {
+	// Atomic PUT of the full seeding matrix. Accepts an expected version
+	// (max updated_at across the three tables) and returns ErrStaleVersion
+	// if the DB has newer data.
+	PutCatalogMatrix(ctx context.Context, m *CatalogMatrix, expectedVersion time.Time) error
+
+	ListScenarioOverrides(ctx context.Context) ([]ScenarioOverride, error)
+	GetScenarioOverride(ctx context.Context, scenarioID string) (*ScenarioOverride, error)
+	UpsertScenarioOverride(ctx context.Context, o *ScenarioOverride) error
+	DeleteScenarioOverride(ctx context.Context, scenarioID string) error
+
+	InsertAuditLog(ctx context.Context, action, summary string, actor *string) error
+	ListAuditLog(ctx context.Context, limit int) ([]ConfigAuditEntry, error)
 }
 
 // CatalogMatrixRepo defines the interface for the DB-backed seeding matrix

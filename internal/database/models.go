@@ -294,3 +294,24 @@ type RunKey struct {
 	ModelHfID        string
 	InstanceTypeName string
 }
+
+// ScenarioOverride is a per-scenario partial override of the code-defined
+// inference-perf knobs (PRD-32). All non-ID fields are pointers so NULL in
+// SQL means "inherit from the code-defined scenario."
+type ScenarioOverride struct {
+	ScenarioID string    `json:"scenario_id"`
+	NumWorkers *int      `json:"num_workers,omitempty"`
+	Streaming  *bool     `json:"streaming,omitempty"`
+	InputMean  *int      `json:"input_mean,omitempty"`
+	OutputMean *int      `json:"output_mean,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ConfigAuditEntry is a single row in config_audit_log (PRD-32).
+type ConfigAuditEntry struct {
+	ID      int64     `json:"id"`
+	At      time.Time `json:"at"`
+	Action  string    `json:"action"`
+	Actor   *string   `json:"actor,omitempty"`
+	Summary string    `json:"summary"`
+}

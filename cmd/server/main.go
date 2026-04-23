@@ -11,6 +11,10 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/secrets"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -42,6 +46,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("create kubernetes client: %v", err)
 	}
+	dynClient, err := dynamic.NewForConfig(k8sCfg)
+	if err != nil {
+		log.Fatalf("create dynamic kubernetes client: %v", err)
+	}
 
 	srv := api.NewServer(repo, k8sClient)
 
@@ -52,6 +60,15 @@ func main() {
 		log.Printf("secrets manager unavailable: %v", err)
 	} else {
 		srv.SetSecretsStore(sm)
+	}
+
+	// PRD-33: EC2 client + dynamic K8s client for the Capacity Reservations
+	// card. Non-fatal if the AWS config load fails — the reservations
+	// endpoints will return 500 if called, but other handlers keep working.
+	if awsCfg, err := config.LoadDefaultConfig(ctx); err != nil {
+		log.Printf("aws config unavailable, capacity reservations disabled: %v", err)
+	} else {
+		srv.SetReservationsClients(ec2.NewFromConfig(awsCfg), dynClient)
 	}
 
 	// Recover any runs left in "running" status from a previous crash

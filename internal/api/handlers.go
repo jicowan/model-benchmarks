@@ -23,12 +23,14 @@ import (
 
 // Server holds dependencies for API handlers.
 type Server struct {
-	repo     database.Repo
-	orch     *orchestrator.Orchestrator
-	client   kubernetes.Interface
-	hfClient recommend.HFClientInterface
-	seeder   *seed.Seeder
-	secrets  SecretsStore
+	repo       database.Repo
+	orch       *orchestrator.Orchestrator
+	client     kubernetes.Interface
+	hfClient   recommend.HFClientInterface
+	seeder     *seed.Seeder
+	secrets    SecretsStore
+	ec2Client  EC2Client      // PRD-33
+	dynClient  DynamicClient  // PRD-33 — client-go/dynamic, typed via an interface for tests
 }
 
 // NewServer creates a new API server.
@@ -62,6 +64,14 @@ func (s *Server) SetSecretsStore(store SecretsStore) {
 	s.orch.SetSecretsStore(store)
 }
 
+// SetReservationsClients injects the EC2 SDK client + K8s dynamic client
+// used by the Capacity Reservations card (PRD-33). Called from main after
+// construction; tests can leave these nil and the endpoints will 500.
+func (s *Server) SetReservationsClients(ec EC2Client, dyn DynamicClient) {
+	s.ec2Client = ec
+	s.dynClient = dyn
+}
+
 // RecoverOrphanedRuns attempts to complete any runs that were left in "running"
 // status due to an API restart. Call this on server startup. Also marks any
 // in-flight seed goroutines as interrupted (PRD-30).
@@ -72,19 +82,28 @@ func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
 	}
 }
 
-// FetchModelConfig returns a ModelConfig for modelID. If the model is already
-// cached in S3 (status=cached with a matching hf_id), it reads config.json
-// from S3 — this avoids requiring an HF token for gated models. Otherwise it
-// falls back to the HuggingFace API.
+// FetchModelConfig returns a ModelConfig for modelID. Resolution order:
+//  1. If the model is already cached in S3 (status=cached with a matching
+//     hf_id), read config.json from S3. No HF token needed for gated models.
+//  2. Otherwise call HuggingFace. If the caller passed a token, use it.
+//     Otherwise (PRD-31) fall back to the platform HF token from Secrets
+//     Manager. Errors fetching the platform token are swallowed — gated
+//     models will fail with HF 401, which is clearer than a Secrets error.
 //
-// Exported for use by internal/seed. The un-exported alias below keeps the
-// existing call sites in this package untouched.
+// Exported for use by internal/seed.
 func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
 	if mc, _ := s.repo.GetModelCacheByHfID(ctx, modelID, "main"); mc != nil && mc.Status == "cached" {
 		if cfg, err := recommend.FetchModelConfigFromS3(ctx, mc.S3URI); err == nil {
 			return cfg, nil
 		}
 		// Fall through to HF on S3 read failure.
+	}
+	if hfToken == "" && s.secrets != nil {
+		if tok, err := s.secrets.GetHFToken(ctx); err == nil {
+			hfToken = tok
+		} else {
+			log.Printf("resolve platform HF token for fetchModelConfig: %v", err)
+		}
 	}
 	return s.hfClient.FetchModelConfig(modelID, hfToken)
 }
@@ -133,6 +152,19 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/config/credentials/hf-token", s.handlePutHFToken)
 	mux.HandleFunc("DELETE /api/v1/config/credentials/hf-token", s.handleDeleteHFToken)
 	mux.HandleFunc("PUT /api/v1/config/credentials/dockerhub-token", s.handlePutDockerHubToken)
+	mux.HandleFunc("DELETE /api/v1/config/credentials/dockerhub-token", s.handleDeleteDockerHubToken)
+	// PRD-32: Catalog matrix editor, scenario overrides, registry, audit log
+	mux.HandleFunc("GET /api/v1/config/catalog-matrix", s.handleGetCatalogMatrix)
+	mux.HandleFunc("PUT /api/v1/config/catalog-matrix", s.handlePutCatalogMatrix)
+	mux.HandleFunc("GET /api/v1/config/scenario-overrides", s.handleListScenarioOverrides)
+	mux.HandleFunc("PUT /api/v1/config/scenario-overrides/{id}", s.handlePutScenarioOverride)
+	mux.HandleFunc("DELETE /api/v1/config/scenario-overrides/{id}", s.handleDeleteScenarioOverride)
+	mux.HandleFunc("GET /api/v1/config/registry", s.handleGetRegistry)
+	mux.HandleFunc("GET /api/v1/config/audit-log", s.handleListAuditLog)
+	// PRD-33: Capacity Reservations card
+	mux.HandleFunc("GET /api/v1/config/capacity-reservations", s.handleListReservations)
+	mux.HandleFunc("POST /api/v1/config/capacity-reservations", s.handlePostReservation)
+	mux.HandleFunc("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", s.handleDeleteReservation)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
