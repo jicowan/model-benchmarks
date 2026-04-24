@@ -1,4 +1,5 @@
 {{- if .Values.ingress.enabled }}
+{{- $tlsSource := .Values.ingress.tls.source | default "none" -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -6,22 +7,22 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "accelbench.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    {{- if ne $tlsSource "none" }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: {{ required "ingress.tls.certificateArn is required when ingress.tls.source is acm-route53 or acm-existing" .Values.ingress.tls.certificateArn | quote }}
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    {{- else }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    {{- end }}
 spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
-  {{- end }}
-  {{- if .Values.ingress.tls }}
-  tls:
-    {{- toYaml .Values.ingress.tls | nindent 4 }}
-  {{- end }}
+  ingressClassName: alb
   rules:
-    - {{- if .Values.ingress.host }}
-      host: {{ .Values.ingress.host }}
-      {{- end }}
+    - host: {{ required "ingress.host is required when ingress.enabled=true" .Values.ingress.host | quote }}
       http:
         paths:
           - path: /api

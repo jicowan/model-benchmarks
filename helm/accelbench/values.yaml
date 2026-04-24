@@ -68,17 +68,21 @@ web:
   nodeSelector: {}
   tolerations: []
 
-# -- Ingress
+# -- Public HTTPS ingress (PRD-43a). Disabled by default — port-forward works
+# out of the box. Set enabled=true, host, and tls.source to stand up a public
+# URL via the AWS Load Balancer Controller. See terraform/README.md for the
+# three supported modes and the end-to-end install flow.
 ingress:
-  enabled: true
-  className: alb
-  annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
-    alb.ingress.kubernetes.io/ssl-redirect: "443"
-  host: ""  # Set to your domain, e.g. accelbench.example.com
-  tls: []
+  enabled: false
+  host: ""
+  tls:
+    # One of: acm-route53, acm-existing, none.
+    #   acm-route53:  Terraform creates + validates an ACM cert; populate
+    #                 certificateArn from `terraform output -raw certificate_arn`.
+    #   acm-existing: You already have an ACM cert ARN to use.
+    #   none:         HTTP only — dev/CI clusters. Not for production.
+    source: "none"
+    certificateArn: ""
 
 # -- Database (Aurora PostgreSQL)
 database:
