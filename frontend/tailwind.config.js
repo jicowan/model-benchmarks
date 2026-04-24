@@ -68,10 +68,15 @@ export default {
           "0%": { opacity: "0", transform: "translateY(4px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        "hal-iris": {
+          "0%, 100%": { transform: "scale(1)", opacity: "1", boxShadow: "0 0 4px 1px rgb(var(--signal) / 0.4)" },
+          "50%": { transform: "scale(0.7)", opacity: "0.6", boxShadow: "0 0 8px 3px rgb(var(--signal) / 0.6)" },
+        },
       },
       animation: {
         pulse_signal: "pulse_signal 1.6s ease-in-out infinite",
         enter: "enter 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both",
+        "hal-iris": "hal-iris 2.4s ease-in-out infinite",
       },
     },
   },

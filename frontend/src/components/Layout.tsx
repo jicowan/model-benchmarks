@@ -135,8 +135,10 @@ export default function Layout() {
         {/* Wordmark */}
         <div className="h-14 flex items-center px-4 border-b border-line">
           <Link to="/" className="flex items-center gap-2 group">
-            <div className="w-5 h-5 border border-ink-0 relative flex items-center justify-center">
-              <div className="w-1.5 h-1.5 bg-signal" />
+            <div className="w-6 h-6 relative flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-2 border-ink-2 group-hover:border-signal/60 transition-colors" />
+              <div className="absolute inset-[3px] rounded-full border border-signal/40" />
+              <div className="w-2.5 h-2.5 rounded-full bg-signal animate-hal-iris" />
             </div>
             {!collapsed && (
               <span className="font-mono text-[13px] tracking-widemech text-ink-0 group-hover:text-signal transition-colors">
