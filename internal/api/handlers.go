@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/accelbench/accelbench/internal/auth"
 	"github.com/accelbench/accelbench/internal/cache"
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
@@ -37,6 +38,9 @@ type Server struct {
 	dynClient  DynamicClient  // PRD-33 — client-go/dynamic, typed via an interface for tests
 	hostname   string         // PRD-40 — this pod's identifier for replica coordination
 	cache      cache.Cache   // PRD-38 — 60s TTL response cache for slow-changing endpoints
+	cognitoIDP CognitoIDP    // PRD-43 — Cognito InitiateAuth / GlobalSignOut
+	authConfig auth.Config   // PRD-43 — user pool + client ID + AUTH_DISABLED flag
+	authVerifier *auth.Verifier // PRD-43 — JWT verifier (for middleware + /auth/me fallback)
 }
 
 // NewServer creates a new API server. hostname is the running pod's name
@@ -50,6 +54,10 @@ func NewServer(repo database.Repo, client kubernetes.Interface, hostname string)
 		hfClient: recommend.NewHFClient(),
 		hostname: hostname,
 		cache:    cache.NopCache{},
+		// PRD-43: default to Disabled=true so tests + local dev work without
+		// Cognito config. cmd/server/main.go calls SetAuth to flip this off
+		// in production, with AUTH_DISABLED as an explicit escape hatch.
+		authConfig: auth.Config{Disabled: true},
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -58,12 +66,13 @@ func NewServer(repo database.Repo, client kubernetes.Interface, hostname string)
 // NewServerWithHFClient creates a new API server with a custom HFClient (for testing).
 func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfClient recommend.HFClientInterface, hostname string) *Server {
 	s := &Server{
-		repo:     repo,
-		orch:     orchestrator.New(client, repo, hostname),
-		client:   client,
-		hfClient: hfClient,
-		hostname: hostname,
-		cache:    cache.NopCache{},
+		repo:       repo,
+		orch:       orchestrator.New(client, repo, hostname),
+		client:     client,
+		hfClient:   hfClient,
+		hostname:   hostname,
+		cache:      cache.NopCache{},
+		authConfig: auth.Config{Disabled: true},
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -92,6 +101,15 @@ func (s *Server) SetReservationsClients(ec EC2Client, dyn DynamicClient) {
 // construction; tests can leave the default NopCache.
 func (s *Server) SetCache(c cache.Cache) {
 	s.cache = c
+}
+
+// SetAuth injects the PRD-43 auth dependencies. Called from main after
+// construction; tests that don't exercise auth can leave these nil and
+// set AUTH_DISABLED via Config.
+func (s *Server) SetAuth(cfg auth.Config, idp CognitoIDP, verifier *auth.Verifier) {
+	s.authConfig = cfg
+	s.cognitoIDP = idp
+	s.authVerifier = verifier
 }
 
 // writeCachedJSON marshals v to JSON, stores the bytes in the cache under
@@ -159,69 +177,94 @@ func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) 
 }
 
 // RegisterRoutes registers all API routes on the given mux.
+//
+// Routing is split into two tiers for PRD-43 auth:
+//
+//   - Public routes (no auth middleware) go directly on `mux`:
+//     POST /api/v1/auth/login, POST /api/v1/auth/refresh. /healthz is
+//     also public but is registered by cmd/server/main.go, not here.
+//
+//   - Protected routes go on a private ServeMux that's wrapped in the
+//     auth middleware and then mounted at /api/v1/ on the outer mux.
+//     Go 1.22's ServeMux prefers more-specific patterns, so the two
+//     public POSTs above take precedence over the /api/v1/ fallback.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/status", s.handleStatus)
-	mux.HandleFunc("GET /api/v1/catalog", s.handleListCatalog)
-	mux.HandleFunc("POST /api/v1/runs", s.handleCreateRun)
-	mux.HandleFunc("GET /api/v1/runs/{id}", s.handleGetRun)
-	mux.HandleFunc("GET /api/v1/runs/{id}/metrics", s.handleGetMetrics)
-	mux.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
-	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
-	mux.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
-	mux.HandleFunc("GET /api/v1/instance-types", s.handleListInstanceTypes)
-	mux.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
-	mux.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
-	mux.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
-	mux.HandleFunc("POST /api/v1/catalog/seed", s.handleCatalogSeed)
-	mux.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
-	mux.HandleFunc("POST /api/v1/admin/backfill-model-families", s.handleBackfillModelFamilies)
+	// --- Public: auth endpoints that must work before the user has a token ---
+	mux.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleAuthRefresh)
+
+	// --- Protected: wrapped in auth.Middleware ---
+	p := http.NewServeMux()
+	p.HandleFunc("POST /api/v1/auth/logout", s.handleAuthLogout)
+	p.HandleFunc("GET /api/v1/auth/me", s.handleAuthMe)
+
+	p.HandleFunc("GET /api/v1/status", s.handleStatus)
+	p.HandleFunc("GET /api/v1/catalog", s.handleListCatalog)
+	p.HandleFunc("POST /api/v1/runs", s.handleCreateRun)
+	p.HandleFunc("GET /api/v1/runs/{id}", s.handleGetRun)
+	p.HandleFunc("GET /api/v1/runs/{id}/metrics", s.handleGetMetrics)
+	p.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
+	p.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
+	p.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
+	p.HandleFunc("GET /api/v1/instance-types", s.handleListInstanceTypes)
+	p.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
+	p.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
+	p.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
+	p.HandleFunc("POST /api/v1/catalog/seed", s.handleCatalogSeed)
+	p.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
+	p.HandleFunc("POST /api/v1/admin/backfill-model-families", s.handleBackfillModelFamilies)
 	// PRD-15: Memory breakdown and OOM history
-	mux.HandleFunc("GET /api/v1/memory-breakdown", s.handleMemoryBreakdown)
-	mux.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
+	p.HandleFunc("GET /api/v1/memory-breakdown", s.handleMemoryBreakdown)
+	p.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
 	// Export Kubernetes manifest
-	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
+	p.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
 	// PRD-41: CSV exports for run, suite, and compare
-	mux.HandleFunc("GET /api/v1/runs/{id}/csv", s.handleExportRunCSV)
-	mux.HandleFunc("GET /api/v1/suite-runs/{id}/csv", s.handleExportSuiteCSV)
-	mux.HandleFunc("GET /api/v1/compare/csv", s.handleExportCompareCSV)
+	p.HandleFunc("GET /api/v1/runs/{id}/csv", s.handleExportRunCSV)
+	p.HandleFunc("GET /api/v1/suite-runs/{id}/csv", s.handleExportSuiteCSV)
+	p.HandleFunc("GET /api/v1/compare/csv", s.handleExportCompareCSV)
 	// PRD-41: suite Kubernetes manifest (same shape as per-run)
-	mux.HandleFunc("GET /api/v1/suite-runs/{id}/export", s.handleExportSuiteManifest)
+	p.HandleFunc("GET /api/v1/suite-runs/{id}/export", s.handleExportSuiteManifest)
 	// PRD-12/13: Scenarios and test suites
-	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
-	mux.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
-	mux.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
-	mux.HandleFunc("POST /api/v1/suite-runs", s.handleCreateSuiteRun)
-	mux.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
+	p.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
+	p.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
+	p.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
+	p.HandleFunc("POST /api/v1/suite-runs", s.handleCreateSuiteRun)
+	p.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
 	// PRD-20: Model cache management
-	mux.HandleFunc("GET /api/v1/model-cache", s.handleListModelCache)
-	mux.HandleFunc("GET /api/v1/model-cache/stats", s.handleModelCacheStats) // PRD-35
-	mux.HandleFunc("POST /api/v1/model-cache", s.handleCreateModelCache)
-	mux.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
-	mux.HandleFunc("DELETE /api/v1/model-cache/{id}", s.handleDeleteModelCache)
-	mux.HandleFunc("POST /api/v1/model-cache/register", s.handleRegisterCustomModel)
+	p.HandleFunc("GET /api/v1/model-cache", s.handleListModelCache)
+	p.HandleFunc("GET /api/v1/model-cache/stats", s.handleModelCacheStats) // PRD-35
+	p.HandleFunc("POST /api/v1/model-cache", s.handleCreateModelCache)
+	p.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
+	p.HandleFunc("DELETE /api/v1/model-cache/{id}", s.handleDeleteModelCache)
+	p.HandleFunc("POST /api/v1/model-cache/register", s.handleRegisterCustomModel)
 	// PRD-31: Credentials management (HF token + Docker Hub token)
-	mux.HandleFunc("GET /api/v1/config/credentials", s.handleGetCredentials)
-	mux.HandleFunc("PUT /api/v1/config/credentials/hf-token", s.handlePutHFToken)
-	mux.HandleFunc("DELETE /api/v1/config/credentials/hf-token", s.handleDeleteHFToken)
-	mux.HandleFunc("PUT /api/v1/config/credentials/dockerhub-token", s.handlePutDockerHubToken)
-	mux.HandleFunc("DELETE /api/v1/config/credentials/dockerhub-token", s.handleDeleteDockerHubToken)
+	p.HandleFunc("GET /api/v1/config/credentials", s.handleGetCredentials)
+	p.HandleFunc("PUT /api/v1/config/credentials/hf-token", s.handlePutHFToken)
+	p.HandleFunc("DELETE /api/v1/config/credentials/hf-token", s.handleDeleteHFToken)
+	p.HandleFunc("PUT /api/v1/config/credentials/dockerhub-token", s.handlePutDockerHubToken)
+	p.HandleFunc("DELETE /api/v1/config/credentials/dockerhub-token", s.handleDeleteDockerHubToken)
 	// PRD-32: Catalog matrix editor, scenario overrides, registry, audit log
-	mux.HandleFunc("GET /api/v1/config/catalog-matrix", s.handleGetCatalogMatrix)
-	mux.HandleFunc("PUT /api/v1/config/catalog-matrix", s.handlePutCatalogMatrix)
-	mux.HandleFunc("GET /api/v1/config/scenario-overrides", s.handleListScenarioOverrides)
-	mux.HandleFunc("PUT /api/v1/config/scenario-overrides/{id}", s.handlePutScenarioOverride)
-	mux.HandleFunc("DELETE /api/v1/config/scenario-overrides/{id}", s.handleDeleteScenarioOverride)
-	mux.HandleFunc("GET /api/v1/config/registry", s.handleGetRegistry)
-	mux.HandleFunc("GET /api/v1/config/audit-log", s.handleListAuditLog)
+	p.HandleFunc("GET /api/v1/config/catalog-matrix", s.handleGetCatalogMatrix)
+	p.HandleFunc("PUT /api/v1/config/catalog-matrix", s.handlePutCatalogMatrix)
+	p.HandleFunc("GET /api/v1/config/scenario-overrides", s.handleListScenarioOverrides)
+	p.HandleFunc("PUT /api/v1/config/scenario-overrides/{id}", s.handlePutScenarioOverride)
+	p.HandleFunc("DELETE /api/v1/config/scenario-overrides/{id}", s.handleDeleteScenarioOverride)
+	p.HandleFunc("GET /api/v1/config/registry", s.handleGetRegistry)
+	p.HandleFunc("GET /api/v1/config/audit-log", s.handleListAuditLog)
 	// PRD-33: Capacity Reservations card
-	mux.HandleFunc("GET /api/v1/config/capacity-reservations", s.handleListReservations)
-	mux.HandleFunc("POST /api/v1/config/capacity-reservations", s.handlePostReservation)
-	mux.HandleFunc("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", s.handleDeleteReservation)
+	p.HandleFunc("GET /api/v1/config/capacity-reservations", s.handleListReservations)
+	p.HandleFunc("POST /api/v1/config/capacity-reservations", s.handlePostReservation)
+	p.HandleFunc("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", s.handleDeleteReservation)
 	// PRD-34: Tool Versions (vLLM framework + inference-perf)
-	mux.HandleFunc("GET /api/v1/config/tool-versions", s.handleGetToolVersions)
-	mux.HandleFunc("PUT /api/v1/config/tool-versions", s.handlePutToolVersions)
+	p.HandleFunc("GET /api/v1/config/tool-versions", s.handleGetToolVersions)
+	p.HandleFunc("PUT /api/v1/config/tool-versions", s.handlePutToolVersions)
 	// PRD-35: Dashboard aggregate stats (every card on the Dashboard).
-	mux.HandleFunc("GET /api/v1/dashboard/stats", s.handleDashboardStats)
+	p.HandleFunc("GET /api/v1/dashboard/stats", s.handleDashboardStats)
+
+	// Mount the protected subrouter behind auth middleware. The two
+	// public /api/v1/auth/* POSTs registered directly on `mux` above
+	// take precedence by Go 1.22's longest-pattern rule.
+	mux.Handle("/api/v1/", auth.Middleware(s.authConfig, s.authVerifier)(p))
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

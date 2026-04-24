@@ -84,3 +84,20 @@ output "app_url" {
   description = "Public app URL. Empty unless ingress is configured."
   value       = var.app_host == "" ? "" : (var.ingress_mode == "none" ? "http://${var.app_host}" : "https://${var.app_host}")
 }
+
+# ---------- Cognito auth (PRD-43) ----------
+
+output "cognito_user_pool_id" {
+  description = "Cognito User Pool ID. Set on the accelbench-api pod as COGNITO_USER_POOL_ID."
+  value       = aws_cognito_user_pool.accelbench.id
+}
+
+output "cognito_client_id" {
+  description = "Cognito App Client ID. Set on the accelbench-api pod as COGNITO_CLIENT_ID."
+  value       = aws_cognito_user_pool_client.accelbench_api.id
+}
+
+output "cognito_user_pool_arn" {
+  description = "Cognito User Pool ARN (for cross-account references or debugging)."
+  value       = aws_cognito_user_pool.accelbench.arn
+}

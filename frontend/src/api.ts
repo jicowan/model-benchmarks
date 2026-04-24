@@ -37,6 +37,7 @@ import type {
   ModelCacheStats,
   RunDetailResponse,
   SuiteDetailResponse,
+  AuthUser,
 } from "./types";
 import type { Paginated } from "./lib/pagination";
 
@@ -46,8 +47,25 @@ export async function getStatus(): Promise<StatusResponse> {
   return fetchJSON<StatusResponse>(`${BASE}/status`);
 }
 
+// PRD-43: all API calls carry HttpOnly auth cookies via credentials:"include".
+// On a 401 response, fetchJSON attempts exactly one silent refresh; if that
+// succeeds, the original request is retried once. If the refresh returns 401
+// too, we redirect the user to /login (except for the auth endpoints
+// themselves, which handle 401 as a "bad credentials" UX state).
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const withCreds: RequestInit = { credentials: "include", ...(init ?? {}) };
+  let res = await fetch(url, withCreds);
+
+  if (res.status === 401 && !isAuthEndpoint(url)) {
+    const refreshed = await trySilentRefresh();
+    if (refreshed) {
+      res = await fetch(url, withCreds);
+    } else {
+      redirectToLogin();
+      throw new Error("unauthorized");
+    }
+  }
+
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -60,6 +78,54 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return res.json();
+}
+
+function isAuthEndpoint(url: string): boolean {
+  return url.includes("/auth/login") || url.includes("/auth/refresh") || url.includes("/auth/logout");
+}
+
+// trySilentRefresh returns true if the refresh call returned 2xx.
+async function trySilentRefresh(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function redirectToLogin() {
+  if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
+
+// PRD-43: auth endpoints.
+
+export async function authLogin(email: string, password: string): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function authLogout(): Promise<void> {
+  await fetch(`${BASE}/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
+}
+
+export async function authMe(): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`${BASE}/auth/me`);
+}
+
+export async function authRefresh(): Promise<boolean> {
+  return trySilentRefresh();
 }
 
 // PRD-36: /api/v1/catalog now returns { rows, total } so paginated UIs can

@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import ThemeToggle from "./ThemeToggle";
 import { useStatus } from "../hooks/useStatus";
+import { useAuth } from "./AuthProvider";
 
 type NavItem = {
   to: string;
@@ -219,8 +220,29 @@ export default function Layout() {
 
       {/* Main */}
       <main className="flex-1 min-w-0 relative z-10">
+        <UserBadge />
         <Outlet />
       </main>
+    </div>
+  );
+}
+
+// PRD-43: user identity + logout. Fixed to the viewport top-right with
+// the same h-14 height as every page's sticky PageHeader (z-20) so the
+// badge sits on the header's center line. z-30 keeps it above the bar.
+function UserBadge() {
+  const { user, logout } = useAuth();
+  if (!user) return null;
+  return (
+    <div className="fixed top-0 right-4 z-30 h-14 flex items-center gap-3 font-mono text-[11px] tracking-mech text-ink-2 no-print">
+      <span className="hidden sm:inline">{user.email}</span>
+      <button
+        type="button"
+        onClick={logout}
+        className="uppercase tracking-widemech text-ink-2 hover:text-signal transition-colors"
+      >
+        Logout
+      </button>
     </div>
   );
 }

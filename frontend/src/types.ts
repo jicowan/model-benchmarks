@@ -731,3 +731,9 @@ export interface SuiteDetailResponse extends TestSuiteRun {
   pricing?: PricingRow;
   errors?: Record<string, string>;
 }
+
+// PRD-43: authenticated user. Populated from GET /api/v1/auth/me.
+export type AuthUser = {
+  email: string;
+  role: string;
+};

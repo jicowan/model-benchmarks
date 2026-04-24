@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/accelbench/accelbench/internal/api"
+	"github.com/accelbench/accelbench/internal/auth"
 	"github.com/accelbench/accelbench/internal/cache"
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/secrets"
 
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
 	"k8s.io/client-go/dynamic"
@@ -79,13 +81,49 @@ func main() {
 		srv.SetSecretsStore(sm)
 	}
 
+	// Load AWS SDK config once and reuse it across SDK clients. Non-fatal
+	// if this fails — individual features degrade gracefully.
+	awsCfg, awsCfgErr := config.LoadDefaultConfig(ctx)
+	if awsCfgErr != nil {
+		log.Printf("aws config unavailable: %v", awsCfgErr)
+	}
+
 	// PRD-33: EC2 client + dynamic K8s client for the Capacity Reservations
-	// card. Non-fatal if the AWS config load fails — the reservations
-	// endpoints will return 500 if called, but other handlers keep working.
-	if awsCfg, err := config.LoadDefaultConfig(ctx); err != nil {
-		log.Printf("aws config unavailable, capacity reservations disabled: %v", err)
-	} else {
+	// card. If AWS config failed the reservations endpoints will return 500
+	// but other handlers keep working.
+	if awsCfgErr == nil {
 		srv.SetReservationsClients(ec2.NewFromConfig(awsCfg), dynClient)
+	}
+
+	// PRD-43: Cognito auth. Needs COGNITO_USER_POOL_ID + COGNITO_CLIENT_ID.
+	// AUTH_DISABLED=1 bypasses auth entirely (local dev + CI). Without the
+	// IDs, we force Disabled=true and log loudly so operators notice.
+	authCfg := auth.Config{
+		UserPoolID: os.Getenv("COGNITO_USER_POOL_ID"),
+		ClientID:   os.Getenv("COGNITO_CLIENT_ID"),
+		Region:     os.Getenv("AWS_REGION"),
+		Disabled:   os.Getenv("AUTH_DISABLED") == "1",
+	}
+	if authCfg.Region == "" {
+		authCfg.Region = "us-east-2"
+	}
+	if !authCfg.Disabled && (authCfg.UserPoolID == "" || authCfg.ClientID == "") {
+		log.Printf("warning: COGNITO_USER_POOL_ID / COGNITO_CLIENT_ID unset; forcing AUTH_DISABLED")
+		authCfg.Disabled = true
+	}
+	if authCfg.Disabled {
+		log.Printf("AUTH DISABLED — DO NOT USE IN PRODUCTION")
+		srv.SetAuth(authCfg, nil, nil)
+	} else {
+		var idp api.CognitoIDP
+		var verifier *auth.Verifier
+		if awsCfgErr == nil {
+			idp = cognitoidentityprovider.NewFromConfig(awsCfg)
+			verifier = auth.NewVerifier(authCfg, auth.NewJWKSFetcher(authCfg))
+		} else {
+			log.Printf("warning: aws config unavailable; auth middleware will reject every request")
+		}
+		srv.SetAuth(authCfg, idp, verifier)
 	}
 
 	// PRD-40: heartbeat + ownership-aware orphan recovery. Replaces the old
