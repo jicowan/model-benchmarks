@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/accelbench/accelbench/internal/api"
+	"github.com/accelbench/accelbench/internal/cache"
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/secrets"
 
@@ -61,6 +63,12 @@ func main() {
 	log.Printf("api pod hostname = %s", hostname)
 
 	srv := api.NewServer(repo, k8sClient, hostname)
+
+	// PRD-38: shared response cache for slow-changing read endpoints.
+	// 60-second TTL; mutation handlers invalidate their keys explicitly.
+	responseCache := cache.New(60 * time.Second)
+	defer responseCache.Stop()
+	srv.SetCache(responseCache)
 
 	// PRD-31: wire up AWS Secrets Manager for HF / Docker Hub credentials.
 	// Non-fatal if construction fails — the credentials endpoints will

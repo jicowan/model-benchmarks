@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/accelbench/accelbench/internal/cache"
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/recommend"
@@ -32,6 +33,7 @@ type Server struct {
 	ec2Client  EC2Client      // PRD-33
 	dynClient  DynamicClient  // PRD-33 — client-go/dynamic, typed via an interface for tests
 	hostname   string         // PRD-40 — this pod's identifier for replica coordination
+	cache      cache.Cache   // PRD-38 — 60s TTL response cache for slow-changing endpoints
 }
 
 // NewServer creates a new API server. hostname is the running pod's name
@@ -44,6 +46,7 @@ func NewServer(repo database.Repo, client kubernetes.Interface, hostname string)
 		client:   client,
 		hfClient: recommend.NewHFClient(),
 		hostname: hostname,
+		cache:    cache.NopCache{},
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -57,6 +60,7 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 		client:   client,
 		hfClient: hfClient,
 		hostname: hostname,
+		cache:    cache.NopCache{},
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -79,6 +83,37 @@ func (s *Server) SetSecretsStore(store SecretsStore) {
 func (s *Server) SetReservationsClients(ec EC2Client, dyn DynamicClient) {
 	s.ec2Client = ec
 	s.dynClient = dyn
+}
+
+// SetCache injects the PRD-38 response cache. Called from main after
+// construction; tests can leave the default NopCache.
+func (s *Server) SetCache(c cache.Cache) {
+	s.cache = c
+}
+
+// writeCachedJSON marshals v to JSON, stores the bytes in the cache under
+// cacheKey, and writes the response. The trailing newline matches the
+// behavior of json.NewEncoder(w).Encode used by writeJSON.
+func (s *Server) writeCachedJSON(w http.ResponseWriter, cacheKey string, code int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "marshal failed")
+		return
+	}
+	data = append(data, '\n')
+	s.cache.Set(cacheKey, data)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache", "MISS")
+	w.WriteHeader(code)
+	w.Write(data)
+}
+
+// serveCacheHit writes pre-serialized bytes from the cache to the response.
+func serveCacheHit(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache", "HIT")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // RecoverOrphanedRuns is retained for test compatibility but no longer
@@ -386,6 +421,21 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		view.ModelHfID = details.ModelHfID
 		view.InstanceTypeName = details.InstanceTypeName
 	}
+
+	if run.Status == "completed" || run.Status == "failed" {
+		data, err := json.Marshal(view)
+		if err == nil {
+			data = append(data, '\n')
+			etag := etagOf(data)
+			if checkETag(w, r, etag) {
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, view)
 }
 
@@ -637,6 +687,11 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListInstanceTypes(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "instance-types"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	types, err := s.repo.ListInstanceTypes(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list instance types failed")
@@ -645,7 +700,7 @@ func (s *Server) handleListInstanceTypes(w http.ResponseWriter, r *http.Request)
 	if types == nil {
 		types = []database.InstanceType{}
 	}
-	writeJSON(w, http.StatusOK, types)
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, types)
 }
 
 func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
@@ -653,7 +708,11 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	if region == "" {
 		region = "us-east-2"
 	}
-
+	cacheKey := "pricing:" + region
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	rows, err := s.repo.ListPricing(r.Context(), region)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "pricing query failed")
@@ -662,7 +721,7 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []database.PricingRow{}
 	}
-	writeJSON(w, http.StatusOK, rows)
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, rows)
 }
 
 // handleCatalogSeed launches the in-process seeder (PRD-30). Replaces the
@@ -764,6 +823,11 @@ func (s *Server) handleBackfillModelFamilies(w http.ResponseWriter, r *http.Requ
 
 // handleListScenarios returns all available benchmark scenarios.
 func (s *Server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "scenarios"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	scenarios := scenario.List()
 
 	// Build response with computed duration
@@ -777,22 +841,27 @@ func (s *Server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := make([]scenarioResponse, 0, len(scenarios))
-	for _, s := range scenarios {
+	for _, sc := range scenarios {
 		result = append(result, scenarioResponse{
-			ID:              s.ID,
-			Name:            s.Name,
-			Description:     s.Description,
-			DurationSeconds: s.TotalDuration(),
-			LoadType:        s.LoadType,
-			Stages:          s.Stages,
+			ID:              sc.ID,
+			Name:            sc.Name,
+			Description:     sc.Description,
+			DurationSeconds: sc.TotalDuration(),
+			LoadType:        sc.LoadType,
+			Stages:          sc.Stages,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, result)
 }
 
 // handleListTestSuites returns all available test suites.
 func (s *Server) handleListTestSuites(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "test-suites"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	suites := testsuite.List()
 
 	type suiteResponse struct {
@@ -814,7 +883,7 @@ func (s *Server) handleListTestSuites(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, result)
 }
 
 // handleListSuiteRuns returns a list of test suite runs.
@@ -1040,6 +1109,21 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		resp.AcceleratorName = it.AcceleratorName
 		resp.AcceleratorCount = it.AcceleratorCount
 		resp.AcceleratorMemoryGiB = it.AcceleratorMemoryGiB
+	}
+
+	if suiteRun.Status == "completed" || suiteRun.Status == "failed" {
+		data, err := json.Marshal(resp)
+		if err == nil {
+			data = append(data, '\n')
+			etag := etagOf(data)
+			if checkETag(w, r, etag) {
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
