@@ -14,11 +14,13 @@ func (r *Repository) CreateTestSuiteRun(ctx context.Context, run *TestSuiteRun) 
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO test_suite_runs
 		    (model_id, instance_type_id, suite_id, tensor_parallel_degree,
-		     quantization, max_model_len, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		     quantization, max_model_len, status,
+		     framework, framework_version, model_s3_uri)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.SuiteID, run.TensorParallelDegree,
 		run.Quantization, nullableInt(run.MaxModelLen), run.Status,
+		run.Framework, run.FrameworkVersion, run.ModelS3URI,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert test suite run: %w", err)
@@ -33,12 +35,14 @@ func (r *Repository) GetTestSuiteRun(ctx context.Context, id string) (*TestSuite
 		`SELECT id, model_id, instance_type_id, suite_id, tensor_parallel_degree,
 		        quantization, max_model_len, status, current_scenario,
 		        started_at, completed_at, created_at, total_cost_usd,
-		        owner_pod, cancel_requested
+		        owner_pod, cancel_requested,
+		        framework, framework_version, model_s3_uri
 		 FROM test_suite_runs WHERE id = $1`, id,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.SuiteID,
 		&run.TensorParallelDegree, &run.Quantization, &run.MaxModelLen,
 		&run.Status, &run.CurrentScenario, &run.StartedAt, &run.CompletedAt, &run.CreatedAt,
-		&run.TotalCostUSD, &run.OwnerPod, &run.CancelRequested)
+		&run.TotalCostUSD, &run.OwnerPod, &run.CancelRequested,
+		&run.Framework, &run.FrameworkVersion, &run.ModelS3URI)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

@@ -13,6 +13,7 @@ import {
 import { listCatalog, listPricing } from "../api";
 import type { CatalogEntry, PricingTier, PricingRow } from "../types";
 import PricingToggle from "../components/PricingToggle";
+import PrintButton from "../components/PrintButton";
 import {
   hourlyRateFromMap,
   costPerRequest as deriveCostPerRequest,
@@ -462,30 +463,16 @@ function CompareInner({
           <MetricTable entries={entries} rows={costRows} />
         </section>
 
-        {/* Export */}
-        <div className="mt-8 pt-6 hairline">
+        {/* PRD-41: Print to PDF + CSV export. */}
+        <div className="mt-8 pt-6 hairline no-print">
           {(() => {
             const ids = entries.map((e) => e.run_id).join(",");
             const qs = `ids=${encodeURIComponent(ids)}&region=${encodeURIComponent(
               region
             )}&tier=${encodeURIComponent(pricingTier)}`;
             return (
-              <div className="flex gap-4">
-                <a
-                  href={`/api/v1/compare/report?${qs}`}
-                  download
-                  className="btn btn-primary"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                  Export HTML Report
-                </a>
+              <div className="flex gap-4 flex-wrap">
+                <PrintButton />
                 <a
                   href={`/api/v1/compare/csv?${qs}`}
                   download
@@ -505,7 +492,7 @@ function CompareInner({
             );
           })()}
           <p className="mt-2 caption">
-            HTML for sharing; CSV for further analysis. Both honor the current region and pricing tier.
+            Print for sharing; CSV for further analysis. CSV honors the current region and pricing tier.
           </p>
         </div>
       </div>

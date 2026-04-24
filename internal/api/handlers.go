@@ -180,11 +180,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
 	// Export Kubernetes manifest
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
-	// Export HTML report (PRD-16)
-	mux.HandleFunc("GET /api/v1/runs/{id}/report", s.handleExportReport)
-	// Export comparison report (HTML + CSV)
-	mux.HandleFunc("GET /api/v1/compare/report", s.handleExportCompareReport)
+	// PRD-41: CSV exports for run, suite, and compare
+	mux.HandleFunc("GET /api/v1/runs/{id}/csv", s.handleExportRunCSV)
+	mux.HandleFunc("GET /api/v1/suite-runs/{id}/csv", s.handleExportSuiteCSV)
 	mux.HandleFunc("GET /api/v1/compare/csv", s.handleExportCompareCSV)
+	// PRD-41: suite Kubernetes manifest (same shape as per-run)
+	mux.HandleFunc("GET /api/v1/suite-runs/{id}/export", s.handleExportSuiteManifest)
 	// PRD-12/13: Scenarios and test suites
 	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
 	mux.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
@@ -1081,7 +1082,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create suite run record
+	// Create suite run record. PRD-41: persist framework/framework_version/model_s3_uri
+	// so the manifest export can reconstruct the deployment exactly.
 	suiteRun := &database.TestSuiteRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -1090,6 +1092,18 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		Quantization:         req.Quantization,
 		MaxModelLen:          req.MaxModelLen,
 		Status:               "pending",
+	}
+	if req.Framework != "" {
+		fw := req.Framework
+		suiteRun.Framework = &fw
+	}
+	if req.FrameworkVersion != "" {
+		fv := req.FrameworkVersion
+		suiteRun.FrameworkVersion = &fv
+	}
+	if req.ModelS3URI != "" {
+		s3 := req.ModelS3URI
+		suiteRun.ModelS3URI = &s3
 	}
 
 	suiteRunID, err := s.repo.CreateTestSuiteRun(ctx, suiteRun)

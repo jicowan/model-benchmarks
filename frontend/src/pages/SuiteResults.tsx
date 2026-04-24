@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getSuiteRun } from "../api";
+import { getSuiteRun, getSuiteCSVUrl, getSuiteExportManifestUrl } from "../api";
 import type { TestSuiteRun } from "../types";
 import HeroBlock from "../components/HeroBlock";
 import SuiteCharts from "../components/SuiteCharts";
 import ScenarioTable from "../components/ScenarioTable";
+import PrintButton from "../components/PrintButton";
 
 function SectionHeader({ index, label }: { index: string; label: string }) {
   return (
@@ -180,6 +181,42 @@ export default function SuiteResults() {
             acceleratorCount={suiteRun.accelerator_count}
           />
         </section>
+
+        {/* PRD-41: Print to PDF + CSV + K8s manifest exports.
+            Only show for terminal suites — exporting an in-flight run
+            produces incomplete data. */}
+        {(suiteRun.status === "completed" || suiteRun.status === "failed") && (
+          <div className="mt-8 pt-6 hairline no-print">
+            <div className="flex gap-4 flex-wrap">
+              <PrintButton />
+              <a href={getSuiteCSVUrl(suiteRun.id)} download className="btn">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+                Export CSV
+              </a>
+              <a href={getSuiteExportManifestUrl(suiteRun.id)} download className="btn">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+                Export K8s Manifest
+              </a>
+            </div>
+            <p className="mt-2 caption">
+              Print for sharing, CSV for spreadsheet analysis, or K8s manifest to deploy this model.
+            </p>
+          </div>
+        )}
       </div>
     </>
   );

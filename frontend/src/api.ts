@@ -257,14 +257,20 @@ export async function getOOMHistory(
   return fetchJSON<OOMHistory>(`${BASE}/oom-history?${params}`);
 }
 
-// Export Kubernetes manifest
+// Export Kubernetes manifest for a single run
 export function getExportManifestUrl(runId: string): string {
   return `${BASE}/runs/${runId}/export`;
 }
 
-// Export HTML report (PRD-16)
-export function getExportReportUrl(runId: string): string {
-  return `${BASE}/runs/${runId}/report`;
+// PRD-41: CSV and suite exports.
+export function getRunCSVUrl(runId: string): string {
+  return `${BASE}/runs/${runId}/csv`;
+}
+export function getSuiteCSVUrl(suiteId: string): string {
+  return `${BASE}/suite-runs/${suiteId}/csv`;
+}
+export function getSuiteExportManifestUrl(suiteId: string): string {
+  return `${BASE}/suite-runs/${suiteId}/export`;
 }
 
 // PRD-12: Scenarios

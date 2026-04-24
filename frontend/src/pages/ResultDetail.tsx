@@ -4,7 +4,7 @@ import {
   getRun,
   getRunDetail,
   getExportManifestUrl,
-  getExportReportUrl,
+  getRunCSVUrl,
 } from "../api";
 import type {
   BenchmarkRun,
@@ -18,6 +18,7 @@ import LatencyDistribution from "../components/LatencyDistribution";
 import HeroBlock from "../components/HeroBlock";
 import ConfigPanel from "../components/ConfigPanel";
 import PricingToggle from "../components/PricingToggle";
+import PrintButton from "../components/PrintButton";
 import {
   hourlyRate,
   costPerRequest,
@@ -422,19 +423,20 @@ export default function ResultDetail() {
               </div>
             </section>
 
-            {/* Export buttons */}
-            <div className="mt-8 pt-6 hairline">
-              <div className="flex gap-4">
-                <a href={getExportReportUrl(run.id)} download className="btn btn-primary">
+            {/* PRD-41: Print to PDF, CSV, and K8s manifest exports. */}
+            <div className="mt-8 pt-6 hairline no-print">
+              <div className="flex gap-4 flex-wrap">
+                <PrintButton />
+                <a href={getRunCSVUrl(run.id)} download className="btn">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                     />
                   </svg>
-                  Export Report
+                  Export CSV
                 </a>
                 <a href={getExportManifestUrl(run.id)} download className="btn">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -449,7 +451,7 @@ export default function ResultDetail() {
                 </a>
               </div>
               <p className="mt-2 caption">
-                Download HTML report for sharing or K8s manifest to deploy this configuration
+                Print for sharing, CSV for spreadsheet analysis, or K8s manifest to deploy this configuration
               </p>
             </div>
           </>

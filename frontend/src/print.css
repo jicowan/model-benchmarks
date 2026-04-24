@@ -1,0 +1,40 @@
+/* PRD-41: print styles. Hides site chrome and tunes cards/charts for paper. */
+@media print {
+  .no-print,
+  aside,
+  nav[role="navigation"],
+  .print-hidden {
+    display: none !important;
+  }
+
+  @page {
+    size: Letter;
+    margin: 0.5in 0.5in 0.65in 0.5in;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  .card,
+  .panel,
+  section {
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+    break-inside: avoid;
+  }
+
+  svg {
+    break-inside: avoid;
+  }
+
+  .print-break {
+    break-before: page;
+  }
+
+  a {
+    color: black !important;
+    text-decoration: none !important;
+  }
+}
