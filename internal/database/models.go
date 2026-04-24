@@ -165,6 +165,11 @@ type TestSuiteRun struct {
 	StartedAt            *time.Time `json:"started_at,omitempty"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 	CreatedAt            time.Time  `json:"created_at"`
+	// PRD-41: fields needed to reconstruct the deployment manifest for
+	// suite export. Nullable for historical rows created before migration 026.
+	Framework        *string `json:"framework,omitempty"`
+	FrameworkVersion *string `json:"framework_version,omitempty"`
+	ModelS3URI       *string `json:"model_s3_uri,omitempty"`
 	// PRD-35: SUM of child benchmark_runs.total_cost_usd, written once when
 	// the suite marks itself completed. NULL if every child is NULL.
 	TotalCostUSD *float64 `json:"total_cost_usd,omitempty"`

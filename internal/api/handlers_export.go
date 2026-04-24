@@ -347,11 +347,10 @@ spec:
     app.kubernetes.io/name: {{ .Name }}
 `))
 
-// handleExportReport generates a self-contained HTML report for a benchmark run.
-func (s *Server) handleExportReport(w http.ResponseWriter, r *http.Request) {
+// handleExportRunCSV returns a CSV of a single benchmark run's metadata + metrics (PRD-41).
+func (s *Server) handleExportRunCSV(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 
-	// Get the benchmark run.
 	run, err := s.repo.GetBenchmarkRun(r.Context(), runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -361,59 +360,161 @@ func (s *Server) handleExportReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
-	if run.Status != "completed" {
-		writeError(w, http.StatusBadRequest, "can only export completed runs")
-		return
-	}
 
-	// Get metrics.
-	metrics, err := s.repo.GetMetricsByRunID(r.Context(), runID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query metrics failed")
-		return
-	}
-	if metrics == nil {
-		writeError(w, http.StatusNotFound, "metrics not found")
-		return
-	}
+	metrics, _ := s.repo.GetMetricsByRunID(r.Context(), runID)     // nil-safe inside generator
+	details, _ := s.repo.GetRunExportDetails(r.Context(), runID)    // nil-safe inside generator
 
-	// Get export details.
-	details, err := s.repo.GetRunExportDetails(r.Context(), runID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query export details failed")
-		return
-	}
-	if details == nil {
-		writeError(w, http.StatusNotFound, "run details not found")
-		return
-	}
-
-	// Look up pricing for the instance in us-east-2 (best-effort — if it's
-	// missing, the report's Cost section renders as "—").
+	// Best-effort pricing lookup.
 	var hourlyRate *float64
-	if rows, err := s.repo.ListPricing(r.Context(), "us-east-2"); err == nil {
-		for _, row := range rows {
-			if row.InstanceTypeName == details.InstanceTypeName {
-				rate := row.OnDemandHourlyUSD
-				hourlyRate = &rate
-				break
+	if details != nil {
+		if rows, err := s.repo.ListPricing(r.Context(), "us-east-2"); err == nil {
+			for _, row := range rows {
+				if row.InstanceTypeName == details.InstanceTypeName {
+					rate := row.OnDemandHourlyUSD
+					hourlyRate = &rate
+					break
+				}
 			}
 		}
 	}
 
-	// Generate the HTML report.
-	html, err := report.GenerateRunReport(run, metrics, details, hourlyRate)
+	data, err := report.GenerateRunCSV(run, metrics, details, hourlyRate)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate report failed: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate run csv: %v", err))
 		return
 	}
 
-	// Return as downloadable HTML file.
-	filename := fmt.Sprintf("accelbench-report-%s-%s.html", sanitizeFilename(details.ModelHfID), runID[:8])
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	model := "run"
+	if details != nil {
+		model = sanitizeFilename(details.ModelHfID)
+	}
+	shortID := runID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	filename := fmt.Sprintf("accelbench-run-%s-%s.csv", model, shortID)
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
-	w.Write(html)
+	w.Write(data)
+}
+
+// handleExportSuiteCSV returns a one-row-per-scenario CSV for a test suite run (PRD-41).
+func (s *Server) handleExportSuiteCSV(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	suite, err := s.repo.GetTestSuiteRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if suite == nil {
+		writeError(w, http.StatusNotFound, "suite run not found")
+		return
+	}
+
+	results, err := s.repo.GetScenarioResults(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get scenario results: "+err.Error())
+		return
+	}
+
+	model, _ := s.repo.GetModelByID(r.Context(), suite.ModelID)
+	instance, _ := s.repo.GetInstanceTypeByID(r.Context(), suite.InstanceTypeID)
+
+	data, err := report.GenerateSuiteCSV(suite, results, model, instance)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate suite csv: %v", err))
+		return
+	}
+
+	name := "suite"
+	if model != nil {
+		name = sanitizeFilename(model.HfID)
+	}
+	shortID := id
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	filename := fmt.Sprintf("accelbench-suite-%s-%s.csv", name, shortID)
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+// handleExportSuiteManifest returns the vLLM Deployment+Service YAML for the
+// suite's model. Mirrors handleExportManifest but sources its data from
+// test_suite_runs + joined model/instance rows (PRD-41).
+func (s *Server) handleExportSuiteManifest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	suite, err := s.repo.GetTestSuiteRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if suite == nil {
+		writeError(w, http.StatusNotFound, "suite run not found")
+		return
+	}
+	if suite.Status != "completed" && suite.Status != "failed" {
+		writeError(w, http.StatusBadRequest, "can only export terminal suite runs")
+		return
+	}
+
+	model, err := s.repo.GetModelByID(r.Context(), suite.ModelID)
+	if err != nil || model == nil {
+		writeError(w, http.StatusInternalServerError, "model lookup failed")
+		return
+	}
+	instance, err := s.repo.GetInstanceTypeByID(r.Context(), suite.InstanceTypeID)
+	if err != nil || instance == nil {
+		writeError(w, http.StatusInternalServerError, "instance lookup failed")
+		return
+	}
+
+	// Reconstruct a RunExportDetails so we can reuse generateManifest.
+	details := &database.RunExportDetails{
+		RunID:                suite.ID,
+		ModelHfID:            model.HfID,
+		ModelS3URI:           suite.ModelS3URI,
+		InstanceTypeName:     instance.Name,
+		TensorParallelDegree: suite.TensorParallelDegree,
+		Quantization:         suite.Quantization,
+		AcceleratorType:      instance.AcceleratorType,
+		AcceleratorName:      instance.AcceleratorName,
+		AcceleratorCount:     instance.AcceleratorCount,
+		AcceleratorMemoryGiB: instance.AcceleratorMemoryGiB,
+		VCPUs:                instance.VCPUs,
+		MemoryGiB:            instance.MemoryGiB,
+	}
+	details.MaxModelLen = suite.MaxModelLen
+	// Framework fields: use persisted values when available (suites
+	// created after migration 026), else derive from accelerator type
+	// as a safe fallback for historical rows.
+	if suite.Framework != nil && *suite.Framework != "" {
+		details.Framework = *suite.Framework
+	} else if instance.AcceleratorType == "neuron" {
+		details.Framework = "vllm-neuron"
+	} else {
+		details.Framework = "vllm"
+	}
+	if suite.FrameworkVersion != nil {
+		details.FrameworkVersion = *suite.FrameworkVersion
+	}
+
+	manifest, err := generateManifest(details)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate manifest failed: %v", err))
+		return
+	}
+
+	filename := fmt.Sprintf("vllm-%s-suite.yaml", sanitizeFilename(model.HfID))
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(manifest))
 }
 
 // --- Compare exports ---
@@ -488,25 +589,6 @@ func tierLabel(tier string) string {
 	default:
 		return "On-demand"
 	}
-}
-
-// handleExportCompareReport returns an HTML comparison report.
-func (s *Server) handleExportCompareReport(w http.ResponseWriter, r *http.Request) {
-	entries, lookup, tier, region, err := s.resolveCompareParams(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	html, err := report.GenerateCompareReport(entries, lookup, tierLabel(tier), region)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate compare report: %v", err))
-		return
-	}
-	filename := fmt.Sprintf("accelbench-compare-%d-runs.html", len(entries))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	w.WriteHeader(http.StatusOK)
-	w.Write(html)
 }
 
 // handleExportCompareCSV returns a CSV of the comparison data.
