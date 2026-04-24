@@ -102,13 +102,13 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 	// used by single-run failures today.
 	if orphans, err := o.repo.GetOrphanedRuns(ctx, live); err == nil {
 		for _, r := range orphans {
-			owner := ""
+			owner := "unknown"
 			if r.OwnerPod != nil {
 				owner = *r.OwnerPod
 			}
 			log.Printf("[recovery] orphan run %s (owner=%s, status=%s) — marking failed",
 				r.ID[:8], owner, r.Status)
-			o.markFailed(ctx, r.ID, "orphaned run: owner pod stopped heartbeating")
+			o.markFailed(ctx, r.ID, orphanFailureMessage(owner))
 			o.cleanupResources(ctx, r.ID)
 		}
 	} else {
@@ -118,12 +118,15 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 	// Suite runs — same idea, with the suite-specific cleanup helper.
 	if orphans, err := o.repo.GetOrphanedSuiteRuns(ctx, live); err == nil {
 		for _, s := range orphans {
-			owner := ""
+			owner := "unknown"
 			if s.OwnerPod != nil {
 				owner = *s.OwnerPod
 			}
-			log.Printf("[recovery] orphan suite %s (owner=%s, status=%s) — marking failed",
-				s.ID[:8], owner, s.Status)
+			// test_suite_runs has no error_message column (only scenario_results
+			// does), so the user-facing orphan explanation lives only in the
+			// log line above. Status flips to "failed"; currentScenario nil.
+			log.Printf("[recovery] orphan suite %s (owner=%s, status=%s) — %s",
+				s.ID[:8], owner, s.Status, orphanFailureMessage(owner))
 			_ = o.repo.UpdateSuiteRunStatus(ctx, s.ID, "failed", nil)
 			o.CleanupSuiteResources(s.ID)
 		}
@@ -151,4 +154,13 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 	if err := o.repo.DeleteStaleHeartbeats(ctx, 2*heartbeatTTL); err != nil {
 		log.Printf("[recovery] delete stale heartbeats: %v", err)
 	}
+}
+
+// orphanFailureMessage is the error_message persisted on a run / suite row
+// when recovery marks it failed because the owning pod stopped heartbeating.
+// Surfaced verbatim in the UI, so keep it short and user-actionable: the
+// important thing is that the user knows the failure wasn't their fault
+// and re-submitting is the fix.
+func orphanFailureMessage(ownerPod string) string {
+	return "API pod " + ownerPod + " stopped responding before the run finished — re-submit to retry"
 }
