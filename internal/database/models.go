@@ -38,7 +38,6 @@ type BenchmarkRun struct {
 	OutputSequenceLength  int        `json:"output_sequence_length"`
 	DatasetName           string     `json:"dataset_name"`
 	RunType               string     `json:"run_type"`
-	MinDurationSeconds    int        `json:"min_duration_seconds"`
 	MaxModelLen           int        `json:"max_model_len,omitempty"`
 	ScenarioID            *string    `json:"scenario_id,omitempty"`    // scenario identifier (chatbot, batch, etc.)
 	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
@@ -144,7 +143,6 @@ type RunRequest struct {
 	DatasetName          string  `json:"dataset_name"`
 	RunType              string  `json:"run_type"`
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
-	MinDurationSeconds   int     `json:"min_duration_seconds,omitempty"`
 	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
 	APIType              string  `json:"api_type,omitempty"`    // "chat_completion" (default) or "completion"
 	ModelS3URI           string  `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
@@ -284,10 +282,9 @@ type CatalogInstanceType struct {
 
 // CatalogSeedDefaults is the singleton row of per-seed-run defaults.
 type CatalogSeedDefaults struct {
-	Scenario           string    `json:"scenario"`
-	Dataset            string    `json:"dataset"`
-	MinDurationSeconds int       `json:"min_duration_seconds"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	Scenario  string    `json:"scenario"`
+	Dataset   string    `json:"dataset"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ToolVersions is the singleton row holding platform-wide tool versions

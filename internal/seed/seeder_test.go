@@ -109,9 +109,8 @@ func (f *fakeDeps) CreateRun(_ context.Context, req *database.RunRequest) (strin
 func simpleMatrix() *database.CatalogMatrix {
 	return &database.CatalogMatrix{
 		Defaults: database.CatalogSeedDefaults{
-			Scenario:           "chatbot",
-			Dataset:            "synthetic",
-			MinDurationSeconds: 180,
+			Scenario: "chatbot",
+			Dataset:  "synthetic",
 		},
 		Models: []database.CatalogModel{
 			{HfID: "meta-llama/Llama-3.1-8B-Instruct", Enabled: true},

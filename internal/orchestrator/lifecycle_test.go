@@ -45,6 +45,7 @@ func testRunConfig(runID string) RunConfig {
 			InputSequenceLength:  512,
 			OutputSequenceLength: 256,
 			DatasetName:          "sharegpt",
+			ScenarioID:           "chatbot",
 			RunType:              "on_demand",
 		},
 	}

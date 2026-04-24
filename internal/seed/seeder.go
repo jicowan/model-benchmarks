@@ -179,17 +179,16 @@ func (s *Seeder) run(id string, opts Options) {
 			}
 
 			req := &database.RunRequest{
-				ModelHfID:          m.HfID,
-				ModelHfRevision:    "main",
-				InstanceTypeName:   it.Name,
-				Framework:          frameworkFor(it.Name),
-				FrameworkVersion:   tv.FrameworkVersion,
-				DatasetName:        matrix.Defaults.Dataset,
-				RunType:            "catalog",
-				ScenarioID:         matrix.Defaults.Scenario,
-				MinDurationSeconds: matrix.Defaults.MinDurationSeconds,
-				ModelS3URI:         s3URI,
-				HfToken:            opts.HfToken,
+				ModelHfID:        m.HfID,
+				ModelHfRevision:  "main",
+				InstanceTypeName: it.Name,
+				Framework:        frameworkFor(it.Name),
+				FrameworkVersion: tv.FrameworkVersion,
+				DatasetName:      matrix.Defaults.Dataset,
+				RunType:          "catalog",
+				ScenarioID:       matrix.Defaults.Scenario,
+				ModelS3URI:       s3URI,
+				HfToken:          opts.HfToken,
 			}
 
 			if _, err := s.deps.CreateRun(ctx, req); err != nil {

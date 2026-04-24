@@ -60,6 +60,7 @@ func TestHandleCreateRun_Success(t *testing.T) {
 		OutputSequenceLength: 256,
 		DatasetName:          "sharegpt",
 		RunType:              "on_demand",
+		ScenarioID:           "chatbot",
 	}
 	b, _ := json.Marshal(body)
 
@@ -110,6 +111,7 @@ func TestHandleCreateRun_UnknownModelAutoRegisters(t *testing.T) {
 		OutputSequenceLength: 256,
 		DatasetName:     "sharegpt",
 		RunType:         "on_demand",
+		ScenarioID:      "chatbot",
 	}
 	b, _ := json.Marshal(body)
 

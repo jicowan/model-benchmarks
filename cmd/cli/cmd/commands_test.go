@@ -134,10 +134,34 @@ func TestRunCommand(t *testing.T) {
 	runOutputSeqLen = 512
 	runDataset = "sharegpt"
 	runQuantization = ""
+	runScenario = "chatbot"
 
 	err := runBenchmark(nil, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRunCommand_RequiresScenario verifies that the --scenario flag is
+// marked required on the cobra command (PRD-42). Executing the command
+// without it should error out before hitting the network.
+func TestRunCommand_RequiresScenario(t *testing.T) {
+	RootCmd.SetArgs([]string{
+		"run",
+		"--model", "test/model",
+		"--instance", "p5.48xlarge",
+	})
+	RootCmd.SetErr(&bytes.Buffer{})
+	RootCmd.SetOut(&bytes.Buffer{})
+	// Silence cobra's "Error:" stderr print by turning usage off.
+	RootCmd.SilenceUsage = true
+	RootCmd.SilenceErrors = true
+	err := RootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --scenario is missing")
+	}
+	if !strings.Contains(err.Error(), "scenario") {
+		t.Errorf("error = %q, want mention of `scenario`", err.Error())
 	}
 }
 

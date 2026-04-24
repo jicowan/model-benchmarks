@@ -34,7 +34,7 @@ func TestCatalogMatrix_Get(t *testing.T) {
 	repo.SeedCatalogMatrix(&database.CatalogMatrix{
 		Defaults: database.CatalogSeedDefaults{
 			Scenario: "chatbot", Dataset: "synthetic",
-			MinDurationSeconds: 180, UpdatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		},
 		Models: []database.CatalogModel{
 			{HfID: "meta-llama/Llama-3.1-8B-Instruct", Enabled: true, UpdatedAt: time.Now()},
@@ -65,7 +65,7 @@ func TestCatalogMatrix_PutValidation(t *testing.T) {
 	_, mux := setupPRD32Server(nil)
 
 	// Empty scenario should fail validation.
-	body := strings.NewReader(`{"defaults":{"scenario":"","dataset":"synthetic","min_duration_seconds":180}}`)
+	body := strings.NewReader(`{"defaults":{"scenario":"","dataset":"synthetic"}}`)
 	req := httptest.NewRequest("PUT", "/api/v1/config/catalog-matrix", body)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -79,7 +79,7 @@ func TestCatalogMatrix_PutDuplicateModel(t *testing.T) {
 	_, mux := setupPRD32Server(nil)
 
 	body := strings.NewReader(`{
-		"defaults":{"scenario":"chatbot","dataset":"synthetic","min_duration_seconds":180},
+		"defaults":{"scenario":"chatbot","dataset":"synthetic"},
 		"models":[
 			{"hf_id":"meta-llama/Llama-3.1-8B","enabled":true},
 			{"hf_id":"meta-llama/Llama-3.1-8B","enabled":true}

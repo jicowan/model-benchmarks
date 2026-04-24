@@ -62,7 +62,6 @@ export default function Run() {
       input_sequence_length: Number(searchParams.get("input_seq")) || 512,
       output_sequence_length: Number(searchParams.get("output_seq")) || 256,
       max_model_len: Number(searchParams.get("max_model_len")) || 0,
-      min_duration_seconds: 180,
       hf_token: searchParams.get("hf_token") || "",
       overhead_gib: 0, // 0 = auto-calculated
       api_type: "",
@@ -370,12 +369,10 @@ export default function Run() {
         navigate(`/suite-runs/${res.id}`);
       } else {
         // Create single scenario run
-        const scenario = scenarios.find((s) => s.id === selectedScenario);
         const res = await createRun({
           ...form,
           quantization: form.quantization || undefined,
           max_model_len: form.max_model_len || undefined,
-          min_duration_seconds: scenario?.duration_seconds || form.min_duration_seconds || undefined,
           hf_token: form.hf_token || undefined,
           scenario_id: selectedScenario,
           dataset_name: selectedDataset,
@@ -895,23 +892,6 @@ export default function Run() {
           </div>
           <p className="caption mt-2">
             Increase if model fails with OOM.
-          </p>
-        </div>
-
-        <div>
-          <label className="eyebrow block mb-1.5">
-            Min Duration (s)
-          </label>
-          <input
-            type="number"
-            min={0}
-            value={form.min_duration_seconds}
-            onChange={(e) => set("min_duration_seconds", Number(e.target.value))}
-            placeholder="0 = no minimum"
-            className="input w-48"
-          />
-          <p className="mt-1 caption">
-            Minimum benchmark duration to ensure enough GPU samples. 0 disables.
           </p>
         </div>
 

@@ -142,7 +142,6 @@ export interface RunRequest {
   max_model_len?: number;
   api_type?: string;
   model_s3_uri?: string;
-  min_duration_seconds?: number;
   hf_token?: string;
 }
 
@@ -587,7 +586,6 @@ export interface CredentialsStatus {
 export interface CatalogSeedDefaults {
   scenario: string;
   dataset: string;
-  min_duration_seconds: number;
   updated_at?: string;
 }
 

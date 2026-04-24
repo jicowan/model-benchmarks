@@ -253,9 +253,6 @@ func validateCatalogMatrix(req *putCatalogMatrixRequest) error {
 	if req.Defaults.Dataset == "" {
 		return fmt.Errorf("defaults.dataset is required")
 	}
-	if req.Defaults.MinDurationSeconds < 10 || req.Defaults.MinDurationSeconds > 3600 {
-		return fmt.Errorf("defaults.min_duration_seconds must be in [10, 3600]")
-	}
 	seen := map[string]bool{}
 	for _, m := range req.Models {
 		if m.HfID == "" {

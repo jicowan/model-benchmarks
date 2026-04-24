@@ -346,6 +346,15 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		datasetName = "synthetic" // fallback default
 	}
 
+	// PRD-42: require a scenario. Every live caller (UI, seeder, CLI after
+	// this PRD) passes one; direct API callers that don't get a loud 400.
+	if scenarioID == "" {
+		return "", &createRunError{
+			http.StatusBadRequest,
+			"scenario_id is required",
+		}
+	}
+
 	// Determine run_type: 'catalog' for seeded runs, 'on_demand' for user-initiated
 	runType := req.RunType
 	if runType != "catalog" {
@@ -375,7 +384,6 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		DatasetName:          datasetName,
 		RunType:              runType,
 		ScenarioID:           scenarioPtr,
-		MinDurationSeconds:   req.MinDurationSeconds,
 		MaxModelLen:          req.MaxModelLen,
 		ModelS3URI:           s3URIPtr,
 		Status:               "pending",

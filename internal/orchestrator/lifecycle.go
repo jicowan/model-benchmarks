@@ -405,90 +405,23 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc string, cfg RunConfig) error {
 	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
 
-	// Build inference-perf config from scenario or compute defaults
-	var inferencePerfConfig manifest.InferencePerfConfigParams
+	// PRD-42: every run must reference a scenario. The API rejects
+	// scenario-less submissions at create time, so this is the only
+	// code path.
+	if cfg.Request.ScenarioID == "" {
+		return fmt.Errorf("scenario_id is required")
+	}
+	s := o.resolveScenario(ctx, cfg.Request.ScenarioID)
+	if s == nil {
+		return fmt.Errorf("unknown scenario: %s", cfg.Request.ScenarioID)
+	}
+	inferencePerfConfig := s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
+	log.Printf("[%s] using scenario %q: %s", cfg.RunID[:8], s.ID, s.Name)
 
-	if cfg.Request.ScenarioID != "" {
-		// Use predefined scenario, with DB overrides (PRD-32) applied.
-		s := o.resolveScenario(ctx, cfg.Request.ScenarioID)
-		if s == nil {
-			return fmt.Errorf("unknown scenario: %s", cfg.Request.ScenarioID)
-		}
-		inferencePerfConfig = s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
-		log.Printf("[%s] using scenario %q: %s", cfg.RunID[:8], s.ID, s.Name)
-
-		// Allow dataset override from request
-		if cfg.Request.DatasetName != "" {
-			inferencePerfConfig.DatasetType = cfg.Request.DatasetName
-			log.Printf("[%s] dataset override: %s", cfg.RunID[:8], cfg.Request.DatasetName)
-		}
-	} else {
-		// Fall back to computed defaults based on request parameters
-		inputMean := cfg.Request.InputSequenceLength
-		if inputMean == 0 {
-			inputMean = 256
-		}
-		outputMean := cfg.Request.OutputSequenceLength
-		if outputMean == 0 {
-			outputMean = 128
-		}
-
-		// Calculate distribution bounds (std_dev = mean/4, min = mean/2, max = mean*2)
-		inputStdDev := inputMean / 4
-		inputMin := inputMean / 2
-		inputMax := inputMean * 2
-		outputStdDev := outputMean / 4
-		outputMin := outputMean / 2
-		outputMax := outputMean * 2
-
-		// Duration from request or default 120 seconds
-		duration := cfg.Request.MinDurationSeconds
-		if duration == 0 {
-			duration = 120
-		}
-
-		// Workers based on concurrency
-		numWorkers := cfg.Request.Concurrency
-		if numWorkers < 4 {
-			numWorkers = 4
-		}
-		if numWorkers > 8 {
-			numWorkers = 8
-		}
-
-		// Calculate QPS from concurrency
-		qps := cfg.Request.Concurrency / 2
-		if qps < 1 {
-			qps = 1
-		}
-		if qps > 50 {
-			qps = 50
-		}
-
-		// Use dataset from request or default to synthetic
-		datasetType := cfg.Request.DatasetName
-		if datasetType == "" {
-			datasetType = "synthetic"
-		}
-
-		inferencePerfConfig = manifest.InferencePerfConfigParams{
-			ModelHfID:    cfg.Request.ModelHfID,
-			TargetHost:   modelSvc,
-			TargetPort:   8000,
-			Streaming:    true,
-			DatasetType:  datasetType,
-			InputMean:    inputMean,
-			InputStdDev:  inputStdDev,
-			InputMin:     inputMin,
-			InputMax:     inputMax,
-			OutputMean:   outputMean,
-			OutputStdDev: outputStdDev,
-			OutputMin:    outputMin,
-			OutputMax:    outputMax,
-			LoadType:     "constant",
-			Stages:       []manifest.LoadStage{{Rate: qps, Duration: duration}},
-			NumWorkers:   numWorkers,
-		}
+	// Allow dataset override from request
+	if cfg.Request.DatasetName != "" {
+		inferencePerfConfig.DatasetType = cfg.Request.DatasetName
+		log.Printf("[%s] dataset override: %s", cfg.RunID[:8], cfg.Request.DatasetName)
 	}
 
 	// Set API type: explicit override from request > infer from final dataset

@@ -52,10 +52,9 @@ func (r *Repository) PutCatalogMatrix(ctx context.Context, m *CatalogMatrix, exp
 	// Update defaults.
 	_, err = tx.Exec(ctx, `
 		UPDATE catalog_seed_defaults
-		   SET scenario = $1, dataset = $2,
-		       min_duration_seconds = $3, updated_at = now()
+		   SET scenario = $1, dataset = $2, updated_at = now()
 		 WHERE id = 1`,
-		m.Defaults.Scenario, m.Defaults.Dataset, m.Defaults.MinDurationSeconds)
+		m.Defaults.Scenario, m.Defaults.Dataset)
 	if err != nil {
 		return fmt.Errorf("update defaults: %w", err)
 	}

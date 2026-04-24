@@ -15,9 +15,13 @@ var runCmd = &cobra.Command{
 	Short: "Submit an on-demand benchmark run",
 	Long: `Submit a new benchmark run against a model on a specific instance type.
 
+A scenario is required — scenarios drive load pattern and duration.
+Common scenario IDs: chatbot, batch, stress. Run 'accelbench query scenarios'
+for the full list.
+
 Examples:
-  accelbench run --model meta-llama/Llama-3.1-70B-Instruct --instance p5.48xlarge --concurrency 16
-  accelbench run --model mistralai/Mixtral-8x7B-Instruct-v0.1 --instance g6e.12xlarge --tp 4`,
+  accelbench run --model meta-llama/Llama-3.1-70B-Instruct --instance p5.48xlarge --concurrency 16 --scenario chatbot
+  accelbench run --model mistralai/Mixtral-8x7B-Instruct-v0.1 --instance g6e.12xlarge --tp 4 --scenario stress`,
 	RunE: runBenchmark,
 }
 
@@ -33,6 +37,7 @@ var (
 	runInputSeqLen   int
 	runOutputSeqLen  int
 	runDataset       string
+	runScenario      string
 )
 
 func init() {
@@ -47,8 +52,11 @@ func init() {
 	runCmd.Flags().IntVar(&runInputSeqLen, "input-seq-len", 1024, "Input sequence length")
 	runCmd.Flags().IntVar(&runOutputSeqLen, "output-seq-len", 512, "Output sequence length")
 	runCmd.Flags().StringVar(&runDataset, "dataset", "sharegpt", "Dataset name")
+	runCmd.Flags().StringVar(&runScenario, "scenario", "",
+		"Scenario ID (required; see `accelbench query scenarios` for the list)")
 	_ = runCmd.MarkFlagRequired("model")
 	_ = runCmd.MarkFlagRequired("instance")
+	_ = runCmd.MarkFlagRequired("scenario")
 	RootCmd.AddCommand(runCmd)
 }
 
@@ -67,6 +75,7 @@ func runBenchmark(cmd *cobra.Command, args []string) error {
 		OutputSequenceLength: runOutputSeqLen,
 		DatasetName:          runDataset,
 		RunType:              "on_demand",
+		ScenarioID:           runScenario,
 	}
 	if runQuantization != "" {
 		req.Quantization = &runQuantization

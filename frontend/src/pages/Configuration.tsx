@@ -469,14 +469,6 @@ function SeedingMatrixCard() {
               ))}
             </select>
           </label>
-          <LabeledInput
-            label="Min Duration (seconds)"
-            value={String(matrix.defaults.min_duration_seconds)}
-            onChange={(v) =>
-              setMatrix({ ...matrix, defaults: { ...matrix.defaults, min_duration_seconds: parseInt(v) || 0 } })
-            }
-            type="number"
-          />
         </div>
         <p className="meta mt-3">
           vLLM and inference-perf versions are platform-wide — edit them in the Tool Versions section below.

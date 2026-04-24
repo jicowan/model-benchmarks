@@ -211,14 +211,14 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		    (model_id, instance_type_id, framework, framework_version,
 		     tensor_parallel_degree, quantization, concurrency,
 		     input_sequence_length, output_sequence_length, dataset_name,
-		     run_type, status, min_duration_seconds, max_model_len, scenario_id,
+		     run_type, status, max_model_len, scenario_id,
 		     model_s3_uri)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
 		run.InputSequenceLength, run.OutputSequenceLength, run.DatasetName,
-		run.RunType, run.Status, run.MinDurationSeconds, nullableInt(run.MaxModelLen),
+		run.RunType, run.Status, nullableInt(run.MaxModelLen),
 		run.ScenarioID,
 		run.ModelS3URI,
 	).Scan(&id)
@@ -424,14 +424,14 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		`SELECT id, model_id, instance_type_id, framework, framework_version,
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, min_duration_seconds, max_model_len, status, error_message, superseded,
+		        run_type, max_model_len, status, error_message, superseded,
 		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
 		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
-		&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
+		&run.RunType, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
 		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI,
 		&run.TotalCostUSD, &run.LoadgenCostUSD, &run.OwnerPod, &run.CancelRequested)
 	if err == pgx.ErrNoRows {
@@ -452,7 +452,7 @@ func (r *Repository) GetRunsByStatus(ctx context.Context, status string) ([]Benc
 		`SELECT id, model_id, instance_type_id, framework, framework_version,
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, min_duration_seconds, max_model_len, status, error_message, superseded,
+		        run_type, max_model_len, status, error_message, superseded,
 		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri
 		 FROM benchmark_runs WHERE status = $1`, status,
 	)
@@ -468,7 +468,7 @@ func (r *Repository) GetRunsByStatus(ctx context.Context, status string) ([]Benc
 		if err := rows.Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 			&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 			&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
-			&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
+			&run.RunType, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
 			&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI); err != nil {
 			return nil, fmt.Errorf("scan run: %w", err)
 		}
