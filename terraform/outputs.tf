@@ -67,3 +67,20 @@ output "ecr_cache_job_url" {
   description = "ECR repository URL for the cache job image"
   value       = aws_ecr_repository.cache_job.repository_url
 }
+
+# ---------- Public ingress (PRD-43a) ----------
+
+output "certificate_arn" {
+  description = "ACM certificate ARN for the app host. Empty unless ingress_mode = acm-route53."
+  value       = length(aws_acm_certificate.app) > 0 ? aws_acm_certificate.app[0].arn : ""
+}
+
+output "app_host" {
+  description = "Public hostname for the app. Empty unless ingress_mode is set."
+  value       = var.app_host
+}
+
+output "app_url" {
+  description = "Public app URL. Empty unless ingress is configured."
+  value       = var.app_host == "" ? "" : (var.ingress_mode == "none" ? "http://${var.app_host}" : "https://${var.app_host}")
+}

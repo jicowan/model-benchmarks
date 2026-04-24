@@ -96,7 +96,7 @@ terraform init
 terraform apply
 ```
 
-`terraform.tfvars` is **optional**. The only tunable values are `dockerhub_username` + `dockerhub_access_token` for the ECR pull-through cache. Leave them blank at `apply` time and rotate via the Configuration page (Credentials card) after install — that's the recommended path. Alternatively, `cp terraform.tfvars.example terraform.tfvars` and set them up front.
+`terraform.tfvars` is **optional for a barebones install**. Default apply creates the EKS cluster, Aurora, ECR repos, and the AWS Load Balancer Controller — but no public URL. You reach the UI via `kubectl port-forward` (see step 6). Set Docker Hub credentials here (or via the Configuration page after install) and, if you want a public HTTPS URL, one of three ingress modes documented in `terraform/README.md` (PRD-43a). `cp terraform.tfvars.example terraform.tfvars` to see annotated examples.
 
 The Terraform config creates:
 
@@ -107,6 +107,8 @@ The Terraform config creates:
 - ECR repos for all app images + a pull-through cache rule at `<account>.dkr.ecr.<region>.amazonaws.com/dockerhub/*` pointing at Docker Hub
 - S3 buckets for results and cached model weights
 - IAM roles for API/loadgen/cache-job/model pods via EKS Pod Identity (Secrets Manager, EC2 describe, ECR describe, S3, Pricing)
+- AWS Load Balancer Controller (chart v3.2.2) in `kube-system` via Pod Identity — provisions ALBs for any `Ingress` with `ingressClassName: alb`. Skip via `install_alb_controller=false` if your cluster already has it.
+- Optionally: an ACM certificate + Route 53 alias for a public HTTPS URL. Off by default. See `terraform/README.md` for the three modes (`acm-route53` / `acm-existing` / `none`).
 
 ### 2. Container images
 
@@ -157,23 +159,35 @@ helm install accelbench helm/accelbench \
   --set results.s3Bucket=accelbench-results-${ACCOUNT_ID} \
   --set models.s3Bucket=accelbench-models-${ACCOUNT_ID} \
   --set registry.pullThroughEnabled=true \
-  --set registry.pullThroughURI=$REGISTRY \
-  --set ingress.host=accelbench.example.com
+  --set registry.pullThroughURI=$REGISTRY
 ```
 
 The chart deploys:
 
 - API server (2 replicas) with Secrets Manager + EC2/ECR describe + Karpenter CRD patch permissions
-- Web frontend (2 replicas) + ALB Ingress
+- Web frontend (2 replicas)
 - Database migration Job (runs as a Helm pre-upgrade hook on every `helm upgrade`)
 - Pricing refresh CronJob (daily)
 - Catalog refresh CronJob (weekly — `curl`s `/api/v1/catalog/seed`)
 
+No public `Ingress` is rendered by default. See `terraform/README.md` to opt in to a public HTTPS URL.
+
+### 5. Access the app
+
+**Port-forward (default, works immediately):**
+
+```bash
+kubectl port-forward -n accelbench svc/accelbench-web 8080:80
+# → http://localhost:8080
+```
+
+**Public HTTPS URL (optional):** add the ingress variables to `terraform.tfvars` (see `terraform/README.md`), run `terraform apply`, then re-run `helm upgrade` with the ingress flags shown there. After a second `terraform apply` the app is reachable at your configured hostname.
+
 The migration Job applies every SQL file in `db/migrations/` on startup. Migrations are idempotent (`CREATE TABLE IF NOT EXISTS`, `ON CONFLICT DO NOTHING`), so re-running them is safe.
 
-### 5. Platform configuration (UI)
+### 6. Platform configuration (UI)
 
-Once the cluster is up, navigate to your ingress host and open **Configuration** (left nav, gear icon). This is where operators set up the runtime knobs that aren't baked into the Helm chart:
+Once the cluster is up, open the app (via port-forward or your public hostname) and open **Configuration** (left nav, gear icon). This is where operators set up the runtime knobs that aren't baked into the Helm chart:
 
 **Credentials** — save an HF token once (for gated models like `meta-llama/*`) and a Docker Hub access token (the pull-through cache needs this to hydrate new images). If you skipped the Docker Hub tfvars at install time, set it here first — the secret entry exists but is empty until someone writes to it. Tokens go to AWS Secrets Manager (`accelbench/config/hf-token`, `ecr-pullthroughcache/dockerhub`) and auto-inject into every benchmark run, model-cache job, and catalog seed. Values are never shown after save.
 
@@ -187,7 +201,7 @@ Once the cluster is up, navigate to your ingress host and open **Configuration**
 
 **Audit Log** — last 50 write operations under `/api/v1/config/*`. Only action + short summary are stored; no token values.
 
-### 6. Pre-cache popular models (recommended)
+### 7. Pre-cache popular models (recommended)
 
 Cached models (1) skip the HF download on every benchmark and (2) bypass the HF gated-model check entirely since `config.json` and weights come from S3. Visit the **Models** page to queue a cache job. The job runs on a `system` node and uploads the full HF snapshot to `accelbench-models-<account>/models/<org>/<model>`.
 

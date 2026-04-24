@@ -1,0 +1,38 @@
+# AccelBench Terraform variables. Copy this file to terraform.tfvars
+# (gitignored) and edit as needed. Only non-default values need to appear;
+# all variables have defaults in variables.tf.
+
+# ---------- Required for full builds ----------
+
+# Docker Hub credentials for the ECR pull-through cache that backs vLLM image
+# pulls. Create an access token at https://hub.docker.com/settings/security.
+# dockerhub_username     = ""
+# dockerhub_access_token = ""
+
+# ---------- Public ingress (PRD-43a) ----------
+# Leave ingress_mode unset (or "") to skip public ingress entirely. The app
+# is reachable via `kubectl port-forward` only. Uncomment ONE of the three
+# blocks below to opt in.
+
+# --- Mode 1: Fully automated via Route 53 (hosted zone in this AWS account) ---
+# ingress_mode     = "acm-route53"
+# app_host         = "accelbench.example.com"
+# hosted_zone_name = "example.com"
+# After the Helm Ingress has been deployed and the ALB exists, flip this to
+# true and re-apply to write the public A-alias pointing at the ALB.
+# ingress_deployed = false
+
+# --- Mode 2: Bring-your-own ACM cert (DNS validated elsewhere, or shared cert) ---
+# ingress_mode             = "acm-existing"
+# app_host                 = "accelbench.example.com"
+# existing_certificate_arn = "arn:aws:acm:us-east-2:123456789012:certificate/..."
+# NOTE: You are responsible for pointing your DNS at the ALB after `helm upgrade`.
+
+# --- Mode 3: HTTP only (dev/CI clusters — not for production) ---
+# ingress_mode = "none"
+# app_host     = "accelbench.local"
+
+# ---------- ALB controller toggle ----------
+# Set false if your cluster already runs aws-load-balancer-controller from
+# another source (shared-services chart, karpenter bootstrap, etc.).
+# install_alb_controller = true
