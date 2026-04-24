@@ -194,6 +194,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleAuthRefresh)
 
 	// --- Protected: wrapped in auth.Middleware ---
+	// PRD-44: admin is an inner middleware for the Configuration-page
+	// surface and platform-mutating ops. It runs after auth.Middleware
+	// has put a Principal on the context.
+	admin := auth.RequireRole("admin")
 	p := http.NewServeMux()
 	p.HandleFunc("POST /api/v1/auth/logout", s.handleAuthLogout)
 	p.HandleFunc("GET /api/v1/auth/me", s.handleAuthMe)
@@ -210,9 +214,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	p.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
 	p.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
 	p.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
-	p.HandleFunc("POST /api/v1/catalog/seed", s.handleCatalogSeed)
+	p.Handle("POST /api/v1/catalog/seed", admin(http.HandlerFunc(s.handleCatalogSeed)))
 	p.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
-	p.HandleFunc("POST /api/v1/admin/backfill-model-families", s.handleBackfillModelFamilies)
+	p.Handle("POST /api/v1/admin/backfill-model-families", admin(http.HandlerFunc(s.handleBackfillModelFamilies)))
 	// PRD-15: Memory breakdown and OOM history
 	p.HandleFunc("GET /api/v1/memory-breakdown", s.handleMemoryBreakdown)
 	p.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
@@ -230,34 +234,43 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	p.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
 	p.HandleFunc("POST /api/v1/suite-runs", s.handleCreateSuiteRun)
 	p.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
-	// PRD-20: Model cache management
+	// PRD-20: Model cache management. List + per-item GET are
+	// readable by any authenticated user; mutations are admin-only
+	// (PRD-44) because they consume cluster resources and storage.
 	p.HandleFunc("GET /api/v1/model-cache", s.handleListModelCache)
 	p.HandleFunc("GET /api/v1/model-cache/stats", s.handleModelCacheStats) // PRD-35
-	p.HandleFunc("POST /api/v1/model-cache", s.handleCreateModelCache)
 	p.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
-	p.HandleFunc("DELETE /api/v1/model-cache/{id}", s.handleDeleteModelCache)
-	p.HandleFunc("POST /api/v1/model-cache/register", s.handleRegisterCustomModel)
+	p.Handle("POST /api/v1/model-cache", admin(http.HandlerFunc(s.handleCreateModelCache)))
+	p.Handle("DELETE /api/v1/model-cache/{id}", admin(http.HandlerFunc(s.handleDeleteModelCache)))
+	p.Handle("POST /api/v1/model-cache/register", admin(http.HandlerFunc(s.handleRegisterCustomModel)))
+
+	// PRD-44: the entire /api/v1/config/* surface and all Configuration-
+	// page operations are admin-only. Non-admin authenticated users
+	// cannot reach any of these endpoints.
+
 	// PRD-31: Credentials management (HF token + Docker Hub token)
-	p.HandleFunc("GET /api/v1/config/credentials", s.handleGetCredentials)
-	p.HandleFunc("PUT /api/v1/config/credentials/hf-token", s.handlePutHFToken)
-	p.HandleFunc("DELETE /api/v1/config/credentials/hf-token", s.handleDeleteHFToken)
-	p.HandleFunc("PUT /api/v1/config/credentials/dockerhub-token", s.handlePutDockerHubToken)
-	p.HandleFunc("DELETE /api/v1/config/credentials/dockerhub-token", s.handleDeleteDockerHubToken)
+	p.Handle("GET /api/v1/config/credentials", admin(http.HandlerFunc(s.handleGetCredentials)))
+	p.Handle("PUT /api/v1/config/credentials/hf-token", admin(http.HandlerFunc(s.handlePutHFToken)))
+	p.Handle("DELETE /api/v1/config/credentials/hf-token", admin(http.HandlerFunc(s.handleDeleteHFToken)))
+	p.Handle("PUT /api/v1/config/credentials/dockerhub-token", admin(http.HandlerFunc(s.handlePutDockerHubToken)))
+	p.Handle("DELETE /api/v1/config/credentials/dockerhub-token", admin(http.HandlerFunc(s.handleDeleteDockerHubToken)))
 	// PRD-32: Catalog matrix editor, scenario overrides, registry, audit log
-	p.HandleFunc("GET /api/v1/config/catalog-matrix", s.handleGetCatalogMatrix)
-	p.HandleFunc("PUT /api/v1/config/catalog-matrix", s.handlePutCatalogMatrix)
-	p.HandleFunc("GET /api/v1/config/scenario-overrides", s.handleListScenarioOverrides)
-	p.HandleFunc("PUT /api/v1/config/scenario-overrides/{id}", s.handlePutScenarioOverride)
-	p.HandleFunc("DELETE /api/v1/config/scenario-overrides/{id}", s.handleDeleteScenarioOverride)
-	p.HandleFunc("GET /api/v1/config/registry", s.handleGetRegistry)
-	p.HandleFunc("GET /api/v1/config/audit-log", s.handleListAuditLog)
+	p.Handle("GET /api/v1/config/catalog-matrix", admin(http.HandlerFunc(s.handleGetCatalogMatrix)))
+	p.Handle("PUT /api/v1/config/catalog-matrix", admin(http.HandlerFunc(s.handlePutCatalogMatrix)))
+	p.Handle("GET /api/v1/config/scenario-overrides", admin(http.HandlerFunc(s.handleListScenarioOverrides)))
+	p.Handle("PUT /api/v1/config/scenario-overrides/{id}", admin(http.HandlerFunc(s.handlePutScenarioOverride)))
+	p.Handle("DELETE /api/v1/config/scenario-overrides/{id}", admin(http.HandlerFunc(s.handleDeleteScenarioOverride)))
+	p.Handle("GET /api/v1/config/registry", admin(http.HandlerFunc(s.handleGetRegistry)))
+	p.Handle("GET /api/v1/config/audit-log", admin(http.HandlerFunc(s.handleListAuditLog)))
 	// PRD-33: Capacity Reservations card
-	p.HandleFunc("GET /api/v1/config/capacity-reservations", s.handleListReservations)
-	p.HandleFunc("POST /api/v1/config/capacity-reservations", s.handlePostReservation)
-	p.HandleFunc("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", s.handleDeleteReservation)
+	p.Handle("GET /api/v1/config/capacity-reservations", admin(http.HandlerFunc(s.handleListReservations)))
+	p.Handle("POST /api/v1/config/capacity-reservations", admin(http.HandlerFunc(s.handlePostReservation)))
+	p.Handle("DELETE /api/v1/config/capacity-reservations/{node_class}/{reservation_id}", admin(http.HandlerFunc(s.handleDeleteReservation)))
 	// PRD-34: Tool Versions (vLLM framework + inference-perf)
-	p.HandleFunc("GET /api/v1/config/tool-versions", s.handleGetToolVersions)
-	p.HandleFunc("PUT /api/v1/config/tool-versions", s.handlePutToolVersions)
+	p.Handle("GET /api/v1/config/tool-versions", admin(http.HandlerFunc(s.handleGetToolVersions)))
+	p.Handle("PUT /api/v1/config/tool-versions", admin(http.HandlerFunc(s.handlePutToolVersions)))
+	// TODO(PRD-45): /api/v1/users/* routes go here, also wrapped with admin.
+
 	// PRD-35: Dashboard aggregate stats (every card on the Dashboard).
 	p.HandleFunc("GET /api/v1/dashboard/stats", s.handleDashboardStats)
 

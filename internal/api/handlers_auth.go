@@ -24,11 +24,12 @@ type CognitoIDP interface {
 	GlobalSignOut(ctx context.Context, in *cip.GlobalSignOutInput, optFns ...func(*cip.Options)) (*cip.GlobalSignOutOutput, error)
 }
 
-// Cookie names carrying the three tokens.
+// Cookie names: re-exported from the auth package so it owns the source
+// of truth. See internal/auth/middleware.go.
 const (
-	accessCookieName  = "accelbench_access"
-	idCookieName      = "accelbench_id"
-	refreshCookieName = "accelbench_refresh"
+	accessCookieName  = auth.AccessCookieName
+	idCookieName      = auth.IDCookieName
+	refreshCookieName = auth.RefreshCookieName
 )
 
 const refreshCookieMaxAge = 30 * 24 * 60 * 60 // 30 days in seconds

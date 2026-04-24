@@ -36,3 +36,10 @@
 # Set false if your cluster already runs aws-load-balancer-controller from
 # another source (shared-services chart, karpenter bootstrap, etc.).
 # install_alb_controller = true
+
+# ---------- Bootstrap admin (PRD-44) ----------
+# Creates a Cognito user with custom:role=admin and emails a temporary
+# password on `terraform apply`. Required for fresh installs so there's
+# a working admin on day one. Leave unset if the admin was already
+# created manually via the AWS console.
+# admin_email = "you@example.com"

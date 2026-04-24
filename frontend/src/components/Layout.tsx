@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ThemeToggle from "./ThemeToggle";
 import { useStatus } from "../hooks/useStatus";
 import { useAuth } from "./AuthProvider";
@@ -9,6 +9,9 @@ type NavItem = {
   label: string;
   icon: React.ReactNode;
   shortcut?: string;
+  // PRD-44: items marked adminOnly are hidden for non-admin users
+  // (Configuration today; future Users entry lands here too).
+  adminOnly?: boolean;
 };
 
 const iconCls = "shrink-0";
@@ -83,6 +86,7 @@ const navItems: NavItem[] = [
     to: "/configuration",
     label: "Configuration",
     shortcut: "C",
+    adminOnly: true,
     icon: (
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
         <circle cx="12" cy="12" r="3" />
@@ -90,6 +94,7 @@ const navItems: NavItem[] = [
       </svg>
     ),
   },
+  // TODO(PRD-45): Users nav item lands here with adminOnly: true.
 ];
 
 const COLLAPSED_KEY = "accelbench.nav.collapsed";
@@ -100,6 +105,15 @@ export default function Layout() {
     return localStorage.getItem(COLLAPSED_KEY) === "1";
   });
   const { state: healthState, detail: healthDetail } = useStatus();
+  const { isAdmin } = useAuth();
+
+  // PRD-44: filter admin-only entries for non-admin users. Memoized so
+  // the keyboard-shortcut effect below and the render loop see the
+  // same list.
+  const visibleNavItems = useMemo(
+    () => navItems.filter((n) => !n.adminOnly || isAdmin()),
+    [isAdmin]
+  );
 
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
@@ -113,7 +127,7 @@ export default function Layout() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const item = navItems.find((n) => n.shortcut?.toLowerCase() === e.key.toLowerCase());
+      const item = visibleNavItems.find((n) => n.shortcut?.toLowerCase() === e.key.toLowerCase());
       if (item) {
         e.preventDefault();
         window.location.hash = "";
@@ -123,7 +137,7 @@ export default function Layout() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [visibleNavItems]);
 
   const railWidth = collapsed ? "w-14" : "w-56";
 
@@ -151,7 +165,7 @@ export default function Layout() {
 
         {/* Nav items */}
         <nav className="flex-1 py-3 flex flex-col gap-0.5">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

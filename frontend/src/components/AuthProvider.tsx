@@ -16,6 +16,7 @@ type AuthState = {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  isAdmin: () => boolean;
 };
 
 const AuthCtx = createContext<AuthState | undefined>(undefined);
@@ -69,7 +70,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ user, loading, login, logout }),
+    () => ({
+      user,
+      loading,
+      login,
+      logout,
+      isAdmin: () => user?.role === "admin",
+    }),
     [user, loading, login, logout]
   );
 

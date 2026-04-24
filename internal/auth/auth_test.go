@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,6 +216,132 @@ func TestMiddleware_AuthDisabled_SynthesizesPrincipal(t *testing.T) {
 	}
 	if gotPrincipal == nil || gotPrincipal.Email != "dev@local" || gotPrincipal.Role != "admin" {
 		t.Errorf("principal = %+v, want {dev@local, admin}", gotPrincipal)
+	}
+}
+
+// ---------- PRD-44: RequireRole + ID-cookie fallback ----------
+
+// validIDClaims mirrors validAccessClaims but carries an email and
+// custom:role, matching what a Cognito ID token actually contains.
+func (a *authTest) validIDClaims(email, role string) jwt.MapClaims {
+	now := time.Now()
+	c := jwt.MapClaims{
+		"iss":       a.cfg.Issuer(),
+		"aud":       a.cfg.ClientID,
+		"token_use": "id",
+		"sub":       "user-sub-123",
+		"email":     email,
+		"exp":       now.Add(1 * time.Hour).Unix(),
+		"iat":       now.Unix(),
+	}
+	if role != "" {
+		c["custom:role"] = role
+	}
+	return c
+}
+
+// PRD-44: access tokens don't carry custom:role, so the middleware
+// must fall back to the ID cookie to learn the caller's role.
+func TestMiddleware_FallsBackToIDCookieForRole(t *testing.T) {
+	a := newAuthTest(t)
+
+	var gotPrincipal *Principal
+	handler := Middleware(a.cfg, a.verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPrincipal = PrincipalFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: AccessCookieName, Value: a.signToken(a.validAccessClaims())})
+	req.AddCookie(&http.Cookie{Name: IDCookieName, Value: a.signToken(a.validIDClaims("jeremy@example.com", "admin"))})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotPrincipal == nil {
+		t.Fatal("no principal on context")
+	}
+	if gotPrincipal.Email != "jeremy@example.com" {
+		t.Errorf("email = %q, want jeremy@example.com", gotPrincipal.Email)
+	}
+	if gotPrincipal.Role != "admin" {
+		t.Errorf("role = %q, want admin", gotPrincipal.Role)
+	}
+}
+
+// Access token passes but no ID cookie is present → role defaults to "user".
+func TestMiddleware_DefaultsMissingRoleToUser(t *testing.T) {
+	a := newAuthTest(t)
+
+	var gotPrincipal *Principal
+	handler := Middleware(a.cfg, a.verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPrincipal = PrincipalFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: AccessCookieName, Value: a.signToken(a.validAccessClaims())})
+	// No ID cookie set.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotPrincipal == nil || gotPrincipal.Role != "user" {
+		t.Errorf("role = %v, want user", gotPrincipal)
+	}
+}
+
+func TestRequireRole_AdminPasses(t *testing.T) {
+	var called bool
+	h := RequireRole("admin")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req = req.WithContext(WithPrincipal(req.Context(), &Principal{Role: "admin"}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if !called {
+		t.Error("next handler was not invoked")
+	}
+}
+
+func TestRequireRole_UserBlocked(t *testing.T) {
+	h := RequireRole("admin")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("next should not be called")
+	}))
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req = req.WithContext(WithPrincipal(req.Context(), &Principal{Role: "user"}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "forbidden: admin required") {
+		t.Errorf("body = %q, want contains 'forbidden: admin required'", rec.Body.String())
+	}
+}
+
+func TestRequireRole_NoPrincipalBlocked(t *testing.T) {
+	h := RequireRole("admin")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("next should not be called")
+	}))
+	// No principal on context.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/protected", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
 

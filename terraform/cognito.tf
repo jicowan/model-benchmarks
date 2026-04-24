@@ -101,3 +101,31 @@ resource "aws_iam_role_policy" "api_cognito" {
     }]
   })
 }
+
+# PRD-44: bootstrap admin user. Gated on var.admin_email — leave the
+# variable unset to skip (e.g., on clusters where the admin was created
+# manually via the AWS console). Cognito emails a temporary password to
+# the address; the user must set a permanent one on first login.
+#
+# `attributes` is NOT marked lifecycle-ignored because Cognito mutates
+# email_verified and a couple of password-state sub-attributes on its
+# own; ignoring them keeps `terraform plan` quiet after a login.
+resource "aws_cognito_user" "bootstrap_admin" {
+  count        = var.admin_email == "" ? 0 : 1
+  user_pool_id = aws_cognito_user_pool.accelbench.id
+  username     = var.admin_email
+
+  attributes = {
+    email          = var.admin_email
+    email_verified = "true"
+    "custom:role"  = "admin"
+  }
+
+  desired_delivery_mediums = ["EMAIL"]
+
+  lifecycle {
+    ignore_changes = [
+      attributes["email_verified"],
+    ]
+  }
+}

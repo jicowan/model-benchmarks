@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import { AuthProvider } from "./components/AuthProvider";
 import AuthGate from "./components/AuthGate";
+import AdminRoute from "./components/AdminRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Catalog from "./pages/Catalog";
@@ -30,7 +31,14 @@ export default function App() {
             <Route path="/models" element={<ModelCachePage />} />
             <Route path="/estimate" element={<Estimate />} />
             <Route path="/catalog" element={<Catalog />} />
-            <Route path="/configuration" element={<Configuration />} />
+            <Route
+              path="/configuration"
+              element={
+                <AdminRoute>
+                  <Configuration />
+                </AdminRoute>
+              }
+            />
 
             {/* Contextual routes */}
             <Route path="/compare" element={<Compare />} />

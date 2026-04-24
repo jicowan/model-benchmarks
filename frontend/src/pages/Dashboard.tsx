@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { listRuns, listSuiteRuns, listCatalog, getDashboardStats } from "../api";
 import type { RunListItem, CatalogEntry, DashboardStats } from "../types";
 import type { SuiteRunListItem } from "../api";
@@ -215,6 +215,21 @@ export default function Dashboard() {
   const { state: healthState, detail: healthDetail } = useStatus();
   const hero = heroFor(healthState);
 
+  // PRD-44: AdminRoute redirects non-admins here with ?flash=admins-only.
+  // Read the flash param once, strip it from the URL so refresh doesn't
+  // resurrect the banner, and render a dismissible notice.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    const f = searchParams.get("flash");
+    if (f) {
+      setFlash(f);
+      const next = new URLSearchParams(searchParams);
+      next.delete("flash");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   useEffect(() => {
     Promise.all([
       listRuns({ limit: 100 }).catch(() => [] as RunListItem[]),
@@ -237,6 +252,23 @@ export default function Dashboard() {
   return (
     <>
       <PageHeader path={["accelbench", "dashboard"]} />
+
+      {flash === "admins-only" && (
+        <div className="bg-warn/10 border-b border-warn/40 px-6 py-3 flex items-center justify-between font-mono text-[12px] tracking-mech">
+          <span className="text-ink-0">
+            <span className="text-warn uppercase tracking-widemech mr-3">Admins only</span>
+            You don't have access to the Configuration page.
+          </span>
+          <button
+            type="button"
+            onClick={() => setFlash(null)}
+            className="uppercase tracking-widemech text-ink-2 hover:text-ink-0 transition-colors"
+            aria-label="Dismiss"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="p-6 max-w-[1400px] mx-auto animate-enter">
         {/* Hero / system state */}

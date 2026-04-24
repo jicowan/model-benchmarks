@@ -120,6 +120,18 @@ variable "existing_certificate_arn" {
   default     = ""
 }
 
+variable "admin_email" {
+  description = <<-EOT
+    Email address for the Cognito bootstrap admin (PRD-44). A temporary
+    password is emailed to this address on `terraform apply` and must be
+    changed on first login. Required for fresh installs so the cluster
+    ships with a working admin on day one. Leave empty to skip — useful
+    when the admin was created manually via the AWS console.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "ingress_deployed" {
   description = <<-EOT
     Set to true only after the Helm Ingress has been deployed and the ALB
