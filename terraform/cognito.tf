@@ -94,8 +94,19 @@ resource "aws_iam_role_policy" "api_cognito" {
     Statement = [{
       Effect = "Allow"
       Action = [
+        # PRD-43 auth flow.
         "cognito-idp:InitiateAuth",
         "cognito-idp:GlobalSignOut",
+        # PRD-45 user management. ListUsers is the admin-equivalent —
+        # there is no AdminListUsers action.
+        "cognito-idp:ListUsers",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminUpdateUserAttributes",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminResetUserPassword",
+        "cognito-idp:AdminDeleteUser",
       ]
       Resource = aws_cognito_user_pool.accelbench.arn
     }]

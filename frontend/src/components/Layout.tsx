@@ -94,7 +94,18 @@ const navItems: NavItem[] = [
       </svg>
     ),
   },
-  // TODO(PRD-45): Users nav item lands here with adminOnly: true.
+  {
+    to: "/users",
+    label: "Users",
+    shortcut: "U",
+    adminOnly: true,
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21v-1a8 8 0 0 1 16 0v1" />
+      </svg>
+    ),
+  },
 ];
 
 const COLLAPSED_KEY = "accelbench.nav.collapsed";

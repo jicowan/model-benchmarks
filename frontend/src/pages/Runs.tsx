@@ -298,19 +298,18 @@ export default function Runs() {
 
   return (
     <>
-      <PageHeader
-        path={["accelbench", "runs"]}
-        right={
+      <PageHeader path={["accelbench", "runs"]} />
+
+      <div className="p-6 max-w-[1600px] mx-auto animate-enter">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex-1" />
           <Link to="/run" className="btn btn-primary">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
               <path d="M12 5v14M5 12h14" />
             </svg>
             NEW BENCHMARK
           </Link>
-        }
-      />
-
-      <div className="p-6 max-w-[1600px] mx-auto animate-enter">
+        </div>
         {/* Filter strip */}
         <div className="mb-6 panel">
           <div className="flex items-center border-b border-line">

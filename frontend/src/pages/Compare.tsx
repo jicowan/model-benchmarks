@@ -309,7 +309,7 @@ function CompareInner({
 
   return (
     <>
-      <div className="h-14 border-b border-line flex items-center justify-between px-6 bg-surface-0 sticky top-0 z-20">
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
         <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
           <span className="text-ink-1">accelbench</span>
           <span className="text-ink-2">/</span>
@@ -317,7 +317,13 @@ function CompareInner({
           <span className="text-ink-2">/</span>
           <span className="text-ink-0">compare ({entries.length})</span>
         </div>
-        <div className="flex items-center gap-3">
+      </div>
+
+      {/* Sticky toolbar: region + pricing tier pin below the breadcrumb. */}
+      <div className="sticky top-14 z-10 bg-surface-0 border-b border-line">
+        <div className="px-6 py-3 flex items-center gap-3">
+          <div className="flex-1" />
+          <span className="eyebrow">REGION</span>
           <select
             value={region}
             onChange={(e) => setRegion(e.target.value)}
@@ -329,6 +335,7 @@ function CompareInner({
               </option>
             ))}
           </select>
+          <span className="eyebrow ml-2">PRICING</span>
           <PricingToggle value={pricingTier} onChange={setPricingTier} />
         </div>
       </div>

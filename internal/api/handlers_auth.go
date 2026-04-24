@@ -17,11 +17,21 @@ import (
 )
 
 // CognitoIDP is the minimal surface of cognitoidentityprovider.Client
-// that our auth handlers call. Defining it here lets tests pass a
-// lightweight mock instead of a real AWS client.
+// that our handlers call. Defining it here lets tests pass a
+// lightweight mock instead of a real AWS client. PRD-43 added the two
+// auth methods; PRD-45 added the eight admin-user-management methods.
 type CognitoIDP interface {
 	InitiateAuth(ctx context.Context, in *cip.InitiateAuthInput, optFns ...func(*cip.Options)) (*cip.InitiateAuthOutput, error)
 	GlobalSignOut(ctx context.Context, in *cip.GlobalSignOutInput, optFns ...func(*cip.Options)) (*cip.GlobalSignOutOutput, error)
+
+	ListUsers(ctx context.Context, in *cip.ListUsersInput, optFns ...func(*cip.Options)) (*cip.ListUsersOutput, error)
+	AdminGetUser(ctx context.Context, in *cip.AdminGetUserInput, optFns ...func(*cip.Options)) (*cip.AdminGetUserOutput, error)
+	AdminCreateUser(ctx context.Context, in *cip.AdminCreateUserInput, optFns ...func(*cip.Options)) (*cip.AdminCreateUserOutput, error)
+	AdminUpdateUserAttributes(ctx context.Context, in *cip.AdminUpdateUserAttributesInput, optFns ...func(*cip.Options)) (*cip.AdminUpdateUserAttributesOutput, error)
+	AdminDisableUser(ctx context.Context, in *cip.AdminDisableUserInput, optFns ...func(*cip.Options)) (*cip.AdminDisableUserOutput, error)
+	AdminEnableUser(ctx context.Context, in *cip.AdminEnableUserInput, optFns ...func(*cip.Options)) (*cip.AdminEnableUserOutput, error)
+	AdminResetUserPassword(ctx context.Context, in *cip.AdminResetUserPasswordInput, optFns ...func(*cip.Options)) (*cip.AdminResetUserPasswordOutput, error)
+	AdminDeleteUser(ctx context.Context, in *cip.AdminDeleteUserInput, optFns ...func(*cip.Options)) (*cip.AdminDeleteUserOutput, error)
 }
 
 // Cookie names: re-exported from the auth package so it owns the source
@@ -42,6 +52,7 @@ type loginRequest struct {
 }
 
 type authMeResponse struct {
+	Sub   string `json:"sub,omitempty"`
 	Email string `json:"email"`
 	Role  string `json:"role"`
 }
@@ -86,10 +97,10 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	setAuthCookies(w, out.AuthenticationResult)
 
 	// Decode the ID token (without verification — we just got it back
-	// from Cognito over TLS, we trust it) to extract email + role for
-	// the response body.
-	email, role := decodeIDTokenClaims(aws.ToString(out.AuthenticationResult.IdToken))
-	writeJSON(w, http.StatusOK, authMeResponse{Email: email, Role: role})
+	// from Cognito over TLS, we trust it) to extract sub + email + role
+	// for the response body.
+	sub, email, role := decodeIDTokenClaims(aws.ToString(out.AuthenticationResult.IdToken))
+	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
 }
 
 // handleAuthLogout clears cookies and calls GlobalSignOut to invalidate
@@ -151,13 +162,17 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	}
 	// Access tokens don't carry email/role, so if the context principal
 	// came from one we need to read the ID token cookie for those claims.
-	email, role := p.Email, p.Role
+	sub, email, role := p.Sub, p.Email, p.Role
 	if email == "" {
 		if c, err := r.Cookie(idCookieName); err == nil {
-			email, role = decodeIDTokenClaims(c.Value)
+			idSub, idEmail, idRole := decodeIDTokenClaims(c.Value)
+			if sub == "" {
+				sub = idSub
+			}
+			email, role = idEmail, idRole
 		}
 	}
-	writeJSON(w, http.StatusOK, authMeResponse{Email: email, Role: role})
+	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
 }
 
 // ---------- Helpers ----------
@@ -215,17 +230,20 @@ func mapCognitoAuthError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadGateway, "upstream_error")
 }
 
-// decodeIDTokenClaims returns (email, role) from the ID token's payload.
-// Does NOT verify the signature — only used for tokens Cognito just
-// handed us over TLS in an InitiateAuth response.
-func decodeIDTokenClaims(idToken string) (email, role string) {
+// decodeIDTokenClaims returns (sub, email, role) from the ID token's
+// payload. Does NOT verify the signature — only used for tokens
+// Cognito just handed us over TLS in an InitiateAuth response.
+func decodeIDTokenClaims(idToken string) (sub, email, role string) {
 	if idToken == "" {
-		return "", ""
+		return "", "", ""
 	}
 	var claims jwt.MapClaims
 	parser := jwt.NewParser()
 	if _, _, err := parser.ParseUnverified(idToken, &claims); err != nil {
-		return "", ""
+		return "", "", ""
+	}
+	if v, ok := claims["sub"].(string); ok {
+		sub = v
 	}
 	if v, ok := claims["email"].(string); ok {
 		email = v
@@ -233,5 +251,5 @@ func decodeIDTokenClaims(idToken string) (email, role string) {
 	if v, ok := claims["custom:role"].(string); ok {
 		role = v
 	}
-	return email, role
+	return sub, email, role
 }

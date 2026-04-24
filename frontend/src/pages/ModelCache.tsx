@@ -331,30 +331,27 @@ export default function Models() {
 
   return (
     <>
-      <PageHeader
-        path={["accelbench", "models"]}
-        right={
-          <div className="flex gap-2">
-            <button
-              onClick={() => { setFormMode(formMode === "register" ? "none" : "register"); setFormError(""); }}
-              className={`btn ${formMode === "register" ? "bg-surface-2" : ""}`}
-            >
-              REGISTER S3 MODEL
-            </button>
-            <button
-              onClick={() => { setFormMode(formMode === "cache" ? "none" : "cache"); setFormError(""); }}
-              className={`btn btn-primary ${formMode === "cache" ? "!bg-signal/20" : ""}`}
-            >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              CACHE FROM HUGGINGFACE
-            </button>
-          </div>
-        }
-      />
+      <PageHeader path={["accelbench", "models"]} />
 
       <div className="p-6 max-w-[1600px] mx-auto animate-enter">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex-1" />
+          <button
+            onClick={() => { setFormMode(formMode === "register" ? "none" : "register"); setFormError(""); }}
+            className={`btn ${formMode === "register" ? "bg-surface-2" : ""}`}
+          >
+            REGISTER S3 MODEL
+          </button>
+          <button
+            onClick={() => { setFormMode(formMode === "cache" ? "none" : "cache"); setFormError(""); }}
+            className={`btn btn-primary ${formMode === "cache" ? "!bg-signal/20" : ""}`}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            CACHE FROM HUGGINGFACE
+          </button>
+        </div>
         {/* Intro / info */}
         <div className="mb-8">
           <div className="eyebrow mb-3">MODEL REGISTRY</div>

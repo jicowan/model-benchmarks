@@ -38,6 +38,8 @@ import type {
   RunDetailResponse,
   SuiteDetailResponse,
   AuthUser,
+  CognitoUser,
+  ListUsersResponse,
 } from "./types";
 import type { Paginated } from "./lib/pagination";
 
@@ -586,5 +588,65 @@ export async function detachCapacityReservation(
   if (!res.ok) {
     const body = await res.text();
     throw new Error(body || `DELETE capacity-reservation failed: ${res.status}`);
+  }
+}
+
+// ---------- PRD-45: user management ----------
+
+export async function listUsers(opts: {
+  limit?: number;
+  next_token?: string;
+  filter?: string;
+} = {}): Promise<ListUsersResponse> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.next_token) params.set("next_token", opts.next_token);
+  if (opts.filter) params.set("filter", opts.filter);
+  const qs = params.toString();
+  return fetchJSON<ListUsersResponse>(`${BASE}/users${qs ? `?${qs}` : ""}`);
+}
+
+export async function createUser(email: string, role: "admin" | "user"): Promise<CognitoUser> {
+  return fetchJSON<CognitoUser>(`${BASE}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, role }),
+  });
+}
+
+export async function updateUserRole(sub: string, role: "admin" | "user"): Promise<CognitoUser> {
+  return fetchJSON<CognitoUser>(`${BASE}/users/${encodeURIComponent(sub)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function disableUser(sub: string): Promise<CognitoUser> {
+  return fetchJSON<CognitoUser>(`${BASE}/users/${encodeURIComponent(sub)}/disable`, {
+    method: "POST",
+  });
+}
+
+export async function enableUser(sub: string): Promise<CognitoUser> {
+  return fetchJSON<CognitoUser>(`${BASE}/users/${encodeURIComponent(sub)}/enable`, {
+    method: "POST",
+  });
+}
+
+export async function resetUserPassword(sub: string): Promise<CognitoUser> {
+  return fetchJSON<CognitoUser>(`${BASE}/users/${encodeURIComponent(sub)}/reset-password`, {
+    method: "POST",
+  });
+}
+
+export async function deleteUser(sub: string): Promise<void> {
+  const res = await fetch(`${BASE}/users/${encodeURIComponent(sub)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `DELETE /users failed: ${res.status}`);
   }
 }

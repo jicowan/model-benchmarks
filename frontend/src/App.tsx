@@ -14,6 +14,7 @@ import SuiteResults from "./pages/SuiteResults";
 import Runs from "./pages/Runs";
 import ModelCachePage from "./pages/ModelCache";
 import Configuration from "./pages/Configuration";
+import Users from "./pages/Users";
 
 export default function App() {
   return (
@@ -36,6 +37,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <Configuration />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/users"
+              element={
+                <AdminRoute>
+                  <Users />
                 </AdminRoute>
               }
             />

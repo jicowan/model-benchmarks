@@ -269,7 +269,14 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// PRD-34: Tool Versions (vLLM framework + inference-perf)
 	p.Handle("GET /api/v1/config/tool-versions", admin(http.HandlerFunc(s.handleGetToolVersions)))
 	p.Handle("PUT /api/v1/config/tool-versions", admin(http.HandlerFunc(s.handlePutToolVersions)))
-	// TODO(PRD-45): /api/v1/users/* routes go here, also wrapped with admin.
+	// PRD-45: user management (admin-only)
+	p.Handle("GET /api/v1/users", admin(http.HandlerFunc(s.handleListUsers)))
+	p.Handle("POST /api/v1/users", admin(http.HandlerFunc(s.handleCreateUser)))
+	p.Handle("PATCH /api/v1/users/{sub}", admin(http.HandlerFunc(s.handleUpdateUserRole)))
+	p.Handle("POST /api/v1/users/{sub}/disable", admin(http.HandlerFunc(s.handleDisableUser)))
+	p.Handle("POST /api/v1/users/{sub}/enable", admin(http.HandlerFunc(s.handleEnableUser)))
+	p.Handle("POST /api/v1/users/{sub}/reset-password", admin(http.HandlerFunc(s.handleResetUserPassword)))
+	p.Handle("DELETE /api/v1/users/{sub}", admin(http.HandlerFunc(s.handleDeleteUser)))
 
 	// PRD-35: Dashboard aggregate stats (every card on the Dashboard).
 	p.HandleFunc("GET /api/v1/dashboard/stats", s.handleDashboardStats)

@@ -733,7 +733,26 @@ export interface SuiteDetailResponse extends TestSuiteRun {
 }
 
 // PRD-43: authenticated user. Populated from GET /api/v1/auth/me.
+// `sub` was added in PRD-45 so the Users page can gate self-mutation
+// row actions; omitted when the backend doesn't populate it.
 export type AuthUser = {
+  sub?: string;
   email: string;
   role: string;
 };
+
+// PRD-45: user-management types.
+export interface CognitoUser {
+  sub: string;
+  email: string;
+  role: string; // "" if unset on the Cognito user
+  status: string; // Cognito UserStatusType verbatim
+  enabled: boolean;
+  created_at: string;
+  last_modified_at: string;
+}
+
+export interface ListUsersResponse {
+  rows: CognitoUser[];
+  next_token?: string;
+}

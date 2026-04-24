@@ -25,6 +25,17 @@ type mockIDP struct {
 	initiateAuth    func(context.Context, *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error)
 	globalSignOut   func(context.Context, *cip.GlobalSignOutInput) (*cip.GlobalSignOutOutput, error)
 	gotSignOutToken string
+
+	// PRD-45 admin-user hooks; any nil fallback returns an empty struct so
+	// tests that never touch them don't need to wire boilerplate.
+	listUsers                 func(context.Context, *cip.ListUsersInput) (*cip.ListUsersOutput, error)
+	adminGetUser              func(context.Context, *cip.AdminGetUserInput) (*cip.AdminGetUserOutput, error)
+	adminCreateUser           func(context.Context, *cip.AdminCreateUserInput) (*cip.AdminCreateUserOutput, error)
+	adminUpdateUserAttributes func(context.Context, *cip.AdminUpdateUserAttributesInput) (*cip.AdminUpdateUserAttributesOutput, error)
+	adminDisableUser          func(context.Context, *cip.AdminDisableUserInput) (*cip.AdminDisableUserOutput, error)
+	adminEnableUser           func(context.Context, *cip.AdminEnableUserInput) (*cip.AdminEnableUserOutput, error)
+	adminResetUserPassword    func(context.Context, *cip.AdminResetUserPasswordInput) (*cip.AdminResetUserPasswordOutput, error)
+	adminDeleteUser           func(context.Context, *cip.AdminDeleteUserInput) (*cip.AdminDeleteUserOutput, error)
 }
 
 func (m *mockIDP) InitiateAuth(ctx context.Context, in *cip.InitiateAuthInput, _ ...func(*cip.Options)) (*cip.InitiateAuthOutput, error) {
@@ -39,6 +50,62 @@ func (m *mockIDP) GlobalSignOut(ctx context.Context, in *cip.GlobalSignOutInput,
 		return m.globalSignOut(ctx, in)
 	}
 	return &cip.GlobalSignOutOutput{}, nil
+}
+
+func (m *mockIDP) ListUsers(ctx context.Context, in *cip.ListUsersInput, _ ...func(*cip.Options)) (*cip.ListUsersOutput, error) {
+	if m.listUsers != nil {
+		return m.listUsers(ctx, in)
+	}
+	return &cip.ListUsersOutput{}, nil
+}
+
+func (m *mockIDP) AdminGetUser(ctx context.Context, in *cip.AdminGetUserInput, _ ...func(*cip.Options)) (*cip.AdminGetUserOutput, error) {
+	if m.adminGetUser != nil {
+		return m.adminGetUser(ctx, in)
+	}
+	return &cip.AdminGetUserOutput{}, nil
+}
+
+func (m *mockIDP) AdminCreateUser(ctx context.Context, in *cip.AdminCreateUserInput, _ ...func(*cip.Options)) (*cip.AdminCreateUserOutput, error) {
+	if m.adminCreateUser != nil {
+		return m.adminCreateUser(ctx, in)
+	}
+	return &cip.AdminCreateUserOutput{}, nil
+}
+
+func (m *mockIDP) AdminUpdateUserAttributes(ctx context.Context, in *cip.AdminUpdateUserAttributesInput, _ ...func(*cip.Options)) (*cip.AdminUpdateUserAttributesOutput, error) {
+	if m.adminUpdateUserAttributes != nil {
+		return m.adminUpdateUserAttributes(ctx, in)
+	}
+	return &cip.AdminUpdateUserAttributesOutput{}, nil
+}
+
+func (m *mockIDP) AdminDisableUser(ctx context.Context, in *cip.AdminDisableUserInput, _ ...func(*cip.Options)) (*cip.AdminDisableUserOutput, error) {
+	if m.adminDisableUser != nil {
+		return m.adminDisableUser(ctx, in)
+	}
+	return &cip.AdminDisableUserOutput{}, nil
+}
+
+func (m *mockIDP) AdminEnableUser(ctx context.Context, in *cip.AdminEnableUserInput, _ ...func(*cip.Options)) (*cip.AdminEnableUserOutput, error) {
+	if m.adminEnableUser != nil {
+		return m.adminEnableUser(ctx, in)
+	}
+	return &cip.AdminEnableUserOutput{}, nil
+}
+
+func (m *mockIDP) AdminResetUserPassword(ctx context.Context, in *cip.AdminResetUserPasswordInput, _ ...func(*cip.Options)) (*cip.AdminResetUserPasswordOutput, error) {
+	if m.adminResetUserPassword != nil {
+		return m.adminResetUserPassword(ctx, in)
+	}
+	return &cip.AdminResetUserPasswordOutput{}, nil
+}
+
+func (m *mockIDP) AdminDeleteUser(ctx context.Context, in *cip.AdminDeleteUserInput, _ ...func(*cip.Options)) (*cip.AdminDeleteUserOutput, error) {
+	if m.adminDeleteUser != nil {
+		return m.adminDeleteUser(ctx, in)
+	}
+	return &cip.AdminDeleteUserOutput{}, nil
 }
 
 // mockAPIErr returns a smithy.GenericAPIError for the given Cognito
