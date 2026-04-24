@@ -68,29 +68,31 @@ type CatalogFilter struct {
 }
 
 // allowedSortColumns maps user-facing sort keys to SQL column expressions.
+// Columns reference the `catalog_rows` materialized view (PRD-37); see
+// db/migrations/025_catalog_materialized.sql for its schema.
 var allowedSortColumns = map[string]string{
-	"model":                       "m.hf_id",
-	"instance":                    "it.name",
-	"ttft_p50":                    "bm.ttft_p50_ms",
-	"ttft_p95":                    "bm.ttft_p95_ms",
-	"ttft_p99":                    "bm.ttft_p99_ms",
-	"e2e_latency_p50":             "bm.e2e_latency_p50_ms",
-	"e2e_latency_p95":             "bm.e2e_latency_p95_ms",
-	"e2e_latency_p99":             "bm.e2e_latency_p99_ms",
-	"itl_p50":                     "bm.itl_p50_ms",
-	"itl_p95":                     "bm.itl_p95_ms",
-	"itl_p99":                     "bm.itl_p99_ms",
-	"throughput_per_request":      "bm.throughput_per_request_tps",
-	"throughput_aggregate":        "bm.throughput_aggregate_tps",
-	"requests_per_second":         "bm.requests_per_second",
-	"accelerator_utilization":     "bm.accelerator_utilization_pct",
-	"accelerator_utilization_avg": "bm.accelerator_utilization_avg_pct",
-	"accelerator_memory_peak":     "bm.accelerator_memory_peak_gib",
-	"accelerator_memory_avg":      "bm.accelerator_memory_avg_gib",
-	"sm_active_avg":               "bm.sm_active_avg_pct",
-	"tensor_active_avg":           "bm.tensor_active_avg_pct",
-	"dram_active_avg":             "bm.dram_active_avg_pct",
-	"completed_at":                "br.completed_at",
+	"model":                       "hf_id",
+	"instance":                    "instance_type_name",
+	"ttft_p50":                    "ttft_p50_ms",
+	"ttft_p95":                    "ttft_p95_ms",
+	"ttft_p99":                    "ttft_p99_ms",
+	"e2e_latency_p50":             "e2e_latency_p50_ms",
+	"e2e_latency_p95":             "e2e_latency_p95_ms",
+	"e2e_latency_p99":             "e2e_latency_p99_ms",
+	"itl_p50":                     "itl_p50_ms",
+	"itl_p95":                     "itl_p95_ms",
+	"itl_p99":                     "itl_p99_ms",
+	"throughput_per_request":      "throughput_per_request_tps",
+	"throughput_aggregate":        "throughput_aggregate_tps",
+	"requests_per_second":         "requests_per_second",
+	"accelerator_utilization":     "accelerator_utilization_pct",
+	"accelerator_utilization_avg": "accelerator_utilization_avg_pct",
+	"accelerator_memory_peak":     "accelerator_memory_peak_gib",
+	"accelerator_memory_avg":      "accelerator_memory_avg_gib",
+	"sm_active_avg":               "sm_active_avg_pct",
+	"tensor_active_avg":           "tensor_active_avg_pct",
+	"dram_active_avg":             "dram_active_avg_pct",
+	"completed_at":                "completed_at",
 }
 
 // ListCatalog queries the catalog with optional filters and sorting. Returns
@@ -103,42 +105,45 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 		argIdx     int
 	)
 
-	// Always filter to completed, non-superseded runs.
-	conditions = append(conditions, "br.status = 'completed'")
-	conditions = append(conditions, "br.superseded = FALSE")
+	// The `catalog_rows` materialized view already bakes in
+	// status='completed' AND superseded=FALSE (PRD-37), so no filter is
+	// needed here.
 
 	if len(f.RunIDs) > 0 {
 		argIdx++
 		// pgx accepts []string → ANY($N) so the Compare page can pass its
 		// 2-4 selected IDs in a single round-trip.
-		conditions = append(conditions, fmt.Sprintf("br.id = ANY($%d)", argIdx))
+		conditions = append(conditions, fmt.Sprintf("run_id = ANY($%d)", argIdx))
 		args = append(args, f.RunIDs)
 	}
 	if f.ModelHfID != "" {
 		argIdx++
-		conditions = append(conditions, fmt.Sprintf("m.hf_id ILIKE $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("hf_id ILIKE $%d", argIdx))
 		args = append(args, "%"+f.ModelHfID+"%")
 	}
 	if f.ModelFamily != "" {
 		argIdx++
-		conditions = append(conditions, fmt.Sprintf("m.model_family = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("model_family = $%d", argIdx))
 		args = append(args, f.ModelFamily)
 	}
 	if f.InstanceFamily != "" {
 		argIdx++
-		conditions = append(conditions, fmt.Sprintf("it.family = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("instance_family = $%d", argIdx))
 		args = append(args, f.InstanceFamily)
 	}
 	if f.AcceleratorType != "" {
 		argIdx++
-		conditions = append(conditions, fmt.Sprintf("it.accelerator_type = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("accelerator_type = $%d", argIdx))
 		args = append(args, f.AcceleratorType)
 	}
 
-	where := "WHERE " + strings.Join(conditions, " AND ")
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
 
 	// Sort.
-	orderBy := "ORDER BY m.hf_id, it.name"
+	orderBy := "ORDER BY hf_id, instance_type_name"
 	if f.SortBy != "" {
 		if col, ok := allowedSortColumns[f.SortBy]; ok {
 			dir := "ASC"
@@ -167,28 +172,25 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 
 	query := fmt.Sprintf(`
 		SELECT
-			br.id, m.hf_id, m.model_family, m.parameter_count,
-			it.name, it.family, it.accelerator_type, it.accelerator_name,
-			it.accelerator_count, it.accelerator_memory_gib,
-			br.framework, br.framework_version, br.tensor_parallel_degree,
-			br.quantization, br.concurrency,
-			br.input_sequence_length, br.output_sequence_length,
-			br.completed_at,
-			bm.ttft_p50_ms, bm.ttft_p95_ms, bm.ttft_p99_ms,
-			bm.e2e_latency_p50_ms, bm.e2e_latency_p95_ms, bm.e2e_latency_p99_ms,
-			bm.itl_p50_ms, bm.itl_p95_ms, bm.itl_p99_ms,
-			bm.throughput_per_request_tps, bm.throughput_aggregate_tps,
-			bm.requests_per_second,
-			bm.successful_requests, bm.failed_requests,
-			bm.accelerator_utilization_pct, bm.accelerator_utilization_avg_pct,
-			bm.accelerator_memory_peak_gib, bm.accelerator_memory_avg_gib,
-			bm.sm_active_avg_pct, bm.tensor_active_avg_pct,
-			bm.dram_active_avg_pct,
+			run_id, hf_id, model_family, parameter_count,
+			instance_type_name, instance_family, accelerator_type, accelerator_name,
+			accelerator_count, accelerator_memory_gib,
+			framework, framework_version, tensor_parallel_degree,
+			quantization, concurrency,
+			input_sequence_length, output_sequence_length,
+			completed_at,
+			ttft_p50_ms, ttft_p95_ms, ttft_p99_ms,
+			e2e_latency_p50_ms, e2e_latency_p95_ms, e2e_latency_p99_ms,
+			itl_p50_ms, itl_p95_ms, itl_p99_ms,
+			throughput_per_request_tps, throughput_aggregate_tps,
+			requests_per_second,
+			successful_requests, failed_requests,
+			accelerator_utilization_pct, accelerator_utilization_avg_pct,
+			accelerator_memory_peak_gib, accelerator_memory_avg_gib,
+			sm_active_avg_pct, tensor_active_avg_pct,
+			dram_active_avg_pct,
 			COUNT(*) OVER () AS total_count
-		FROM benchmark_runs br
-		JOIN models m ON br.model_id = m.id
-		JOIN instance_types it ON br.instance_type_id = it.id
-		JOIN benchmark_metrics bm ON bm.run_id = br.id
+		FROM catalog_rows
 		%s
 		%s
 		%s %s

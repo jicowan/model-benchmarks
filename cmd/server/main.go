@@ -86,6 +86,11 @@ func main() {
 	srv.Orchestrator().StartHeartbeatLoop(ctx)
 	srv.Orchestrator().StartOrphanRecoveryLoop(ctx)
 
+	// PRD-37: materialized Catalog view. Runs a synchronous refresh
+	// before the listener starts so the first Catalog request doesn't
+	// hit an empty view, then ticks every 5 minutes in the background.
+	StartCatalogRefreshLoop(ctx, repo)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

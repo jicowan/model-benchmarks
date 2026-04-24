@@ -710,6 +710,14 @@ func (m *MockRepo) GetOOMHistory(_ context.Context, modelHfID, instanceType stri
 	return history, nil
 }
 
+// RefreshCatalogRows is a no-op for the in-memory mock. The real
+// Repository refreshes the `catalog_rows` materialized view (PRD-37);
+// MockRepo serves ListCatalog straight from its in-memory maps, so
+// there is nothing to refresh.
+func (m *MockRepo) RefreshCatalogRows(_ context.Context) error {
+	return nil
+}
+
 // ListCatalog returns catalog entries matching the given filter.
 // This is a simplified in-memory implementation for testing.
 func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEntry, int, error) {
