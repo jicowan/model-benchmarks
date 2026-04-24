@@ -25,6 +25,9 @@ type Repo interface {
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
 	ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, int, error)
+	// PRD-37: refresh the `catalog_rows` materialized view. Called by the
+	// per-pod refresh loop in cmd/server/catalog_refresh.go.
+	RefreshCatalogRows(ctx context.Context) error
 	ListRuns(ctx context.Context, f RunFilter) ([]RunListItem, error)
 	// PRD-36: unified single-run + suite-run feed with pagination + sort.
 	ListJobs(ctx context.Context, f JobFilter) ([]Job, int, error)
