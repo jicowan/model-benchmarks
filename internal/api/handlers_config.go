@@ -162,6 +162,11 @@ type catalogMatrixResponse struct {
 }
 
 func (s *Server) handleGetCatalogMatrix(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "catalog-matrix"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	m, err := s.repo.LoadCatalogMatrix(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load matrix: "+err.Error())
@@ -179,7 +184,7 @@ func (s *Server) handleGetCatalogMatrix(w http.ResponseWriter, r *http.Request) 
 	if resp.InstanceTypes == nil {
 		resp.InstanceTypes = []database.CatalogInstanceType{}
 	}
-	writeJSON(w, http.StatusOK, resp)
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, resp)
 }
 
 type putCatalogMatrixRequest struct {
@@ -214,6 +219,7 @@ func (s *Server) handlePutCatalogMatrix(w http.ResponseWriter, r *http.Request) 
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/catalog-matrix",
 		fmt.Sprintf("updated (%d models, %d instance types)", len(req.Models), len(req.InstanceTypes)))
+	s.cache.Invalidate("catalog-matrix", "scenarios")
 
 	// Return the fresh state so the UI can refresh the version.
 	fresh, _ := s.repo.LoadCatalogMatrix(r.Context())
@@ -362,6 +368,7 @@ func (s *Server) handlePutScenarioOverride(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/scenario-overrides/"+id, summarizeOverride(ov))
+	s.cache.Invalidate("scenarios")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -372,6 +379,7 @@ func (s *Server) handleDeleteScenarioOverride(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.audit(r.Context(), "DELETE /api/v1/config/scenario-overrides/"+id, "cleared")
+	s.cache.Invalidate("scenarios")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -437,13 +445,18 @@ type toolVersionsResponse struct {
 }
 
 func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "tool-versions"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	tv, err := s.repo.GetToolVersions(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load tool versions: "+err.Error())
 		return
 	}
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
-	writeJSON(w, http.StatusOK, toolVersionsResponse{
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, toolVersionsResponse{
 		FrameworkVersion:     tv.FrameworkVersion,
 		InferencePerfVersion: tv.InferencePerfVersion,
 		UpdatedAt:            tv.UpdatedAt,
@@ -485,6 +498,7 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 	s.audit(r.Context(), "PUT /api/v1/config/tool-versions",
 		fmt.Sprintf("framework_version=%s inference_perf_version=%s",
 			req.FrameworkVersion, req.InferencePerfVersion))
+	s.cache.Invalidate("tool-versions")
 
 	fresh, _ := s.repo.GetToolVersions(r.Context())
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")

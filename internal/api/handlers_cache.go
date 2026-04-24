@@ -69,12 +69,17 @@ func (s *Server) handleListModelCache(w http.ResponseWriter, r *http.Request) {
 // after PRD-36 paginated the list those counts broke. This replaces them
 // with a server-side aggregate.
 func (s *Server) handleModelCacheStats(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "model-cache-stats"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	stats, err := s.repo.ModelCacheStats(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "model cache stats: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, stats)
 }
 
 func (s *Server) handleGetModelCache(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +197,7 @@ func (s *Server) handleCreateModelCache(w http.ResponseWriter, r *http.Request) 
 
 	go s.watchCacheJob(id, jobName)
 
+	s.cache.Invalidate("model-cache-stats")
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": id, "status": "caching"})
 }
 
@@ -222,6 +228,7 @@ func (s *Server) handleDeleteModelCache(w http.ResponseWriter, r *http.Request) 
 
 	_ = s.repo.DeleteModelCache(context.Background(), id)
 
+	s.cache.Invalidate("model-cache-stats")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -256,6 +263,7 @@ func (s *Server) handleRegisterCustomModel(w http.ResponseWriter, r *http.Reques
 	}
 
 	mc.ID = id
+	s.cache.Invalidate("model-cache-stats")
 	writeJSON(w, http.StatusCreated, mc)
 }
 

@@ -10,6 +10,11 @@ import (
 // on the list endpoints. `success_rate` is computed in Go because the SQL
 // `0/0` case is a pain and this makes the semantics obvious.
 func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "dashboard-stats"
+	if data := s.cache.Get(cacheKey); data != nil {
+		serveCacheHit(w, data)
+		return
+	}
 	stats, err := s.repo.DashboardStats(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "dashboard stats: "+err.Error())
@@ -22,7 +27,7 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		successRate = float64(stats.CompletedCount) / float64(denom) * 100
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, map[string]any{
 		"total_runs":      stats.TotalRuns,
 		"total_single":    stats.TotalSingle,
 		"total_suites":    stats.TotalSuites,

@@ -3,6 +3,7 @@ package seed
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 // fakeRepo is a minimal Repo implementation for tests. Only covers the
 // methods the seeder touches.
 type fakeRepo struct {
+	mu          sync.Mutex
 	matrix      *database.CatalogMatrix
 	cache       map[string]database.ModelCache
 	runKeys     []database.RunKey
@@ -42,31 +44,42 @@ func (f *fakeRepo) GetInstanceTypeByName(_ context.Context, name string) (*datab
 	return &database.InstanceType{Name: name, ID: "it-" + name}, nil
 }
 func (f *fakeRepo) CreateCatalogSeedStatus(_ context.Context, id string, total int, dryRun bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.seedCreated = id
 	f.activeSeed = &database.CatalogSeedStatus{ID: id, Status: "active", Total: total, DryRun: dryRun}
 	return nil
 }
 func (f *fakeRepo) ClaimSeed(_ context.Context, _, _ string) error { return nil }
 func (f *fakeRepo) UpdateCatalogSeedProgress(_ context.Context, _ string, completed int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.progress = append(f.progress, completed)
 	return nil
 }
 func (f *fakeRepo) CompleteCatalogSeedStatus(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.completed = true
 	f.activeSeed = nil
 	return nil
 }
 func (f *fakeRepo) FailCatalogSeedStatus(_ context.Context, _, errMsg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.failedErr = errMsg
 	f.activeSeed = nil
 	return nil
 }
 func (f *fakeRepo) GetActiveCatalogSeed(_ context.Context) (*database.CatalogSeedStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.activeSeed, nil
 }
 
 // fakeDeps captures calls from the seeder.
 type fakeDeps struct {
+	mu        sync.Mutex
 	fetchErr  error
 	fetchedBy []string
 	created   []*database.RunRequest
@@ -74,6 +87,8 @@ type fakeDeps struct {
 }
 
 func (f *fakeDeps) FetchModelConfig(_ context.Context, modelID, _ string) (*recommend.ModelConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.fetchedBy = append(f.fetchedBy, modelID)
 	if f.fetchErr != nil {
 		return nil, f.fetchErr
@@ -81,10 +96,11 @@ func (f *fakeDeps) FetchModelConfig(_ context.Context, modelID, _ string) (*reco
 	return &recommend.ModelConfig{}, nil
 }
 func (f *fakeDeps) CreateRun(_ context.Context, req *database.RunRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.createErr != nil {
 		return "", f.createErr
 	}
-	// copy so test can inspect without worrying about shared state
 	cp := *req
 	f.created = append(f.created, &cp)
 	return "run-fake", nil
@@ -113,7 +129,10 @@ func waitForSeed(t *testing.T, r *fakeRepo) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if r.activeSeed == nil {
+		r.mu.Lock()
+		done := r.activeSeed == nil
+		r.mu.Unlock()
+		if done {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
