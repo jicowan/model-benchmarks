@@ -35,6 +35,8 @@ import type {
   NodePoolReservations,
   DashboardStats,
   ModelCacheStats,
+  RunDetailResponse,
+  SuiteDetailResponse,
 } from "./types";
 import type { Paginated } from "./lib/pagination";
 
@@ -84,6 +86,15 @@ export async function listCatalog(
 
 export async function getRun(id: string): Promise<BenchmarkRun> {
   return fetchJSON<BenchmarkRun>(`${BASE}/runs/${id}`);
+}
+
+export async function getRunDetail(
+  id: string,
+  includes: string[]
+): Promise<RunDetailResponse> {
+  return fetchJSON<RunDetailResponse>(
+    `${BASE}/runs/${id}?include=${includes.join(",")}`
+  );
 }
 
 export async function getMetrics(runId: string): Promise<BenchmarkMetrics> {
@@ -276,6 +287,15 @@ export async function createSuiteRun(req: SuiteRunRequest): Promise<TestSuiteRun
 
 export async function getSuiteRun(id: string): Promise<TestSuiteRun> {
   return fetchJSON<TestSuiteRun>(`${BASE}/suite-runs/${id}`);
+}
+
+export async function getSuiteDetail(
+  id: string,
+  includes: string[]
+): Promise<SuiteDetailResponse> {
+  return fetchJSON<SuiteDetailResponse>(
+    `${BASE}/suite-runs/${id}?include=${includes.join(",")}`
+  );
 }
 
 // Suite run list item (denormalized for display)

@@ -718,3 +718,18 @@ export interface ModelCacheStats {
   failed: number;
   total_bytes: number;
 }
+
+// PRD-39: ?include= detail response types.
+export interface RunDetailResponse extends BenchmarkRun {
+  metrics?: BenchmarkMetrics;
+  instance?: InstanceType;
+  pricing?: PricingRow;
+  oom?: OOMHistory;
+  errors?: Record<string, string>;
+}
+
+export interface SuiteDetailResponse extends TestSuiteRun {
+  instance?: InstanceType;
+  pricing?: PricingRow;
+  errors?: Record<string, string>;
+}

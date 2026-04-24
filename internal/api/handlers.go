@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/accelbench/accelbench/internal/cache"
@@ -19,6 +21,7 @@ import (
 	"github.com/accelbench/accelbench/internal/seed"
 	"github.com/accelbench/accelbench/internal/testsuite"
 
+	"golang.org/x/sync/errgroup"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -399,6 +402,20 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	return runID, nil
 }
 
+// runDetailResponse is the response for GET /api/v1/runs/{id}. The base
+// fields (BenchmarkRun + model/instance enrichment) are always present.
+// Optional sub-objects appear only when the caller passes ?include=token.
+type runDetailResponse struct {
+	*database.BenchmarkRun
+	ModelHfID        string                     `json:"model_hf_id,omitempty"`
+	InstanceTypeName string                     `json:"instance_type_name,omitempty"`
+	Metrics          *database.BenchmarkMetrics `json:"metrics,omitempty"`
+	Instance         *database.InstanceType     `json:"instance,omitempty"`
+	Pricing          *database.PricingRow       `json:"pricing,omitempty"`
+	OOM              *database.OOMHistory       `json:"oom,omitempty"`
+	Errors           map[string]string          `json:"errors,omitempty"`
+}
+
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	run, err := s.repo.GetBenchmarkRun(r.Context(), runID)
@@ -410,20 +427,22 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
-	// Enrich with human-readable model + instance fields for the UI.
-	type runView struct {
-		*database.BenchmarkRun
-		ModelHfID        string `json:"model_hf_id,omitempty"`
-		InstanceTypeName string `json:"instance_type_name,omitempty"`
-	}
-	view := runView{BenchmarkRun: run}
+
+	resp := runDetailResponse{BenchmarkRun: run}
 	if details, _ := s.repo.GetRunExportDetails(r.Context(), runID); details != nil {
-		view.ModelHfID = details.ModelHfID
-		view.InstanceTypeName = details.InstanceTypeName
+		resp.ModelHfID = details.ModelHfID
+		resp.InstanceTypeName = details.InstanceTypeName
 	}
 
-	if run.Status == "completed" || run.Status == "failed" {
-		data, err := json.Marshal(view)
+	includes := parseIncludes(r.URL.Query().Get("include"))
+	if includes != nil {
+		s.fetchRunIncludes(r.Context(), &resp, includes)
+	}
+
+	// ETag only for bare requests on terminal runs (PRD-38). With
+	// ?include= the response varies too much for a stable ETag.
+	if includes == nil && (run.Status == "completed" || run.Status == "failed") {
+		data, err := json.Marshal(resp)
 		if err == nil {
 			data = append(data, '\n')
 			etag := etagOf(data)
@@ -436,7 +455,99 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// fetchRunIncludes populates the optional sub-objects on resp in parallel.
+// Each goroutine catches its own error and records it in resp.Errors so
+// other includes still succeed (partial-failure semantics).
+func (s *Server) fetchRunIncludes(ctx context.Context, resp *runDetailResponse, includes IncludeSet) {
+	var (
+		mu sync.Mutex
+		g  errgroup.Group
+	)
+	setErr := func(token, msg string) {
+		mu.Lock()
+		if resp.Errors == nil {
+			resp.Errors = make(map[string]string)
+		}
+		resp.Errors[token] = msg
+		mu.Unlock()
+	}
+
+	if includes.Has("metrics") {
+		g.Go(func() error {
+			m, err := s.repo.GetMetricsByRunID(ctx, resp.ID)
+			if err != nil {
+				setErr("metrics", err.Error())
+				return nil
+			}
+			mu.Lock()
+			resp.Metrics = m
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if includes.Has("instance") {
+		g.Go(func() error {
+			it, err := s.repo.GetInstanceTypeByID(ctx, resp.InstanceTypeID)
+			if err != nil {
+				setErr("instance", err.Error())
+				return nil
+			}
+			mu.Lock()
+			resp.Instance = it
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if includes.Has("pricing") {
+		g.Go(func() error {
+			region := os.Getenv("AWS_REGION")
+			if region == "" {
+				region = "us-east-2"
+			}
+			p, err := s.repo.GetPricingForInstanceType(ctx, resp.InstanceTypeID, region)
+			if err != nil {
+				setErr("pricing", err.Error())
+				return nil
+			}
+			if p != nil {
+				mu.Lock()
+				resp.Pricing = &database.PricingRow{
+					InstanceTypeName:     resp.InstanceTypeName,
+					OnDemandHourlyUSD:    p.OnDemandHourlyUSD,
+					Reserved1YrHourlyUSD: p.Reserved1YrHourlyUSD,
+					Reserved3YrHourlyUSD: p.Reserved3YrHourlyUSD,
+					EffectiveDate:        p.EffectiveDate,
+				}
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	if includes.Has("oom") && resp.ModelHfID != "" && resp.InstanceTypeName != "" {
+		g.Go(func() error {
+			h, err := s.repo.GetOOMHistory(ctx, resp.ModelHfID, resp.InstanceTypeName, 10)
+			if err != nil {
+				setErr("oom", err.Error())
+				return nil
+			}
+			mu.Lock()
+			resp.OOM = h
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	g.Wait()
+
+	if len(resp.Errors) == 0 {
+		resp.Errors = nil
+	}
 }
 
 func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1011,6 +1122,38 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, suiteRun)
 }
 
+type suiteScenarioProgress struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+type suiteProgressInfo struct {
+	Completed int                     `json:"completed"`
+	Total     int                     `json:"total"`
+	Scenarios []suiteScenarioProgress `json:"scenarios"`
+}
+type suiteScenarioDefinition struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	TargetQPS       int    `json:"target_qps"`
+	DurationSeconds int    `json:"duration_seconds"`
+	LoadType        string `json:"load_type"`
+}
+type suiteRunResponse struct {
+	*database.TestSuiteRun
+	ModelHfID            string                    `json:"model_hf_id,omitempty"`
+	InstanceTypeName     string                    `json:"instance_type_name,omitempty"`
+	AcceleratorType      string                    `json:"accelerator_type,omitempty"`
+	AcceleratorName      string                    `json:"accelerator_name,omitempty"`
+	AcceleratorCount     int                       `json:"accelerator_count,omitempty"`
+	AcceleratorMemoryGiB int                       `json:"accelerator_memory_gib,omitempty"`
+	Progress             suiteProgressInfo         `json:"progress"`
+	Results              []database.ScenarioResult `json:"results"`
+	ScenarioDefinitions  []suiteScenarioDefinition `json:"scenario_definitions"`
+	Instance             *database.InstanceType    `json:"instance,omitempty"`
+	Pricing              *database.PricingRow      `json:"pricing,omitempty"`
+	Errors               map[string]string         `json:"errors,omitempty"`
+}
+
 // handleGetSuiteRun returns a test suite run with its scenario results.
 func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -1037,50 +1180,19 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build response with progress info
-	type scenarioProgress struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-	}
-	type progressInfo struct {
-		Completed int                `json:"completed"`
-		Total     int                `json:"total"`
-		Scenarios []scenarioProgress `json:"scenarios"`
-	}
-	type scenarioDefinition struct {
-		ID              string `json:"id"`
-		Name            string `json:"name"`
-		TargetQPS       int    `json:"target_qps"`
-		DurationSeconds int    `json:"duration_seconds"`
-		LoadType        string `json:"load_type"`
-	}
-	type suiteRunResponse struct {
-		*database.TestSuiteRun
-		ModelHfID            string                    `json:"model_hf_id,omitempty"`
-		InstanceTypeName     string                    `json:"instance_type_name,omitempty"`
-		AcceleratorType      string                    `json:"accelerator_type,omitempty"`
-		AcceleratorName      string                    `json:"accelerator_name,omitempty"`
-		AcceleratorCount     int                       `json:"accelerator_count,omitempty"`
-		AcceleratorMemoryGiB int                       `json:"accelerator_memory_gib,omitempty"`
-		Progress             progressInfo              `json:"progress"`
-		Results              []database.ScenarioResult `json:"results"`
-		ScenarioDefinitions  []scenarioDefinition      `json:"scenario_definitions"`
-	}
-
 	completed := 0
-	scenarios := make([]scenarioProgress, 0, len(results))
+	scenarios := make([]suiteScenarioProgress, 0, len(results))
 	for _, r := range results {
-		scenarios = append(scenarios, scenarioProgress{ID: r.ScenarioID, Status: r.Status})
+		scenarios = append(scenarios, suiteScenarioProgress{ID: r.ScenarioID, Status: r.Status})
 		if r.Status == "completed" || r.Status == "failed" || r.Status == "skipped" {
 			completed++
 		}
 	}
 
-	// Build scenario definitions with target QPS for charts
-	scenarioDefs := make([]scenarioDefinition, 0, len(results))
+	scenarioDefs := make([]suiteScenarioDefinition, 0, len(results))
 	for _, r := range results {
 		if sc := scenario.Get(r.ScenarioID); sc != nil {
-			scenarioDefs = append(scenarioDefs, scenarioDefinition{
+			scenarioDefs = append(scenarioDefs, suiteScenarioDefinition{
 				ID:              sc.ID,
 				Name:            sc.Name,
 				TargetQPS:       sc.TargetQPS(),
@@ -1092,7 +1204,7 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	resp := suiteRunResponse{
 		TestSuiteRun: suiteRun,
-		Progress: progressInfo{
+		Progress: suiteProgressInfo{
 			Completed: completed,
 			Total:     len(results),
 			Scenarios: scenarios,
@@ -1111,7 +1223,13 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		resp.AcceleratorMemoryGiB = it.AcceleratorMemoryGiB
 	}
 
-	if suiteRun.Status == "completed" || suiteRun.Status == "failed" {
+	includes := parseIncludes(r.URL.Query().Get("include"))
+	if includes != nil {
+		s.fetchSuiteIncludes(ctx, &resp, includes)
+	}
+
+	// ETag only for bare requests on terminal suites (PRD-38).
+	if includes == nil && (suiteRun.Status == "completed" || suiteRun.Status == "failed") {
 		data, err := json.Marshal(resp)
 		if err == nil {
 			data = append(data, '\n')
@@ -1126,6 +1244,67 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) fetchSuiteIncludes(ctx context.Context, resp *suiteRunResponse, includes IncludeSet) {
+	var (
+		mu sync.Mutex
+		g  errgroup.Group
+	)
+	setErr := func(token, msg string) {
+		mu.Lock()
+		if resp.Errors == nil {
+			resp.Errors = make(map[string]string)
+		}
+		resp.Errors[token] = msg
+		mu.Unlock()
+	}
+
+	if includes.Has("instance") {
+		g.Go(func() error {
+			it, err := s.repo.GetInstanceTypeByID(ctx, resp.InstanceTypeID)
+			if err != nil {
+				setErr("instance", err.Error())
+				return nil
+			}
+			mu.Lock()
+			resp.Instance = it
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if includes.Has("pricing") {
+		g.Go(func() error {
+			region := os.Getenv("AWS_REGION")
+			if region == "" {
+				region = "us-east-2"
+			}
+			p, err := s.repo.GetPricingForInstanceType(ctx, resp.InstanceTypeID, region)
+			if err != nil {
+				setErr("pricing", err.Error())
+				return nil
+			}
+			if p != nil {
+				mu.Lock()
+				resp.Pricing = &database.PricingRow{
+					InstanceTypeName:     resp.InstanceTypeName,
+					OnDemandHourlyUSD:    p.OnDemandHourlyUSD,
+					Reserved1YrHourlyUSD: p.Reserved1YrHourlyUSD,
+					Reserved3YrHourlyUSD: p.Reserved3YrHourlyUSD,
+					EffectiveDate:        p.EffectiveDate,
+				}
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	g.Wait()
+
+	if len(resp.Errors) == 0 {
+		resp.Errors = nil
+	}
 }
 
 

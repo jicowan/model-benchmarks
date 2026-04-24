@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   getRun,
-  getMetrics,
+  getRunDetail,
   getExportManifestUrl,
   getExportReportUrl,
-  listInstanceTypes,
-  listPricing,
 } from "../api";
 import type {
   BenchmarkRun,
@@ -21,11 +19,10 @@ import HeroBlock from "../components/HeroBlock";
 import ConfigPanel from "../components/ConfigPanel";
 import PricingToggle from "../components/PricingToggle";
 import {
-  hourlyRateFromMap,
+  hourlyRate,
   costPerRequest,
   costPer1MTokens,
   totalSpent,
-  toPricingMap,
 } from "../lib/cost";
 
 function SectionHeader({
@@ -47,21 +44,21 @@ export default function ResultDetail() {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<BenchmarkRun | null>(null);
   const [metrics, setMetrics] = useState<BenchmarkMetrics | null>(null);
-  const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
-  const [pricing, setPricing] = useState<PricingRow[]>([]);
+  const [instanceType, setInstanceType] = useState<InstanceType | null>(null);
+  const [pricingRow, setPricingRow] = useState<PricingRow | null>(null);
   const [pricingTier, setPricingTier] = useState<PricingTier>("on_demand");
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!id) return;
-    getRun(id).then(setRun).catch((e) => setError(e.message));
-    getMetrics(id)
-      .then(setMetrics)
-      .catch(() => {
-        /* metrics may not exist yet */
-      });
-    listInstanceTypes().then(setInstanceTypes).catch(() => {});
-    listPricing().then(setPricing).catch(() => {});
+    getRunDetail(id, ["metrics", "instance", "pricing"])
+      .then((data) => {
+        setRun(data);
+        setMetrics(data.metrics ?? null);
+        setInstanceType(data.instance ?? null);
+        setPricingRow(data.pricing ?? null);
+      })
+      .catch((e) => setError(e.message));
   }, [id]);
 
   useEffect(() => {
@@ -70,7 +67,14 @@ export default function ResultDetail() {
       getRun(run.id).then((updated) => {
         setRun(updated);
         if (updated.status === "completed") {
-          getMetrics(updated.id).then(setMetrics);
+          getRunDetail(updated.id, ["metrics", "instance", "pricing"]).then(
+            (data) => {
+              setRun(data);
+              setMetrics(data.metrics ?? null);
+              setInstanceType(data.instance ?? null);
+              setPricingRow(data.pricing ?? null);
+            }
+          );
           clearInterval(interval);
         }
         if (updated.status === "failed") clearInterval(interval);
@@ -78,12 +82,6 @@ export default function ResultDetail() {
     }, 5000);
     return () => clearInterval(interval);
   }, [run]);
-
-  const pricingMap = useMemo(() => toPricingMap(pricing), [pricing]);
-  const instanceType = useMemo(
-    () => instanceTypes.find((it) => it.id === run?.instance_type_id),
-    [instanceTypes, run?.instance_type_id]
-  );
 
   if (error) {
     return (
@@ -112,11 +110,7 @@ export default function ResultDetail() {
       ? aggregateTps / acceleratorCount
       : undefined;
 
-  const hourly = hourlyRateFromMap(
-    pricingMap,
-    instanceType?.name ?? "",
-    pricingTier
-  );
+  const hourly = hourlyRate(pricingRow ?? undefined, pricingTier);
   const perRequestCost = costPerRequest(hourly, metrics?.requests_per_second);
   const per1MCost = costPer1MTokens(hourly, aggregateTps);
   // PRD-35: prefer the persisted total_cost_usd (frozen at completion, uses
