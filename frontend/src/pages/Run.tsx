@@ -894,7 +894,7 @@ export default function Run() {
             <span>10</span>
           </div>
           <p className="caption mt-2">
-            Increase if model fails with OOM. Qwen/Mistral often need 4-5 GiB.
+            Increase if model fails with OOM.
           </p>
         </div>
 
