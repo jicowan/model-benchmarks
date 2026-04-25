@@ -334,34 +334,35 @@ export default function Models() {
       <PageHeader path={["accelbench", "models"]} />
 
       <div className="p-6 max-w-[1600px] mx-auto animate-enter">
-        <div className="mb-6 flex items-center gap-3">
-          <div className="flex-1" />
-          <button
-            onClick={() => { setFormMode(formMode === "register" ? "none" : "register"); setFormError(""); }}
-            className={`btn ${formMode === "register" ? "bg-surface-2" : ""}`}
-          >
-            REGISTER S3 MODEL
-          </button>
-          <button
-            onClick={() => { setFormMode(formMode === "cache" ? "none" : "cache"); setFormError(""); }}
-            className={`btn btn-primary ${formMode === "cache" ? "!bg-signal/20" : ""}`}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            CACHE FROM HUGGINGFACE
-          </button>
-        </div>
-        {/* Intro / info */}
+        {/* Intro / info + action buttons aligned with the intro paragraph */}
         <div className="mb-8">
           <div className="eyebrow mb-3">MODEL REGISTRY</div>
           <h1 className="font-sans text-[28px] leading-tight tracking-[-0.01em] max-w-2xl text-balance mb-3">
             Cache HuggingFace weights to S3 or register custom models for benchmarking.
           </h1>
-          <p className="meta max-w-xl">
-            Cached and registered models become available for benchmark runs. Loading from S3 via
-            Run:ai streamer is typically 10–20× faster than pulling from HuggingFace.
-          </p>
+          <div className="flex items-center justify-between gap-6 flex-wrap">
+            <p className="meta max-w-xl">
+              Cached and registered models become available for benchmark runs. Loading from S3 via
+              Run:ai streamer is typically 10–20× faster than pulling from HuggingFace.
+            </p>
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={() => { setFormMode(formMode === "register" ? "none" : "register"); setFormError(""); }}
+                className={`btn ${formMode === "register" ? "bg-surface-2" : ""}`}
+              >
+                REGISTER S3 MODEL
+              </button>
+              <button
+                onClick={() => { setFormMode(formMode === "cache" ? "none" : "cache"); setFormError(""); }}
+                className={`btn btn-primary ${formMode === "cache" ? "!bg-signal/20" : ""}`}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                CACHE FROM HUGGINGFACE
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Stats — driven by the server-side aggregate (PRD-35). */}

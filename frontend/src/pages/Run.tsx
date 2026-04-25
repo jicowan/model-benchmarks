@@ -346,6 +346,19 @@ export default function Run() {
     }, 300);
   }
 
+  // Mirror handleSubmit's payload requirements: model + instance are
+  // always required; single-mode additionally needs scenario + dataset,
+  // suite-mode needs a suite selected. Everything else has defaults or
+  // comes from auto-recommend. Disable the submit button until the
+  // required fields are populated so admins don't hit a server-side
+  // 400 that would land them on an error banner.
+  const canSubmit =
+    form.model_hf_id.trim() !== "" &&
+    form.instance_type_name.trim() !== "" &&
+    (runMode === "suite"
+      ? selectedSuite !== ""
+      : selectedScenario !== "" && selectedDataset !== "");
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -934,7 +947,7 @@ export default function Run() {
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || !canSubmit}
           className="btn btn-primary h-10 px-6 text-[13px]"
         >
           {submitting
