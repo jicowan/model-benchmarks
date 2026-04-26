@@ -1,0 +1,39 @@
+{{- if .Values.pricingRefresh.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "accelbench.fullname" . }}-pricing-seed
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "accelbench.api.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: pricing-seed
+          image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
+          imagePullPolicy: {{ .Values.image.api.pullPolicy }}
+          command: ["/pricingrefresh"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "accelbench.dbSecretName" . }}
+                  key: {{ .Values.database.existingSecretKey | default "DATABASE_URL" }}
+            - name: PRICING_REGIONS
+              value: {{ .Values.pricingRefresh.regions | default "us-east-2" | quote }}
+          resources:
+            {{- toYaml .Values.pricingRefresh.resources | nindent 12 }}
+{{- end }}
