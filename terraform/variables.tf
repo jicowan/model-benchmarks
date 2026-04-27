@@ -59,6 +59,18 @@ variable "dockerhub_access_token" {
   default     = ""
 }
 
+variable "enable_cluster_creator_admin_permissions" {
+  description = <<-EOT
+    Whether the EKS module creates a cluster-admin access entry for the IAM
+    principal running `terraform apply`. Default true (new installs). Set to
+    false on a cluster where that principal already has an access entry
+    outside Terraform — otherwise the apply fails with "access entry already
+    exists".
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "manage_accelbench_namespace" {
   description = <<-EOT
     Whether Terraform should create the `accelbench` namespace and DATABASE_URL

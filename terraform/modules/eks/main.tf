@@ -18,7 +18,9 @@ module "eks" {
   # Automatically grant cluster admin to the IAM principal that creates
   # the cluster (i.e. whoever runs terraform apply). This ensures the
   # Helm and kubectl providers can authenticate during the same apply.
-  enable_cluster_creator_admin_permissions = true
+  # Set to false on clusters where an access entry for the apply principal
+  # already exists outside Terraform.
+  enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
 
   cluster_addons = {
     # vpc-cni and kube-proxy are DaemonSets — they register immediately and
@@ -71,6 +73,12 @@ module "system_node_group" {
   labels = {
     "accelbench/node-type" = "system"
   }
+
+  # Pin the launch-template name_prefix so in-place state migrations from
+  # the bundled eks_managed_node_groups block (which used "<key>-", i.e.
+  # "system-") don't trigger a destroy/replace of the live LT. New installs
+  # are unaffected — a fresh LT is created either way.
+  launch_template_name = "system"
 
   # Wait for DaemonSet addons (especially vpc-cni) before launching nodes
   depends_on = [module.eks.cluster_addons]

@@ -37,6 +37,13 @@
 # another source (shared-services chart, karpenter bootstrap, etc.).
 # install_alb_controller = true
 
+# ---------- Pre-existing cluster compatibility ----------
+# Set to false on a cluster where the IAM principal running `terraform apply`
+# already has a manually created EKS access entry. Otherwise the apply
+# fails with "access entry already exists". Fresh installs leave this at
+# the default (true) so Helm/kubectl providers authenticate on first apply.
+# enable_cluster_creator_admin_permissions = true
+
 # ---------- Bootstrap admin (PRD-44) ----------
 # Creates a Cognito user with custom:role=admin and emails a temporary
 # password on `terraform apply`. Required for fresh installs so there's
