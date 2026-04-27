@@ -156,6 +156,14 @@ func RecommendNeuron(cfg ModelConfig, inst InstanceSpec) *Recommendation {
 		},
 	}
 
+	// Reject embedding / diffusion / classifier models — same reason as the
+	// GPU path: inference-perf only drives /v1/completions + /v1/chat/completions.
+	if reason := isUnsupportedModelKind(cfg); reason != "" {
+		rec.Explanation.Feasible = false
+		rec.Explanation.Reason = reason
+		return rec
+	}
+
 	// Check architecture support
 	if !IsNeuronSupportedArchitecture(cfg.ModelType) {
 		rec.Explanation.Feasible = false

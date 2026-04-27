@@ -536,6 +536,79 @@ func TestTransformersVersionCheck(t *testing.T) {
 	}
 }
 
+func TestRecommendRejectsEmbeddingPipelineTag(t *testing.T) {
+	// ModernBERT-style embedding model — config fields are arbitrary; the
+	// pipeline_tag alone should short-circuit the recommendation.
+	model := ModelConfig{
+		ParameterCount:        149_000_000,
+		HiddenSize:            768,
+		NumAttentionHeads:     12,
+		NumKeyValueHeads:      12,
+		NumHiddenLayers:       22,
+		MaxPositionEmbeddings: 8192,
+		TorchDtype:            "float16",
+		ModelType:             "modernbert",
+		PipelineTag:           "feature-extraction",
+	}
+
+	rec := Recommend(model, g5xlarge, allInstances, RecommendOptions{})
+	if rec.Explanation.Feasible {
+		t.Error("expected infeasible for feature-extraction pipeline tag")
+	}
+	if !strings.Contains(rec.Explanation.Reason, "embedding") {
+		t.Errorf("expected reason to mention embedding, got: %s", rec.Explanation.Reason)
+	}
+}
+
+func TestRecommendRejectsDiffusionPipelineTag(t *testing.T) {
+	model := ModelConfig{
+		ParameterCount: 3_500_000_000,
+		ModelType:      "stable-diffusion-xl",
+		PipelineTag:    "text-to-image",
+	}
+
+	rec := Recommend(model, p5_48xlarge, allInstances, RecommendOptions{})
+	if rec.Explanation.Feasible {
+		t.Error("expected infeasible for text-to-image pipeline tag")
+	}
+	if !strings.Contains(rec.Explanation.Reason, "diffusion") {
+		t.Errorf("expected reason to mention diffusion, got: %s", rec.Explanation.Reason)
+	}
+}
+
+func TestRecommendArchitectureFallback(t *testing.T) {
+	// S3-cached path: no PipelineTag, but architecture name says BertForMaskedLM.
+	model := ModelConfig{
+		ParameterCount:        110_000_000,
+		HiddenSize:            768,
+		NumAttentionHeads:     12,
+		NumKeyValueHeads:      12,
+		NumHiddenLayers:       12,
+		MaxPositionEmbeddings: 512,
+		TorchDtype:            "float32",
+		ModelType:             "bert",
+		Architectures:         []string{"BertForMaskedLM"},
+	}
+
+	rec := Recommend(model, g5xlarge, allInstances, RecommendOptions{})
+	if rec.Explanation.Feasible {
+		t.Error("expected infeasible for BertForMaskedLM architecture without pipeline_tag")
+	}
+}
+
+func TestRecommendTextGenerationTagPasses(t *testing.T) {
+	// Mistral 7B with explicit text-generation tag + architecture — the guard
+	// should allow it through to the memory-sizing logic.
+	model := mistral7B
+	model.PipelineTag = "text-generation"
+	model.Architectures = []string{"MistralForCausalLM"}
+
+	rec := Recommend(model, g5_12xlarge, allInstances, RecommendOptions{})
+	if !rec.Explanation.Feasible {
+		t.Errorf("expected feasible for Mistral 7B on g5.12xlarge, got reason: %s", rec.Explanation.Reason)
+	}
+}
+
 func TestRecommendUnsupportedTransformersVersion(t *testing.T) {
 	// Model that requires transformers 5.x (like Gemma 4 or HybridQwen3)
 	model := ModelConfig{
