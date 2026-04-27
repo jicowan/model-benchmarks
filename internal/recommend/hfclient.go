@@ -35,8 +35,13 @@ type hfModelResponse struct {
 		Total      int64            `json:"total"`
 	} `json:"safetensors"`
 	Config *struct {
-		ModelType string `json:"model_type"`
+		ModelType     string   `json:"model_type"`
+		Architectures []string `json:"architectures"`
 	} `json:"config"`
+	// PipelineTag is the HF pipeline category ("text-generation",
+	// "feature-extraction", "text-to-image", ...). The recommender uses it
+	// to reject non-decoder models that the loadgen can't drive.
+	PipelineTag string `json:"pipeline_tag"`
 	// Gated is false for public models, or "auto"/"manual" for gated models.
 	Gated any `json:"gated"`
 }
@@ -69,15 +74,16 @@ type hfQuantBits struct {
 
 // hfConfigJSON is the subset of a model's config.json we need.
 type hfConfigJSON struct {
-	HiddenSize            int    `json:"hidden_size"`
-	NumAttentionHeads     int    `json:"num_attention_heads"`
-	NumKeyValueHeads      int    `json:"num_key_value_heads"`
-	NumHiddenLayers       int    `json:"num_hidden_layers"`
-	MaxPositionEmbeddings int    `json:"max_position_embeddings"`
-	TorchDtype            string `json:"torch_dtype"`
-	ModelType             string `json:"model_type"`
-	VocabSize             int    `json:"vocab_size"`
-	IntermediateSize      int    `json:"intermediate_size"`
+	HiddenSize            int      `json:"hidden_size"`
+	NumAttentionHeads     int      `json:"num_attention_heads"`
+	NumKeyValueHeads      int      `json:"num_key_value_heads"`
+	NumHiddenLayers       int      `json:"num_hidden_layers"`
+	MaxPositionEmbeddings int      `json:"max_position_embeddings"`
+	TorchDtype            string   `json:"torch_dtype"`
+	ModelType             string   `json:"model_type"`
+	Architectures         []string `json:"architectures"`
+	VocabSize             int      `json:"vocab_size"`
+	IntermediateSize      int      `json:"intermediate_size"`
 
 	// Transformers version required by this model (e.g., "4.45.0", "5.3.0")
 	TransformersVersion string `json:"transformers_version"`
@@ -168,6 +174,13 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 		TorchDtype:            srcCfg.TorchDtype,
 		ModelType:             cr.config.ModelType,             // Keep top-level model_type
 		TransformersVersion:   cr.config.TransformersVersion,   // Keep top-level transformers_version
+		PipelineTag:           mr.model.PipelineTag,
+		Architectures:         cr.config.Architectures,
+	}
+	// Fall back to the architectures advertised on /api/models if config.json
+	// didn't declare them (rare but happens on some older repos).
+	if len(cfg.Architectures) == 0 && mr.model.Config != nil {
+		cfg.Architectures = mr.model.Config.Architectures
 	}
 
 	// Sliding window attention (Mistral, Mixtral, etc.)

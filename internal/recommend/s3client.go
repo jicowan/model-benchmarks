@@ -53,6 +53,10 @@ func FetchModelConfigFromS3(ctx context.Context, s3URI string) (*ModelConfig, er
 		TorchDtype:            srcCfg.TorchDtype,
 		ModelType:             cfg.ModelType,
 		TransformersVersion:   cfg.TransformersVersion,
+		// config.json doesn't carry HF's pipeline_tag, so PipelineTag stays
+		// empty and isUnsupportedModelKind falls back to sniffing
+		// Architectures for *ForMaskedLM / *ForSequenceClassification / etc.
+		Architectures: cfg.Architectures,
 	}
 	if srcCfg.SlidingWindow != nil && *srcCfg.SlidingWindow > 0 {
 		mc.SlidingWindow = *srcCfg.SlidingWindow

@@ -37,6 +37,18 @@ type ModelConfig struct {
 	// TransformersVersion required by this model (from config.json).
 	// Used to detect models that require a newer transformers version than vLLM bundles.
 	TransformersVersion string `json:"transformers_version,omitempty"`
+
+	// PipelineTag from the HuggingFace /api/models response (e.g.
+	// "text-generation", "feature-extraction", "text-to-image"). Used to
+	// reject embedding / diffusion / classifier models that inference-perf
+	// can't drive. Empty when fetched from an S3-cached config (HF pipeline
+	// tag isn't in config.json); callers fall back to architecture sniffing.
+	PipelineTag string `json:"pipeline_tag,omitempty"`
+
+	// Architectures from config.json. Populated alongside ModelType so the
+	// recommender can cross-check for encoder-only / pooling models when
+	// PipelineTag is missing.
+	Architectures []string `json:"architectures,omitempty"`
 }
 
 // InstanceSpec holds GPU specs from the instance_types DB table.
@@ -118,6 +130,70 @@ const (
 	// that vLLM 0.19.0 supports. Models requiring 5.x or higher won't work.
 	maxSupportedTransformersMajor = 4
 )
+
+// unsupportedPipelineTags names HuggingFace pipeline tags that vLLM +
+// inference-perf can't drive through the chat/completion load types the
+// rest of the platform uses. Encoder-only / pooling / diffusion / classifier
+// models expose different endpoints (/v1/embeddings, /pooling, etc.), which
+// the loadgen would POST /v1/completions against and 404 every request.
+var unsupportedPipelineTags = map[string]string{
+	"feature-extraction":             "embedding",
+	"sentence-similarity":            "embedding",
+	"fill-mask":                      "masked language model",
+	"text-classification":            "text classifier",
+	"token-classification":           "token classifier",
+	"zero-shot-classification":       "zero-shot classifier",
+	"text-to-image":                  "diffusion",
+	"image-to-image":                 "diffusion",
+	"text-to-video":                  "diffusion",
+	"image-to-video":                 "diffusion",
+	"text-to-3d":                     "diffusion",
+	"image-to-3d":                    "diffusion",
+	"unconditional-image-generation": "diffusion",
+	"text-to-audio":                  "audio",
+	"text-to-speech":                 "audio",
+	"automatic-speech-recognition":   "audio",
+	"audio-to-audio":                 "audio",
+	"image-classification":           "vision classifier",
+	"object-detection":               "vision",
+	"image-segmentation":             "vision",
+	"depth-estimation":               "vision",
+}
+
+// isUnsupportedModelKind returns a human-readable reason if the model isn't a
+// decoder-only LLM that vLLM + inference-perf's chat/completion load types can
+// drive. Relies on PipelineTag when present (fetched from HF), falls back to
+// architecture-name heuristics for S3-cached configs where the tag is missing.
+// Returns "" if the model is supported or undeterminable.
+func isUnsupportedModelKind(cfg ModelConfig) string {
+	if cfg.PipelineTag != "" {
+		if kind, bad := unsupportedPipelineTags[cfg.PipelineTag]; bad {
+			return fmt.Sprintf("Model pipeline tag is %q (%s). This platform benchmarks decoder-only LLMs via /v1/completions or /v1/chat/completions — %s models expose different endpoints that inference-perf can't drive.",
+				cfg.PipelineTag, kind, kind)
+		}
+		// Explicit text-generation tag: trust and continue.
+		if cfg.PipelineTag == "text-generation" {
+			return ""
+		}
+	}
+	// Fallback for S3-cached models or untagged repos: sniff architecture names.
+	// Pooling / embedding models almost always declare an architecture whose
+	// name ends in "Model" (e.g. BertModel, ModernBertModel, XLMRobertaModel),
+	// whereas decoder LMs end in "ForCausalLM" / "LMHeadModel".
+	for _, arch := range cfg.Architectures {
+		low := strings.ToLower(arch)
+		if strings.Contains(low, "forcausallm") || strings.Contains(low, "lmheadmodel") {
+			return "" // Clearly a causal LM.
+		}
+		if strings.HasSuffix(low, "formaskedlm") ||
+			strings.HasSuffix(low, "forsequenceclassification") ||
+			strings.HasSuffix(low, "fortokenclassification") ||
+			strings.HasSuffix(low, "forquestionanswering") {
+			return fmt.Sprintf("Model architecture %q is not a decoder-only LLM. This platform benchmarks generative models only.", arch)
+		}
+	}
+	return ""
+}
 
 // isTransformersVersionUnsupported checks if the model requires a transformers
 // version that's too new for the current vLLM version.
@@ -312,6 +388,29 @@ func DefaultOverheadGiB(cfg ModelConfig) float64 {
 // Recommend computes configuration recommendations given model and instance specs.
 // allInstances is used to suggest a larger instance when the model doesn't fit.
 func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, opts RecommendOptions) *Recommendation {
+	// Reject embedding / diffusion / classifier models up front — the loadgen
+	// only drives /v1/completions and /v1/chat/completions, which these
+	// architectures don't expose.
+	if reason := isUnsupportedModelKind(cfg); reason != "" {
+		return &Recommendation{
+			ModelInfo: ModelInfo{
+				ParameterCount:        cfg.ParameterCount,
+				NativeDtype:           nativeDtype(cfg),
+				MaxPositionEmbeddings: cfg.MaxPositionEmbeddings,
+				Architecture:          cfg.ModelType,
+			},
+			InstanceInfo: InstanceInfo{
+				AcceleratorCount:     inst.AcceleratorCount,
+				AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,
+				AcceleratorName:      inst.AcceleratorName,
+			},
+			Explanation: Explanation{
+				Feasible: false,
+				Reason:   reason,
+			},
+		}
+	}
+
 	// Check if the model requires a transformers version that's too new for vLLM.
 	// maxSupportedTransformersMajor is a hardcoded constant (4) — bump it and
 	// remove this comment when vLLM ships a release that supports transformers 5.x.
