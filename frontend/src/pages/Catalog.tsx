@@ -115,29 +115,24 @@ export default function Catalog() {
   const handleSeed = async () => {
     setSeedError(null);
 
-    // Estimate how many new benchmarks will run so the confirm dialog can
-    // warn about cost. Matrix total = enabled_models × enabled_instances.
-    // Already-done is the catalog endpoint's total count (completed,
-    // non-superseded runs). The seeder dedupes server-side; this is
-    // approximate.
+    // Matrix total = enabled_models × enabled_instances. The seeder skips
+    // (model, instance) pairs that already have a run server-side, so the
+    // actual number submitted may be lower.
     let matrixTotal = 0;
-    let estimatedNew = 0;
     try {
       const matrix = await getCatalogMatrix();
       const models = matrix.models.filter((m) => m.enabled).length;
       const instances = matrix.instance_types.filter((i) => i.enabled).length;
       matrixTotal = models * instances;
-      estimatedNew = Math.max(0, matrixTotal - total);
     } catch {
-      // If we can't fetch the matrix, fall through with zeros — the warning
-      // still appears but without numbers.
+      // If we can't fetch the matrix, fall through without numbers.
     }
 
     const lines = [
       "Seed benchmarks?",
       "",
       matrixTotal > 0
-        ? `This will queue up to ~${estimatedNew} new benchmark(s) from a matrix of ${matrixTotal} (model × instance) combinations. Pairs with an existing run are skipped.`
+        ? `This will queue up to ${matrixTotal} new benchmark(s) from a matrix of ${matrixTotal} (model × instance) combinations. Pairs with an existing run are skipped.`
         : "This will queue benchmark runs for every enabled (model × instance) combination in the catalog matrix.",
       "",
       "Each benchmark provisions GPU/Neuron capacity via Karpenter for several minutes. This can incur significant AWS costs.",

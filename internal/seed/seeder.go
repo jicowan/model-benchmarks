@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/recommend"
@@ -25,7 +26,10 @@ type Repo interface {
 	GetToolVersions(ctx context.Context) (*database.ToolVersions, error)
 	ModelCacheByHfID(ctx context.Context) (map[string]database.ModelCache, error)
 	ListRunKeys(ctx context.Context) ([]database.RunKey, error)
-	GetInstanceTypeByName(ctx context.Context, name string) (*database.InstanceType, error)
+	// ListInstanceTypes returns every GPU/Neuron instance type known to the
+	// platform. Used by the recommender's larger-instance fallback logic,
+	// which the seeder invokes per (model, instance) pair.
+	ListInstanceTypes(ctx context.Context) ([]database.InstanceType, error)
 
 	CreateCatalogSeedStatus(ctx context.Context, id string, total int, dryRun bool) error
 	UpdateCatalogSeedProgress(ctx context.Context, id string, completed int) error
@@ -130,6 +134,29 @@ func (s *Seeder) run(id string, opts Options) {
 		return
 	}
 
+	// Snapshot every known instance type once — the recommender's
+	// larger-instance fallback scans this list.
+	allInstTypes, err := s.repo.ListInstanceTypes(ctx)
+	if err != nil {
+		s.finish(ctx, id, fmt.Errorf("list instance types: %w", err))
+		return
+	}
+	allSpecs := make([]recommend.InstanceSpec, 0, len(allInstTypes))
+	for _, it := range allInstTypes {
+		allSpecs = append(allSpecs, recommend.InstanceSpec{
+			Name:                 it.Name,
+			AcceleratorType:      it.AcceleratorType,
+			AcceleratorName:      it.AcceleratorName,
+			AcceleratorCount:     it.AcceleratorCount,
+			AcceleratorMemoryGiB: it.AcceleratorMemoryGiB,
+			MemoryGiB:            it.MemoryGiB,
+		})
+	}
+	specByName := make(map[string]recommend.InstanceSpec, len(allSpecs))
+	for _, sp := range allSpecs {
+		specByName[sp.Name] = sp
+	}
+
 	completed := 0
 	for _, m := range matrix.Models {
 		if !m.Enabled {
@@ -144,14 +171,12 @@ func (s *Seeder) run(id string, opts Options) {
 			s3URI = c.S3URI
 		}
 
-		// Fetch model config once per model. The recommender needs it but the
-		// RunRequest we build doesn't — the orchestrator re-fetches downstream.
-		// We still need a successful config fetch to validate the model is
-		// accessible; if not, log and skip this model's entire row.
-		if _, err := s.deps.FetchModelConfig(ctx, m.HfID, opts.HfToken); err != nil {
+		// Fetch model config once per model — the recommender consumes it for
+		// every (model, instance) pair below. If the fetch fails (HF 401,
+		// gated model, etc.), log and skip the model's entire row.
+		modelCfg, err := s.deps.FetchModelConfig(ctx, m.HfID, opts.HfToken)
+		if err != nil {
 			log.Printf("seed %s: skipping model %s: fetch config: %v", id, m.HfID, err)
-			// Advance the counter for all instance-type iterations we skipped
-			// so progress doesn't look stuck.
 			for _, it := range matrix.InstanceTypes {
 				if it.Enabled {
 					completed++
@@ -172,23 +197,55 @@ func (s *Seeder) run(id string, opts Options) {
 				continue
 			}
 
+			inst, ok := specByName[it.Name]
+			if !ok {
+				log.Printf("seed %s: skipping %s × %s: unknown instance type", id, m.HfID, it.Name)
+				_ = s.repo.UpdateCatalogSeedProgress(ctx, id, completed)
+				continue
+			}
+
+			var rec *recommend.Recommendation
+			if strings.EqualFold(inst.AcceleratorType, "neuron") {
+				rec = recommend.RecommendNeuron(*modelCfg, inst)
+			} else {
+				rec = recommend.Recommend(*modelCfg, inst, allSpecs, recommend.RecommendOptions{
+					VLLMVersion: tv.FrameworkVersion,
+				})
+			}
+			if rec == nil || !rec.Explanation.Feasible {
+				reason := "unknown"
+				if rec != nil && rec.Explanation.Reason != "" {
+					reason = rec.Explanation.Reason
+				}
+				log.Printf("seed %s: skipping %s × %s: infeasible (%s)", id, m.HfID, it.Name, reason)
+				_ = s.repo.UpdateCatalogSeedProgress(ctx, id, completed)
+				continue
+			}
+
 			if opts.DryRun {
-				log.Printf("seed %s: DRY RUN would submit %s × %s", id, m.HfID, it.Name)
+				log.Printf("seed %s: DRY RUN would submit %s × %s (TP=%d, concurrency=%d)",
+					id, m.HfID, it.Name, rec.TensorParallelDegree, rec.Concurrency)
 				_ = s.repo.UpdateCatalogSeedProgress(ctx, id, completed)
 				continue
 			}
 
 			req := &database.RunRequest{
-				ModelHfID:        m.HfID,
-				ModelHfRevision:  "main",
-				InstanceTypeName: it.Name,
-				Framework:        frameworkFor(it.Name),
-				FrameworkVersion: tv.FrameworkVersion,
-				DatasetName:      matrix.Defaults.Dataset,
-				RunType:          "catalog",
-				ScenarioID:       matrix.Defaults.Scenario,
-				ModelS3URI:       s3URI,
-				HfToken:          opts.HfToken,
+				ModelHfID:            m.HfID,
+				ModelHfRevision:      "main",
+				InstanceTypeName:     it.Name,
+				Framework:            frameworkFor(it.Name),
+				FrameworkVersion:     tv.FrameworkVersion,
+				TensorParallelDegree: rec.TensorParallelDegree,
+				Quantization:         rec.Quantization,
+				Concurrency:          rec.Concurrency,
+				InputSequenceLength:  rec.InputSequenceLength,
+				OutputSequenceLength: rec.OutputSequenceLength,
+				MaxModelLen:          rec.MaxModelLen,
+				DatasetName:          matrix.Defaults.Dataset,
+				RunType:              "catalog",
+				ScenarioID:           matrix.Defaults.Scenario,
+				ModelS3URI:           s3URI,
+				HfToken:              opts.HfToken,
 			}
 
 			if _, err := s.deps.CreateRun(ctx, req); err != nil {
