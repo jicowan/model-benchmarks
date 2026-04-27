@@ -83,6 +83,12 @@ module "eks" {
   vpc_id             = module.vpc.vpc_id
   private_subnet_ids = module.vpc.private_subnets
 
+  # Our original cluster was bootstrapped with an access entry for
+  # user/kubernetes created outside Terraform; enabling the module's
+  # cluster-creator admin would try to create a duplicate. New installs
+  # leave this at its default (true).
+  enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
+
   tags = local.tags
 }
 
