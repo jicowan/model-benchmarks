@@ -14,15 +14,16 @@ import (
 // fakeRepo is a minimal Repo implementation for tests. Only covers the
 // methods the seeder touches.
 type fakeRepo struct {
-	mu          sync.Mutex
-	matrix      *database.CatalogMatrix
-	cache       map[string]database.ModelCache
-	runKeys     []database.RunKey
-	activeSeed  *database.CatalogSeedStatus
-	seedCreated string
-	progress    []int
-	completed   bool
-	failedErr   string
+	mu            sync.Mutex
+	matrix        *database.CatalogMatrix
+	cache         map[string]database.ModelCache
+	runKeys       []database.RunKey
+	instanceTypes []database.InstanceType
+	activeSeed    *database.CatalogSeedStatus
+	seedCreated   string
+	progress      []int
+	completed     bool
+	failedErr     string
 }
 
 func (f *fakeRepo) LoadCatalogMatrix(_ context.Context) (*database.CatalogMatrix, error) {
@@ -40,8 +41,8 @@ func (f *fakeRepo) ModelCacheByHfID(_ context.Context) (map[string]database.Mode
 func (f *fakeRepo) ListRunKeys(_ context.Context) ([]database.RunKey, error) {
 	return f.runKeys, nil
 }
-func (f *fakeRepo) GetInstanceTypeByName(_ context.Context, name string) (*database.InstanceType, error) {
-	return &database.InstanceType{Name: name, ID: "it-" + name}, nil
+func (f *fakeRepo) ListInstanceTypes(_ context.Context) ([]database.InstanceType, error) {
+	return f.instanceTypes, nil
 }
 func (f *fakeRepo) CreateCatalogSeedStatus(_ context.Context, id string, total int, dryRun bool) error {
 	f.mu.Lock()
@@ -93,7 +94,21 @@ func (f *fakeDeps) FetchModelConfig(_ context.Context, modelID, _ string) (*reco
 	if f.fetchErr != nil {
 		return nil, f.fetchErr
 	}
-	return &recommend.ModelConfig{}, nil
+	// Return a small, feasible-on-any-GPU model config so recommend.Recommend
+	// produces non-zero TP/concurrency. Real tests of the recommender live in
+	// internal/recommend; these seeder tests only care that the recommendation
+	// is passed through into the RunRequest.
+	return &recommend.ModelConfig{
+		ParameterCount:        7_000_000_000, // 7B
+		HiddenSize:            4096,
+		NumAttentionHeads:     32,
+		NumKeyValueHeads:      32,
+		NumHiddenLayers:       32,
+		MaxPositionEmbeddings: 8192,
+		IntermediateSize:      14336,
+		TorchDtype:            "bfloat16",
+		ModelType:             "llama",
+	}, nil
 }
 func (f *fakeDeps) CreateRun(_ context.Context, req *database.RunRequest) (string, error) {
 	f.mu.Lock()
@@ -123,6 +138,16 @@ func simpleMatrix() *database.CatalogMatrix {
 	}
 }
 
+// simpleInstanceTypes mirrors the matrix's instance names with specs that
+// comfortably fit the 7B fake model in fakeDeps.FetchModelConfig, so
+// recommend.Recommend returns a feasible plan and the seeder submits runs.
+func simpleInstanceTypes() []database.InstanceType {
+	return []database.InstanceType{
+		{Name: "g6e.xlarge", AcceleratorType: "gpu", AcceleratorName: "L40S", AcceleratorCount: 1, AcceleratorMemoryGiB: 48, VCPUs: 4, MemoryGiB: 32},
+		{Name: "p5.48xlarge", AcceleratorType: "gpu", AcceleratorName: "H100", AcceleratorCount: 8, AcceleratorMemoryGiB: 640, VCPUs: 192, MemoryGiB: 2048},
+	}
+}
+
 // waitForSeed polls repo until the seed is no longer active.
 func waitForSeed(t *testing.T, r *fakeRepo) {
 	t.Helper()
@@ -140,7 +165,7 @@ func waitForSeed(t *testing.T, r *fakeRepo) {
 }
 
 func TestSeeder_DryRunCreatesNoRuns(t *testing.T) {
-	repo := &fakeRepo{matrix: simpleMatrix()}
+	repo := &fakeRepo{matrix: simpleMatrix(), instanceTypes: simpleInstanceTypes()}
 	deps := &fakeDeps{}
 	s := New(repo, deps, "test-pod")
 
@@ -168,7 +193,8 @@ func TestSeeder_CachedModelPopulatesS3URI(t *testing.T) {
 	cached := "s3://accelbench-models-820537372947/meta-llama/Llama-3.1-8B-Instruct"
 	hf := "meta-llama/Llama-3.1-8B-Instruct"
 	repo := &fakeRepo{
-		matrix: simpleMatrix(),
+		matrix:        simpleMatrix(),
+		instanceTypes: simpleInstanceTypes(),
 		cache: map[string]database.ModelCache{
 			hf: {HfID: &hf, S3URI: cached, Status: "cached"},
 		},
@@ -208,7 +234,8 @@ func TestSeeder_CachedModelPopulatesS3URI(t *testing.T) {
 
 func TestSeeder_DedupsAgainstExistingRuns(t *testing.T) {
 	repo := &fakeRepo{
-		matrix: simpleMatrix(),
+		matrix:        simpleMatrix(),
+		instanceTypes: simpleInstanceTypes(),
 		runKeys: []database.RunKey{
 			// Model 1 × instance 1 already exists — skip it.
 			{ModelHfID: "meta-llama/Llama-3.1-8B-Instruct", InstanceTypeName: "g6e.xlarge"},
@@ -246,7 +273,7 @@ func TestSeeder_RejectsConcurrentStart(t *testing.T) {
 }
 
 func TestSeeder_FetchConfigErrorSkipsModelRow(t *testing.T) {
-	repo := &fakeRepo{matrix: simpleMatrix()}
+	repo := &fakeRepo{matrix: simpleMatrix(), instanceTypes: simpleInstanceTypes()}
 	deps := &fakeDeps{fetchErr: errors.New("HF 401")}
 	s := New(repo, deps, "test-pod")
 
@@ -266,11 +293,107 @@ func TestSeeder_FetchConfigErrorSkipsModelRow(t *testing.T) {
 	}
 }
 
+func TestSeeder_PopulatesRecommendation(t *testing.T) {
+	repo := &fakeRepo{matrix: simpleMatrix(), instanceTypes: simpleInstanceTypes()}
+	deps := &fakeDeps{}
+	s := New(repo, deps, "test-pod")
+
+	_, err := s.Start(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForSeed(t, repo)
+
+	if len(deps.created) == 0 {
+		t.Fatal("expected at least one run to be created")
+	}
+	for _, req := range deps.created {
+		if req.TensorParallelDegree < 1 {
+			t.Errorf("%s × %s: TensorParallelDegree=%d, want >=1",
+				req.ModelHfID, req.InstanceTypeName, req.TensorParallelDegree)
+		}
+		if req.Concurrency < 1 {
+			t.Errorf("%s × %s: Concurrency=%d, want >=1",
+				req.ModelHfID, req.InstanceTypeName, req.Concurrency)
+		}
+		if req.InputSequenceLength == 0 || req.OutputSequenceLength == 0 {
+			t.Errorf("%s × %s: sequence lengths zero (ISL=%d OSL=%d)",
+				req.ModelHfID, req.InstanceTypeName,
+				req.InputSequenceLength, req.OutputSequenceLength)
+		}
+	}
+}
+
+func TestSeeder_SkipsInfeasiblePair(t *testing.T) {
+	matrix := &database.CatalogMatrix{
+		Defaults: database.CatalogSeedDefaults{Scenario: "chatbot", Dataset: "synthetic"},
+		Models: []database.CatalogModel{
+			{HfID: "meta-llama/Llama-3.1-405B-Instruct", Enabled: true},
+		},
+		InstanceTypes: []database.CatalogInstanceType{
+			// Tiny GPU that can't hold a 405B model at any quantization.
+			{Name: "g6.xlarge", Enabled: true},
+		},
+	}
+	repo := &fakeRepo{
+		matrix: matrix,
+		instanceTypes: []database.InstanceType{
+			{Name: "g6.xlarge", AcceleratorType: "gpu", AcceleratorName: "L4", AcceleratorCount: 1, AcceleratorMemoryGiB: 24, VCPUs: 4, MemoryGiB: 16},
+		},
+	}
+	// Override FetchModelConfig to return a 405B config that won't fit on L4.
+	deps := &fakeDepsWithConfig{cfg: &recommend.ModelConfig{
+		ParameterCount:        405_000_000_000,
+		HiddenSize:             16384,
+		NumAttentionHeads:      128,
+		NumKeyValueHeads:       8,
+		NumHiddenLayers:        126,
+		MaxPositionEmbeddings:  131072,
+		IntermediateSize:       53248,
+		TorchDtype:             "bfloat16",
+		ModelType:              "llama",
+	}}
+	s := New(repo, deps, "test-pod")
+
+	_, err := s.Start(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForSeed(t, repo)
+
+	if !repo.completed {
+		t.Fatalf("seed should complete even when all pairs are infeasible: %v", repo.failedErr)
+	}
+	if len(deps.created) != 0 {
+		t.Errorf("expected 0 runs for infeasible pair, got %d", len(deps.created))
+	}
+}
+
+// fakeDepsWithConfig is a ServerDeps that returns a caller-supplied
+// ModelConfig from FetchModelConfig. Used to exercise edge cases (e.g. an
+// oversized model) without rebuilding all of fakeDeps.
+type fakeDepsWithConfig struct {
+	mu      sync.Mutex
+	cfg     *recommend.ModelConfig
+	created []*database.RunRequest
+}
+
+func (f *fakeDepsWithConfig) FetchModelConfig(_ context.Context, _, _ string) (*recommend.ModelConfig, error) {
+	return f.cfg, nil
+}
+func (f *fakeDepsWithConfig) CreateRun(_ context.Context, req *database.RunRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *req
+	f.created = append(f.created, &cp)
+	return "run-fake", nil
+}
+
 func TestSeeder_DisabledRowsSkipped(t *testing.T) {
 	m := simpleMatrix()
 	m.Models[1].Enabled = false       // Phi-4 disabled
 	m.InstanceTypes[1].Enabled = false // p5 disabled
-	repo := &fakeRepo{matrix: m}
+	repo := &fakeRepo{matrix: m, instanceTypes: simpleInstanceTypes()}
 	deps := &fakeDeps{}
 	s := New(repo, deps, "test-pod")
 
