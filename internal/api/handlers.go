@@ -191,6 +191,7 @@ func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// --- Public: auth endpoints that must work before the user has a token ---
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /api/v1/auth/respond-challenge", s.handleAuthRespondChallenge)
 	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleAuthRefresh)
 
 	// --- Protected: wrapped in auth.Middleware ---

@@ -22,9 +22,10 @@ import (
 
 // mockIDP implements CognitoIDP for tests.
 type mockIDP struct {
-	initiateAuth    func(context.Context, *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error)
-	globalSignOut   func(context.Context, *cip.GlobalSignOutInput) (*cip.GlobalSignOutOutput, error)
-	gotSignOutToken string
+	initiateAuth           func(context.Context, *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error)
+	respondToAuthChallenge func(context.Context, *cip.RespondToAuthChallengeInput) (*cip.RespondToAuthChallengeOutput, error)
+	globalSignOut          func(context.Context, *cip.GlobalSignOutInput) (*cip.GlobalSignOutOutput, error)
+	gotSignOutToken        string
 
 	// PRD-45 admin-user hooks; any nil fallback returns an empty struct so
 	// tests that never touch them don't need to wire boilerplate.
@@ -40,6 +41,13 @@ type mockIDP struct {
 
 func (m *mockIDP) InitiateAuth(ctx context.Context, in *cip.InitiateAuthInput, _ ...func(*cip.Options)) (*cip.InitiateAuthOutput, error) {
 	return m.initiateAuth(ctx, in)
+}
+
+func (m *mockIDP) RespondToAuthChallenge(ctx context.Context, in *cip.RespondToAuthChallengeInput, _ ...func(*cip.Options)) (*cip.RespondToAuthChallengeOutput, error) {
+	if m.respondToAuthChallenge != nil {
+		return m.respondToAuthChallenge(ctx, in)
+	}
+	return &cip.RespondToAuthChallengeOutput{}, nil
 }
 
 func (m *mockIDP) GlobalSignOut(ctx context.Context, in *cip.GlobalSignOutInput, _ ...func(*cip.Options)) (*cip.GlobalSignOutOutput, error) {
@@ -232,6 +240,141 @@ func TestAuthLogin_UserNotFound_MasksTo401(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(w.Body.String()), "user") {
 		t.Errorf("body leaks user info: %s", w.Body.String())
+	}
+}
+
+func TestAuthLogin_NewPasswordRequired_ReturnsChallenge(t *testing.T) {
+	_, idp, mux := setupAuthServer()
+	idp.initiateAuth = func(_ context.Context, _ *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error) {
+		// Cognito emits this for invited users on their first sign-in.
+		return &cip.InitiateAuthOutput{
+			ChallengeName: types.ChallengeNameTypeNewPasswordRequired,
+			Session:       aws.String("cognito-session-blob"),
+		}, nil
+	}
+	body, _ := json.Marshal(map[string]string{"email": "new@example.com", "password": "Temp!Pass1"})
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var resp loginChallengeResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.Challenge != "new_password_required" {
+		t.Errorf("challenge = %q", resp.Challenge)
+	}
+	if resp.Session != "cognito-session-blob" {
+		t.Errorf("session = %q", resp.Session)
+	}
+	if resp.Email != "new@example.com" {
+		t.Errorf("email = %q", resp.Email)
+	}
+	// No auth cookies should have been set — the session isn't authenticated yet.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == accessCookieName && c.Value != "" {
+			t.Errorf("access cookie unexpectedly set during challenge")
+		}
+	}
+}
+
+// ---------- Respond to challenge ----------
+
+func TestAuthRespondChallenge_Good_SetsCookies(t *testing.T) {
+	_, idp, mux := setupAuthServer()
+	idp.respondToAuthChallenge = func(_ context.Context, in *cip.RespondToAuthChallengeInput) (*cip.RespondToAuthChallengeOutput, error) {
+		if in.ChallengeName != types.ChallengeNameTypeNewPasswordRequired {
+			t.Errorf("challenge = %q", in.ChallengeName)
+		}
+		if aws.ToString(in.Session) != "cognito-session-blob" {
+			t.Errorf("session = %q", aws.ToString(in.Session))
+		}
+		if in.ChallengeResponses["NEW_PASSWORD"] != "N3wP@ssw0rd!" {
+			t.Errorf("NEW_PASSWORD = %q", in.ChallengeResponses["NEW_PASSWORD"])
+		}
+		return &cip.RespondToAuthChallengeOutput{
+			AuthenticationResult: &types.AuthenticationResultType{
+				AccessToken:  aws.String("access-tok"),
+				IdToken:      aws.String(buildFakeIDToken("new@example.com", "user")),
+				RefreshToken: aws.String("refresh-tok"),
+				ExpiresIn:    3600,
+			},
+		}, nil
+	}
+	body, _ := json.Marshal(map[string]string{
+		"challenge":    "new_password_required",
+		"session":      "cognito-session-blob",
+		"email":        "new@example.com",
+		"new_password": "N3wP@ssw0rd!",
+	})
+	req := httptest.NewRequest("POST", "/api/v1/auth/respond-challenge", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	names := map[string]string{}
+	for _, c := range w.Result().Cookies() {
+		names[c.Name] = c.Value
+	}
+	if names[accessCookieName] != "access-tok" {
+		t.Errorf("access cookie = %q", names[accessCookieName])
+	}
+	var resp authMeResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.Email != "new@example.com" || resp.Role != "user" {
+		t.Errorf("body = %+v", resp)
+	}
+}
+
+func TestAuthRespondChallenge_BadPassword_Returns400(t *testing.T) {
+	_, idp, mux := setupAuthServer()
+	idp.respondToAuthChallenge = func(_ context.Context, _ *cip.RespondToAuthChallengeInput) (*cip.RespondToAuthChallengeOutput, error) {
+		return nil, mockAPIErr("InvalidPasswordException")
+	}
+	body, _ := json.Marshal(map[string]string{
+		"challenge":    "new_password_required",
+		"session":      "blob",
+		"email":        "x@y.com",
+		"new_password": "weak",
+	})
+	req := httptest.NewRequest("POST", "/api/v1/auth/respond-challenge", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "invalid_password") {
+		t.Errorf("body missing invalid_password: %s", w.Body.String())
+	}
+}
+
+func TestAuthRespondChallenge_UnsupportedChallenge_Returns400(t *testing.T) {
+	_, _, mux := setupAuthServer()
+	body, _ := json.Marshal(map[string]string{
+		"challenge":    "sms_mfa",
+		"session":      "blob",
+		"email":        "x@y.com",
+		"new_password": "N3wP@ssw0rd!",
+	})
+	req := httptest.NewRequest("POST", "/api/v1/auth/respond-challenge", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "unsupported_challenge") {
+		t.Errorf("body = %s", w.Body.String())
 	}
 }
 
