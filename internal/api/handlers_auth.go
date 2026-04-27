@@ -22,6 +22,7 @@ import (
 // auth methods; PRD-45 added the eight admin-user-management methods.
 type CognitoIDP interface {
 	InitiateAuth(ctx context.Context, in *cip.InitiateAuthInput, optFns ...func(*cip.Options)) (*cip.InitiateAuthOutput, error)
+	RespondToAuthChallenge(ctx context.Context, in *cip.RespondToAuthChallengeInput, optFns ...func(*cip.Options)) (*cip.RespondToAuthChallengeOutput, error)
 	GlobalSignOut(ctx context.Context, in *cip.GlobalSignOutInput, optFns ...func(*cip.Options)) (*cip.GlobalSignOutOutput, error)
 
 	ListUsers(ctx context.Context, in *cip.ListUsersInput, optFns ...func(*cip.Options)) (*cip.ListUsersOutput, error)
@@ -57,6 +58,23 @@ type authMeResponse struct {
 	Role  string `json:"role"`
 }
 
+// loginChallengeResponse is returned by /auth/login when Cognito requires
+// a follow-up challenge (e.g. NEW_PASSWORD_REQUIRED for invited users).
+// The client presents the right form, then posts to /auth/respond-challenge
+// with session + the challenge-specific inputs.
+type loginChallengeResponse struct {
+	Challenge string `json:"challenge"`
+	Session   string `json:"session"`
+	Email     string `json:"email"`
+}
+
+type respondChallengeRequest struct {
+	Challenge   string `json:"challenge"`
+	Session     string `json:"session"`
+	Email       string `json:"email"`
+	NewPassword string `json:"new_password"`
+}
+
 // handleAuthLogin authenticates a user with USER_PASSWORD_AUTH and sets
 // three HttpOnly cookies (ID, access, refresh). Returns {email, role}
 // in the body for immediate UI use.
@@ -88,8 +106,18 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if out.AuthenticationResult == nil {
-		// Challenge flows (NEW_PASSWORD_REQUIRED, SMS_MFA, etc.) land here.
-		// Out of scope for PRD-43; operator resets via console.
+		// Challenge flows. The only one AccelBench supports end-to-end is
+		// NEW_PASSWORD_REQUIRED — invited users hit this on first login with
+		// their temporary password. Other challenges (SMS_MFA, etc.) fall
+		// through to a generic error; Cognito isn't configured to emit them.
+		if out.ChallengeName == types.ChallengeNameTypeNewPasswordRequired {
+			writeJSON(w, http.StatusOK, loginChallengeResponse{
+				Challenge: "new_password_required",
+				Session:   aws.ToString(out.Session),
+				Email:     req.Email,
+			})
+			return
+		}
 		writeError(w, http.StatusForbidden, "challenge_required")
 		return
 	}
@@ -99,6 +127,54 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	// Decode the ID token (without verification — we just got it back
 	// from Cognito over TLS, we trust it) to extract sub + email + role
 	// for the response body.
+	sub, email, role := decodeIDTokenClaims(aws.ToString(out.AuthenticationResult.IdToken))
+	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
+}
+
+// handleAuthRespondChallenge finishes a login flow that /auth/login left in
+// a challenge state. Only NEW_PASSWORD_REQUIRED is supported. On success,
+// behaves identically to a normal login: cookies + {sub, email, role}.
+func (s *Server) handleAuthRespondChallenge(w http.ResponseWriter, r *http.Request) {
+	if s.cognitoIDP == nil {
+		writeError(w, http.StatusServiceUnavailable, "auth_unavailable")
+		return
+	}
+	var req respondChallengeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if req.Challenge != "new_password_required" {
+		writeError(w, http.StatusBadRequest, "unsupported_challenge")
+		return
+	}
+	if req.Session == "" || req.Email == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields")
+		return
+	}
+
+	out, err := s.cognitoIDP.RespondToAuthChallenge(r.Context(), &cip.RespondToAuthChallengeInput{
+		ClientId:      aws.String(s.authConfig.ClientID),
+		ChallengeName: types.ChallengeNameTypeNewPasswordRequired,
+		Session:       aws.String(req.Session),
+		ChallengeResponses: map[string]string{
+			"USERNAME":     req.Email,
+			"NEW_PASSWORD": req.NewPassword,
+		},
+	})
+	if err != nil {
+		mapCognitoAuthError(w, err)
+		return
+	}
+	if out.AuthenticationResult == nil {
+		// Multi-step challenges aren't expected for AccelBench's pool
+		// config. Fail loudly rather than silently handing the client
+		// another session.
+		writeError(w, http.StatusForbidden, "challenge_required")
+		return
+	}
+
+	setAuthCookies(w, out.AuthenticationResult)
 	sub, email, role := decodeIDTokenClaims(aws.ToString(out.AuthenticationResult.IdToken))
 	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
 }
@@ -223,6 +299,11 @@ func mapCognitoAuthError(w http.ResponseWriter, err error) {
 			return
 		case "PasswordResetRequiredException":
 			writeError(w, http.StatusForbidden, "password_reset_required")
+			return
+		case "InvalidPasswordException", "InvalidParameterException":
+			// Surfaces when NEW_PASSWORD_REQUIRED gets a password that
+			// violates the pool's policy (length, symbols, etc.).
+			writeError(w, http.StatusBadRequest, "invalid_password")
 			return
 		}
 	}

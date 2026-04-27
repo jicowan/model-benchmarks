@@ -83,7 +83,12 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 function isAuthEndpoint(url: string): boolean {
-  return url.includes("/auth/login") || url.includes("/auth/refresh") || url.includes("/auth/logout");
+  return (
+    url.includes("/auth/login") ||
+    url.includes("/auth/refresh") ||
+    url.includes("/auth/logout") ||
+    url.includes("/auth/respond-challenge")
+  );
 }
 
 // trySilentRefresh returns true if the refresh call returned 2xx.
@@ -107,11 +112,45 @@ function redirectToLogin() {
 
 // PRD-43: auth endpoints.
 
-export async function authLogin(email: string, password: string): Promise<AuthUser> {
-  return fetchJSON<AuthUser>(`${BASE}/auth/login`, {
+// authLogin returns a discriminated union: either an authenticated user
+// (the common case) or a challenge. Invited users hit the challenge path
+// with Cognito's NEW_PASSWORD_REQUIRED on first sign-in; the UI shows a
+// "set new password" form and posts the answer to authRespondChallenge.
+export type LoginChallenge = {
+  challenge: "new_password_required";
+  session: string;
+  email: string;
+};
+
+export type LoginResult =
+  | { kind: "user"; user: AuthUser }
+  | { kind: "challenge"; challenge: LoginChallenge };
+
+export async function authLogin(email: string, password: string): Promise<LoginResult> {
+  const body = await fetchJSON<AuthUser | LoginChallenge>(`${BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
+  });
+  if ("challenge" in body) {
+    return { kind: "challenge", challenge: body };
+  }
+  return { kind: "user", user: body };
+}
+
+export async function authRespondChallenge(
+  challenge: LoginChallenge,
+  newPassword: string,
+): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`${BASE}/auth/respond-challenge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      challenge: challenge.challenge,
+      session: challenge.session,
+      email: challenge.email,
+      new_password: newPassword,
+    }),
   });
 }
 

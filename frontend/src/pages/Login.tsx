@@ -4,35 +4,73 @@
 import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../components/AuthProvider";
+import type { LoginChallenge } from "../api";
 import MatrixRain from "../components/MatrixRain";
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, respondChallenge } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Invited users land here on first sign-in: Cognito answers login with
+  // NEW_PASSWORD_REQUIRED and we swap the form to a password-setup step.
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  function translateError(msg: string): string {
+    switch (msg) {
+      case "invalid_credentials":
+        return "Invalid credentials.";
+      case "user_not_confirmed":
+        return "Account not confirmed. Contact an administrator.";
+      case "password_reset_required":
+        return "Password reset required. Contact an administrator.";
+      case "invalid_password":
+        return "Password doesn't meet the policy (min 8 chars, include upper, lower, number, symbol).";
+      case "challenge_required":
+        return "Additional sign-in step required but not supported. Contact an administrator.";
+      default:
+        return "Login service unavailable. Try again in a moment.";
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      await login(email, password);
+      const result = await login(email, password);
+      if (result.kind === "challenge") {
+        setChallenge(result.challenge);
+      } else {
+        navigate("/", { replace: true });
+      }
+    } catch (err) {
+      setError(translateError(err instanceof Error ? err.message : ""));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onSubmitNewPassword(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (!challenge) return;
+    setSubmitting(true);
+    try {
+      await respondChallenge(challenge, newPassword);
       navigate("/", { replace: true });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Login failed";
-      if (msg === "invalid_credentials") {
-        setError("Invalid credentials.");
-      } else if (msg === "user_not_confirmed") {
-        setError("Account not confirmed. Contact an administrator.");
-      } else if (msg === "password_reset_required") {
-        setError("Password reset required. Contact an administrator.");
-      } else {
-        setError("Login service unavailable. Try again in a moment.");
-      }
+      setError(translateError(err instanceof Error ? err.message : ""));
     } finally {
       setSubmitting(false);
     }
@@ -57,49 +95,98 @@ export default function Login() {
           </span>
         </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="bg-surface-1/90 backdrop-blur border border-line rounded p-6 flex flex-col gap-4"
-        >
-          <label className="flex flex-col gap-1">
-            <span className="eyebrow">EMAIL</span>
-            <input
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="input"
-              disabled={submitting}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="eyebrow">PASSWORD</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="input"
-              disabled={submitting}
-            />
-          </label>
-
-          {error && (
-            <div className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">
-              {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="btn btn-primary w-full justify-center"
+        {challenge ? (
+          <form
+            onSubmit={onSubmitNewPassword}
+            className="bg-surface-1/90 backdrop-blur border border-line rounded p-6 flex flex-col gap-4"
           >
-            {submitting ? "SIGNING IN…" : "SIGN IN"}
-          </button>
-        </form>
+            <div className="font-mono text-[11px] text-ink-2 tracking-mech">
+              FIRST SIGN-IN · SET A NEW PASSWORD FOR {challenge.email.toUpperCase()}
+            </div>
+            <label className="flex flex-col gap-1">
+              <span className="eyebrow">NEW PASSWORD</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="input"
+                disabled={submitting}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="eyebrow">CONFIRM PASSWORD</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="input"
+                disabled={submitting}
+              />
+            </label>
+
+            {error && (
+              <div className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn btn-primary w-full justify-center"
+            >
+              {submitting ? "SETTING PASSWORD…" : "SET PASSWORD & SIGN IN"}
+            </button>
+          </form>
+        ) : (
+          <form
+            onSubmit={onSubmit}
+            className="bg-surface-1/90 backdrop-blur border border-line rounded p-6 flex flex-col gap-4"
+          >
+            <label className="flex flex-col gap-1">
+              <span className="eyebrow">EMAIL</span>
+              <input
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                disabled={submitting}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="eyebrow">PASSWORD</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input"
+                disabled={submitting}
+              />
+            </label>
+
+            {error && (
+              <div className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn btn-primary w-full justify-center"
+            >
+              {submitting ? "SIGNING IN…" : "SIGN IN"}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

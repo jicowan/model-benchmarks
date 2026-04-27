@@ -8,13 +8,15 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { authLogin, authLogout, authMe, authRefresh } from "../api";
+import { authLogin, authLogout, authMe, authRefresh, authRespondChallenge } from "../api";
+import type { LoginChallenge, LoginResult } from "../api";
 import type { AuthUser } from "../types";
 
 type AuthState = {
   user: AuthUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  respondChallenge: (challenge: LoginChallenge, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   isAdmin: () => boolean;
 };
@@ -59,9 +61,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const u = await authLogin(email, password);
-    setUser(u);
+    const result = await authLogin(email, password);
+    if (result.kind === "user") {
+      setUser(result.user);
+    }
+    return result;
   }, []);
+
+  const respondChallenge = useCallback(
+    async (challenge: LoginChallenge, newPassword: string) => {
+      const u = await authRespondChallenge(challenge, newPassword);
+      setUser(u);
+    },
+    [],
+  );
 
   const logout = useCallback(async () => {
     await authLogout();
@@ -74,10 +87,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       loading,
       login,
+      respondChallenge,
       logout,
       isAdmin: () => user?.role === "admin",
     }),
-    [user, loading, login, logout]
+    [user, loading, login, respondChallenge, logout]
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
