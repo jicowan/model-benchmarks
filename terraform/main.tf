@@ -228,39 +228,66 @@ resource "aws_eks_pod_identity_association" "api" {
 }
 
 # ---------- ECR Repositories ----------
+# scan_on_push enables ECR basic scanning. Findings show up under
+# Amazon Inspector / ECR console and are free for basic scans.
 resource "aws_ecr_repository" "api" {
   name                 = "${var.project_name}-api"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  tags                 = local.tags
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
 }
 
 resource "aws_ecr_repository" "web" {
   name                 = "${var.project_name}-web"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  tags                 = local.tags
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
 }
 
 resource "aws_ecr_repository" "migration" {
   name                 = "${var.project_name}-migration"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  tags                 = local.tags
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
 }
 
 resource "aws_ecr_repository" "loadgen" {
   name                 = "${var.project_name}-loadgen"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  tags                 = local.tags
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
 }
 
 resource "aws_ecr_repository" "tools" {
   name                 = "${var.project_name}-tools"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  tags                 = local.tags
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
 }
 
 # ---------- S3 Bucket for Benchmark Results ----------
@@ -268,6 +295,17 @@ resource "aws_s3_bucket" "results" {
   bucket        = "${var.project_name}-results-${data.aws_caller_identity.current.account_id}"
   force_destroy = true
   tags          = local.tags
+}
+
+# Block all forms of public access. Benchmark results are internal only;
+# pods read via IAM. Overrides any bucket policy or ACL that might
+# otherwise grant public access.
+resource "aws_s3_bucket_public_access_block" "results" {
+  bucket                  = aws_s3_bucket.results.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "results" {
@@ -360,6 +398,16 @@ resource "aws_s3_bucket" "models" {
   tags          = local.tags
 }
 
+# Model weights stay private; streamer pods read via IAM. Public access
+# is always off.
+resource "aws_s3_bucket_public_access_block" "models" {
+  bucket                  = aws_s3_bucket.models.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 # ---------- Model Pod Identity (S3 read for vLLM Run:ai Streamer) ----------
 resource "aws_iam_role" "model_pod" {
   name = "${var.project_name}-model"
@@ -412,7 +460,12 @@ resource "aws_ecr_repository" "cache_job" {
   name                 = "${var.project_name}-cache-job"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  tags                 = local.tags
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
 }
 
 # ---------- Cache Job Pod Identity (S3 read+write for HF-to-S3 caching) ----------
