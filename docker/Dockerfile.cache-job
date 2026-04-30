@@ -1,4 +1,13 @@
 FROM python:3.12-slim
+
+# Pull latest security fixes on top of whatever the base image ships with.
+# `python:3.12-slim` rebuilds drift out of date on Debian security patches,
+# so we apt-upgrade at build time to pick up openssl/libc/etc. CVEs.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir huggingface_hub requests boto3
 COPY docker/hf_to_s3.py /usr/local/bin/hf_to_s3
 RUN chmod +x /usr/local/bin/hf_to_s3
