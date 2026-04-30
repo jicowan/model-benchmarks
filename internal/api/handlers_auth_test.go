@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,8 +12,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/accelbench/accelbench/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cip "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
@@ -124,35 +128,97 @@ func mockAPIErr(code string) error {
 	return &smithy.GenericAPIError{Code: code, Message: code, Fault: smithy.FaultClient}
 }
 
-// buildFakeIDToken creates an unsigned JWT (header.payload.junk) that
-// decodeIDTokenClaims will happily parse — ParseUnverified doesn't
-// check the signature.
-func buildFakeIDToken(email, role string) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	claims := map[string]any{
-		"email":       email,
-		"custom:role": role,
-	}
-	cb, _ := json.Marshal(claims)
-	payload := base64.RawURLEncoding.EncodeToString(cb)
-	return header + "." + payload + ".sig"
+// testAuthHelper bundles a test JWKS server, RSA key, and verifier so
+// tests can mint properly signed JWTs that the handler will verify.
+type testAuthHelper struct {
+	key      *rsa.PrivateKey
+	kid      string
+	cfg      auth.Config
+	verifier *auth.Verifier
+	jwksSrv  *httptest.Server
 }
 
-func setupAuthServer() (*Server, *mockIDP, *http.ServeMux) {
+func newTestAuthHelper(t *testing.T) *testAuthHelper {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	kid := "test-kid"
+
+	// Fake JWKS endpoint serving our test key.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		n := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(bigEndianBytes(uint64(key.E)))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]any{{
+				"kty": "RSA", "alg": "RS256", "use": "sig",
+				"kid": kid, "n": n, "e": e,
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := auth.Config{
+		UserPoolID: "us-east-2_test",
+		ClientID:   "test-client",
+		Region:     "us-east-2",
+	}
+	jwks := auth.NewJWKSFetcher(cfg)
+	jwks.SetURL(srv.URL)
+	verifier := auth.NewVerifier(cfg, jwks)
+
+	return &testAuthHelper{key: key, kid: kid, cfg: cfg, verifier: verifier, jwksSrv: srv}
+}
+
+func (h *testAuthHelper) signIDToken(email, role string) string {
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":         h.cfg.Issuer(),
+		"aud":         h.cfg.ClientID,
+		"token_use":   "id",
+		"sub":         "user-sub-123",
+		"email":       email,
+		"custom:role": role,
+		"exp":         now.Add(1 * time.Hour).Unix(),
+		"iat":         now.Unix(),
+	}
+	t := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	t.Header["kid"] = h.kid
+	s, _ := t.SignedString(h.key)
+	return s
+}
+
+func bigEndianBytes(n uint64) []byte {
+	if n == 0 {
+		return []byte{0}
+	}
+	var out []byte
+	for n > 0 {
+		out = append([]byte{byte(n & 0xff)}, out...)
+		n >>= 8
+	}
+	return out
+}
+
+func setupAuthServer(t *testing.T) (*Server, *mockIDP, *http.ServeMux, *testAuthHelper) {
+	t.Helper()
+	ah := newTestAuthHelper(t)
 	repo := seedRepo()
 	client := fake.NewSimpleClientset()
 	srv := NewServer(repo, client, "test-pod")
 	idp := &mockIDP{}
-	srv.SetAuth(auth.Config{ClientID: "test-client", Disabled: false}, idp, nil)
+	srv.SetAuth(ah.cfg, idp, ah.verifier)
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
-	return srv, idp, mux
+	return srv, idp, mux, ah
 }
 
 // ---------- Login ----------
 
 func TestAuthLogin_GoodCreds_SetsCookies(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, ah := setupAuthServer(t)
 	idp.initiateAuth = func(_ context.Context, in *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error) {
 		if in.AuthParameters["USERNAME"] != "user@example.com" {
 			t.Errorf("unexpected USERNAME: %q", in.AuthParameters["USERNAME"])
@@ -160,7 +226,7 @@ func TestAuthLogin_GoodCreds_SetsCookies(t *testing.T) {
 		return &cip.InitiateAuthOutput{
 			AuthenticationResult: &types.AuthenticationResultType{
 				AccessToken:  aws.String("access-tok"),
-				IdToken:      aws.String(buildFakeIDToken("user@example.com", "admin")),
+				IdToken:      aws.String(ah.signIDToken("user@example.com", "admin")),
 				RefreshToken: aws.String("refresh-tok"),
 				ExpiresIn:    3600,
 			},
@@ -208,7 +274,7 @@ func TestAuthLogin_GoodCreds_SetsCookies(t *testing.T) {
 }
 
 func TestAuthLogin_BadCreds_Returns401(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, _ := setupAuthServer(t)
 	idp.initiateAuth = func(_ context.Context, _ *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error) {
 		return nil, mockAPIErr("NotAuthorizedException")
 	}
@@ -226,7 +292,7 @@ func TestAuthLogin_BadCreds_Returns401(t *testing.T) {
 }
 
 func TestAuthLogin_UserNotFound_MasksTo401(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, _ := setupAuthServer(t)
 	idp.initiateAuth = func(_ context.Context, _ *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error) {
 		return nil, mockAPIErr("UserNotFoundException")
 	}
@@ -244,7 +310,7 @@ func TestAuthLogin_UserNotFound_MasksTo401(t *testing.T) {
 }
 
 func TestAuthLogin_NewPasswordRequired_ReturnsChallenge(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, _ := setupAuthServer(t)
 	idp.initiateAuth = func(_ context.Context, _ *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error) {
 		// Cognito emits this for invited users on their first sign-in.
 		return &cip.InitiateAuthOutput{
@@ -285,7 +351,7 @@ func TestAuthLogin_NewPasswordRequired_ReturnsChallenge(t *testing.T) {
 // ---------- Respond to challenge ----------
 
 func TestAuthRespondChallenge_Good_SetsCookies(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, ah := setupAuthServer(t)
 	idp.respondToAuthChallenge = func(_ context.Context, in *cip.RespondToAuthChallengeInput) (*cip.RespondToAuthChallengeOutput, error) {
 		if in.ChallengeName != types.ChallengeNameTypeNewPasswordRequired {
 			t.Errorf("challenge = %q", in.ChallengeName)
@@ -299,7 +365,7 @@ func TestAuthRespondChallenge_Good_SetsCookies(t *testing.T) {
 		return &cip.RespondToAuthChallengeOutput{
 			AuthenticationResult: &types.AuthenticationResultType{
 				AccessToken:  aws.String("access-tok"),
-				IdToken:      aws.String(buildFakeIDToken("new@example.com", "user")),
+				IdToken:      aws.String(ah.signIDToken("new@example.com", "user")),
 				RefreshToken: aws.String("refresh-tok"),
 				ExpiresIn:    3600,
 			},
@@ -336,7 +402,7 @@ func TestAuthRespondChallenge_Good_SetsCookies(t *testing.T) {
 }
 
 func TestAuthRespondChallenge_BadPassword_Returns400(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, _ := setupAuthServer(t)
 	idp.respondToAuthChallenge = func(_ context.Context, _ *cip.RespondToAuthChallengeInput) (*cip.RespondToAuthChallengeOutput, error) {
 		return nil, mockAPIErr("InvalidPasswordException")
 	}
@@ -359,7 +425,7 @@ func TestAuthRespondChallenge_BadPassword_Returns400(t *testing.T) {
 }
 
 func TestAuthRespondChallenge_UnsupportedChallenge_Returns400(t *testing.T) {
-	_, _, mux := setupAuthServer()
+	_, _, mux, _ := setupAuthServer(t)
 	body, _ := json.Marshal(map[string]string{
 		"challenge":    "sms_mfa",
 		"session":      "blob",
@@ -381,7 +447,7 @@ func TestAuthRespondChallenge_UnsupportedChallenge_Returns400(t *testing.T) {
 // ---------- Refresh ----------
 
 func TestAuthRefresh_Good_SetsNewAccessCookie(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, ah := setupAuthServer(t)
 	idp.initiateAuth = func(_ context.Context, in *cip.InitiateAuthInput) (*cip.InitiateAuthOutput, error) {
 		if in.AuthFlow != types.AuthFlowTypeRefreshTokenAuth {
 			t.Errorf("AuthFlow = %q, want REFRESH_TOKEN_AUTH", in.AuthFlow)
@@ -392,7 +458,7 @@ func TestAuthRefresh_Good_SetsNewAccessCookie(t *testing.T) {
 		return &cip.InitiateAuthOutput{
 			AuthenticationResult: &types.AuthenticationResultType{
 				AccessToken: aws.String("new-access-tok"),
-				IdToken:     aws.String(buildFakeIDToken("u@e.com", "user")),
+				IdToken:     aws.String(ah.signIDToken("u@e.com", "user")),
 				ExpiresIn:   3600,
 			},
 		}, nil
@@ -418,7 +484,7 @@ func TestAuthRefresh_Good_SetsNewAccessCookie(t *testing.T) {
 }
 
 func TestAuthRefresh_NoCookie_Returns401(t *testing.T) {
-	_, _, mux := setupAuthServer()
+	_, _, mux, _ := setupAuthServer(t)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/auth/refresh", nil))
 	if w.Code != http.StatusUnauthorized {
@@ -429,7 +495,7 @@ func TestAuthRefresh_NoCookie_Returns401(t *testing.T) {
 // ---------- Logout ----------
 
 func TestAuthLogout_ClearsCookies(t *testing.T) {
-	_, idp, mux := setupAuthServer()
+	_, idp, mux, _ := setupAuthServer(t)
 	// Logout runs behind the auth middleware, so we need AUTH_DISABLED or
 	// a valid token. Use AUTH_DISABLED for simplicity.
 	_, _, _ = errors.New(""), idp, mux // keep imports

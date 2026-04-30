@@ -13,7 +13,6 @@ import (
 	cip "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	smithy "github.com/aws/smithy-go"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // CognitoIDP is the minimal surface of cognitoidentityprovider.Client
@@ -124,10 +123,10 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	setAuthCookies(w, out.AuthenticationResult)
 
-	// Decode the ID token (without verification — we just got it back
-	// from Cognito over TLS, we trust it) to extract sub + email + role
-	// for the response body.
-	sub, email, role := decodeIDTokenClaims(aws.ToString(out.AuthenticationResult.IdToken))
+	// Verify and extract claims from the ID token. Even though Cognito
+	// just handed us this token over TLS, we verify it to satisfy security
+	// scanners and maintain defense-in-depth.
+	sub, email, role := s.extractVerifiedIDClaims(r.Context(), aws.ToString(out.AuthenticationResult.IdToken))
 	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
 }
 
@@ -175,7 +174,7 @@ func (s *Server) handleAuthRespondChallenge(w http.ResponseWriter, r *http.Reque
 	}
 
 	setAuthCookies(w, out.AuthenticationResult)
-	sub, email, role := decodeIDTokenClaims(aws.ToString(out.AuthenticationResult.IdToken))
+	sub, email, role := s.extractVerifiedIDClaims(r.Context(), aws.ToString(out.AuthenticationResult.IdToken))
 	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
 }
 
@@ -229,23 +228,26 @@ func (s *Server) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuthMe returns the caller's email + role. Middleware has already
-// validated the token and attached the principal.
+// validated the token and attached the principal (including email/role
+// from the verified ID token if the access token lacked them).
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	p := auth.PrincipalFromContext(r.Context())
 	if p == nil {
 		writeError(w, http.StatusUnauthorized, "no_principal")
 		return
 	}
-	// Access tokens don't carry email/role, so if the context principal
-	// came from one we need to read the ID token cookie for those claims.
+	// The middleware verifies both access and ID tokens and populates
+	// the principal with email/role from the ID token. If email is still
+	// empty here, verify the ID token rather than reading it unverified.
 	sub, email, role := p.Sub, p.Email, p.Role
-	if email == "" {
+	if email == "" && s.authVerifier != nil {
 		if c, err := r.Cookie(idCookieName); err == nil {
-			idSub, idEmail, idRole := decodeIDTokenClaims(c.Value)
-			if sub == "" {
-				sub = idSub
+			if idPrincipal, err := s.authVerifier.VerifyToken(r.Context(), c.Value, "id"); err == nil {
+				if sub == "" {
+					sub = idPrincipal.Sub
+				}
+				email, role = idPrincipal.Email, idPrincipal.Role
 			}
-			email, role = idEmail, idRole
 		}
 	}
 	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
@@ -311,39 +313,16 @@ func mapCognitoAuthError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadGateway, "upstream_error")
 }
 
-// decodeIDTokenClaims returns (sub, email, role) from the ID token's
-// payload. Does NOT verify the signature — callers must only pass
-// tokens whose provenance is already trusted:
-//   - /auth/login and /auth/respond-challenge pass the ID token
-//     returned by Cognito over TLS in the same response, so signature
-//     verification would be belt-and-braces.
-//   - /auth/me reads the ID token from the HttpOnly+Secure cookie only
-//     after auth.Middleware has verified the ACCESS token and attached
-//     a Principal to the request context; the ID token is consumed for
-//     display claims only, never for authorization.
-//
-// Returning empty strings on parse failure is safe: handleAuthMe falls
-// back to the (verified) Principal from the middleware. CodeQL's
-// go/missing-jwt-signature-check rule flags this function; the alert
-// should be dismissed as a false positive in the Security tab with a
-// reference to this docstring.
-func decodeIDTokenClaims(idToken string) (sub, email, role string) {
-	if idToken == "" {
+// extractVerifiedIDClaims verifies the ID token signature and returns
+// (sub, email, role). Falls back to empty strings on any error.
+func (s *Server) extractVerifiedIDClaims(ctx context.Context, idToken string) (sub, email, role string) {
+	if idToken == "" || s.authVerifier == nil {
 		return "", "", ""
 	}
-	var claims jwt.MapClaims
-	parser := jwt.NewParser()
-	if _, _, err := parser.ParseUnverified(idToken, &claims); err != nil {
+	principal, err := s.authVerifier.VerifyToken(ctx, idToken, "id")
+	if err != nil {
+		log.Printf("[auth] ID token verification failed: %v", err)
 		return "", "", ""
 	}
-	if v, ok := claims["sub"].(string); ok {
-		sub = v
-	}
-	if v, ok := claims["email"].(string); ok {
-		email = v
-	}
-	if v, ok := claims["custom:role"].(string); ok {
-		role = v
-	}
-	return sub, email, role
+	return principal.Sub, principal.Email, principal.Role
 }
