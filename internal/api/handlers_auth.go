@@ -312,8 +312,21 @@ func mapCognitoAuthError(w http.ResponseWriter, err error) {
 }
 
 // decodeIDTokenClaims returns (sub, email, role) from the ID token's
-// payload. Does NOT verify the signature — only used for tokens
-// Cognito just handed us over TLS in an InitiateAuth response.
+// payload. Does NOT verify the signature — callers must only pass
+// tokens whose provenance is already trusted:
+//   - /auth/login and /auth/respond-challenge pass the ID token
+//     returned by Cognito over TLS in the same response, so signature
+//     verification would be belt-and-braces.
+//   - /auth/me reads the ID token from the HttpOnly+Secure cookie only
+//     after auth.Middleware has verified the ACCESS token and attached
+//     a Principal to the request context; the ID token is consumed for
+//     display claims only, never for authorization.
+//
+// Returning empty strings on parse failure is safe: handleAuthMe falls
+// back to the (verified) Principal from the middleware. CodeQL's
+// go/missing-jwt-signature-check rule flags this function; the alert
+// should be dismissed as a false positive in the Security tab with a
+// reference to this docstring.
 func decodeIDTokenClaims(idToken string) (sub, email, role string) {
 	if idToken == "" {
 		return "", "", ""

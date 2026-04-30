@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege: this workflow only builds and tests; it doesn't push,
+# comment, upload artifacts, or otherwise mutate the repo. Explicit read
+# scope overrides the (often more permissive) default token permissions.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
