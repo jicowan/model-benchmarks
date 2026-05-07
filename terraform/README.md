@@ -7,11 +7,26 @@ cluster, Karpenter, Aurora PostgreSQL, ECR repos, S3 buckets, IAM roles, and
 All state is local by default. See `versions.tf` to add a backend if you want
 remote state.
 
+## Prerequisites
+
+Before the first `terraform apply`, two values **must** be set in `terraform.tfvars`:
+
+- `dockerhub_username` and `dockerhub_access_token` — the ECR pull-through cache
+  that backs every vLLM image pull requires Docker Hub credentials. Create a
+  read-only access token at
+  [hub.docker.com/settings/security](https://hub.docker.com/settings/security).
+  Skipping these will fail the apply with
+  `SecretNotFoundException: The ARN of the secret specified in the pull through cache rule was not found`.
+- `region` — defaults to `us-east-2`. If you want the cluster in a different
+  region, set it in `terraform.tfvars` *and* ensure your AWS CLI can reach EKS
+  there (the Terraform-invoked `aws eks get-token` calls pass `--region` from
+  this variable, so no `AWS_REGION` env var is required).
+
 ## Quick start
 
 ```bash
 cd terraform
-cp terraform.tfvars.example terraform.tfvars   # edit as needed
+cp terraform.tfvars.example terraform.tfvars   # fill in dockerhub_* + region
 terraform init
 terraform apply
 ```
