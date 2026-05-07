@@ -77,15 +77,28 @@ func TestHostMemCheck_LargerInstancePasses(t *testing.T) {
 	}
 }
 
-func TestHostMemCheck_S3StreamerPassesOnSmallInstance(t *testing.T) {
-	// Same model, same small instance, but with the streamer flag set.
-	// Peak drops to ~15.25 × 0.1 + 3 = 4.5 GiB, which fits in 13.6 GiB
-	// allocatable.
+func TestHostMemCheck_S3StreamerStillInfeasibleOnSmallInstance(t *testing.T) {
+	// Empirical: the Run:ai streamer with concurrency=16 on shard-heavy
+	// models (Qwen3-8B has ~399 safetensors shards) keeps nearly as much
+	// host RAM resident as the HF loader path during load. Peak ~15.25
+	// × 0.9 + 3 = 16.7 GiB, which still exceeds g6.xlarge's 13.6 GiB
+	// allocatable. Observed OOMKill at 13 GiB in a live run with
+	// --load-format=runai_streamer, concurrency=16.
 	rec := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
 	})
+	if rec.Explanation.Feasible {
+		t.Fatal("expected infeasible on g6.xlarge even with S3 streamer")
+	}
+}
+
+func TestHostMemCheck_S3StreamerFitsOnMidInstance(t *testing.T) {
+	// Streamer peak ~16.7 GiB fits in g6.2xlarge's 27.2 GiB allocatable.
+	rec := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
+		UseS3Streamer: true,
+	})
 	if !rec.Explanation.Feasible {
-		t.Fatalf("expected feasible on g6.xlarge with S3 streamer, got: %s",
+		t.Fatalf("expected feasible on g6.2xlarge with streamer, got: %s",
 			rec.Explanation.Reason)
 	}
 }
@@ -118,7 +131,11 @@ func TestPeakHostMemBytes_Multipliers(t *testing.T) {
 		t.Errorf("HF peak = %.2f GiB, want %.2f GiB", hf/gibBytes, expectHF/gibBytes)
 	}
 
-	// S3 path ~= 10 × 0.1 + 3 = 4 GiB, should be much lower
+	// S3 path ~= 10 × 0.9 + 3 = 12 GiB, still lower than HF but not by much
+	expectS3 := 10.0*s3StreamerHostMultiplier*gibBytes + hostMemBufferBytes
+	if s3 != expectS3 {
+		t.Errorf("S3 peak = %.2f GiB, want %.2f GiB", s3/gibBytes, expectS3/gibBytes)
+	}
 	if s3 >= hf {
 		t.Errorf("expected S3 streamer peak (%.2f GiB) < HF peak (%.2f GiB)",
 			s3/gibBytes, hf/gibBytes)
