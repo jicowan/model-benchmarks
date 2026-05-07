@@ -167,14 +167,6 @@ resource "kubectl_manifest" "gpu_node_class" {
         sed -i 's/^[[:space:]]*concurrent_download_chunk_size = .*/concurrent_download_chunk_size = "16mb"/' /etc/soci-snapshotter-grpc/config.toml
         sed -i 's/^[[:space:]]*discard_unpacked_layers = .*/discard_unpacked_layers = true/' /etc/soci-snapshotter-grpc/config.toml
 
-        --BOUNDARY
-        Content-Type: application/node.eks.aws
-
-        apiVersion: node.eks.aws/v1alpha1
-        kind: NodeConfig
-        spec:
-          featureGates:
-            FastImagePull: true
         --BOUNDARY--
   YAML
 
