@@ -34,5 +34,18 @@ load:
   num_workers: {{ .NumWorkers }}
 
 storage:
+{{- if .StorageBucket }}
+  # inference-perf's SimpleStorageServiceConfig in v0.2.0 accepts
+  # {bucket_name, path, report_file_prefix}. Region resolution relies
+  # on boto3's standard chain, which picks up AWS_REGION from the
+  # pod env set in the loadgen Job template. PR #458 (unmerged as of
+  # v0.2.0) adds optional region_name/endpoint_url/addressing_style;
+  # if we bump to a release that includes it, we can wire those here.
+  simple_storage_service:
+    bucket_name: {{ .StorageBucket }}
+    path: {{ .StoragePath }}
+    report_file_prefix: {{ .StorageReportPrefix }}
+{{- else }}
   local_storage:
     path: /tmp/results
+{{- end }}

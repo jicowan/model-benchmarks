@@ -27,6 +27,16 @@ type InferencePerfConfigParams struct {
 	LoadType   string      // "constant" or "poisson"
 	Stages     []LoadStage // rate and duration for each stage
 	NumWorkers int
+
+	// Storage settings. When StorageBucket is set, inference-perf writes
+	// results directly to s3://<StorageBucket>/<StoragePath>/ with the
+	// summary file named <StorageReportPrefix>_summary.json (plus any
+	// per-request/metric files inference-perf emits). Leave empty to keep
+	// results on the pod's local /tmp/results emptyDir (useful for tests).
+	StorageBucket       string
+	StoragePath         string // prefix under the bucket, e.g. "results/<run-id>/"
+	StorageReportPrefix string // file-name prefix, e.g. "<run-id>"
+	StorageRegion       string // AWS region; inference-perf's boto3 client uses it
 }
 
 // LoadStage represents a load generation stage with rate and duration.
