@@ -341,8 +341,11 @@ func (s *Server) handlePutScenarioOverride(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.NumWorkers != nil && (*req.NumWorkers < 1 || *req.NumWorkers > 64) {
-		writeError(w, http.StatusBadRequest, "num_workers must be in [1, 64]")
+	// Upper bound matches orchestrator.maxLoadgenWorkers — above that the
+	// loadgen container's CPU request would exceed what the general
+	// Karpenter pool comfortably provisions.
+	if req.NumWorkers != nil && (*req.NumWorkers < 1 || *req.NumWorkers > 128) {
+		writeError(w, http.StatusBadRequest, "num_workers must be in [1, 128]")
 		return
 	}
 	if req.InputMean != nil && *req.InputMean < 1 {

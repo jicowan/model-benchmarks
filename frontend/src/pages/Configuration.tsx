@@ -621,8 +621,18 @@ function ScenarioRow({ entry, onChanged }: { entry: ScenarioOverrideEntry; onCha
     setSaving(true);
     setError(null);
     try {
+      const parsedWorkers = numWorkers ? parseInt(numWorkers) : null;
+      // Loadgen container resources scale with num_workers (see
+      // orchestrator.loadgenResources). We cap at 128 to keep CPU
+      // requests under a reasonable ceiling — above that the async
+      // event loop stops benefiting from more workers anyway.
+      if (parsedWorkers != null && (isNaN(parsedWorkers) || parsedWorkers < 1 || parsedWorkers > 128)) {
+        setError("num_workers must be between 1 and 128");
+        setSaving(false);
+        return;
+      }
       const patch: Record<string, unknown> = {};
-      patch.num_workers = numWorkers ? parseInt(numWorkers) : null;
+      patch.num_workers = parsedWorkers;
       patch.streaming = streaming === "" ? null : streaming === "true";
       patch.input_mean = inputMean ? parseInt(inputMean) : null;
       patch.output_mean = outputMean ? parseInt(outputMean) : null;
@@ -677,9 +687,11 @@ function ScenarioRow({ entry, onChanged }: { entry: ScenarioOverrideEntry; onCha
 
       <div className="grid grid-cols-4 gap-3">
         <label className="block">
-          <div className="caption mb-1">num_workers</div>
+          <div className="caption mb-1">num_workers (1-128)</div>
           <input
             type="number"
+            min={1}
+            max={128}
             value={numWorkers}
             onChange={(e) => setNumWorkers(e.target.value)}
             placeholder={String(entry.defaults.num_workers)}

@@ -59,6 +59,15 @@ type LoadgenJobParams struct {
 	ConfigMapName      string // ConfigMap containing inference-perf config
 	AWSRegion          string // AWS region; exported to the container so boto3 signs SigV4 correctly
 	HfToken            string // HuggingFace token for downloading datasets (sharegpt, cnn_dailymail)
+
+	// Pod resources. Empty strings fall back to the historical defaults
+	// (2/4 CPU request/limit, 4/8 GiB memory request/limit). Callers
+	// that want the requests to scale with num_workers should compute
+	// them via orchestrator.loadgenResources and pass the strings in.
+	CPURequest    string
+	CPULimit      string
+	MemoryRequest string
+	MemoryLimit   string
 }
 
 // CacheJobParams holds values for rendering the model cache Job.

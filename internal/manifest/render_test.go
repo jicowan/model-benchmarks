@@ -188,6 +188,39 @@ func TestRenderLoadgenJob(t *testing.T) {
 	if strings.Contains(out, "amazon/aws-cli") {
 		t.Error("aws-cli sidecar image should no longer appear")
 	}
+
+	// Default-sized container (no CPU/mem fields set) should render the
+	// historical values so existing deployments don't drift.
+	for _, w := range []string{`cpu: "2"`, `memory: "4Gi"`, `cpu: "4"`, `memory: "8Gi"`} {
+		if !strings.Contains(out, w) {
+			t.Errorf("default-sized loadgen output missing %q", w)
+		}
+	}
+}
+
+func TestRenderLoadgenJob_CustomResources(t *testing.T) {
+	// When the orchestrator passes scaled resource strings, the template
+	// should plug them in verbatim.
+	params := LoadgenJobParams{
+		Name:               "loadgen-xyz",
+		Namespace:          "accelbench",
+		InferencePerfImage: "quay.io/inference-perf/inference-perf:v0.2.0",
+		ConfigMapName:      "loadgen-config-xyz",
+		AWSRegion:          "us-east-2",
+		CPURequest:         "8",
+		CPULimit:           "16",
+		MemoryRequest:      "5696Mi",
+		MemoryLimit:        "11392Mi",
+	}
+	out, err := RenderLoadgenJob(params)
+	if err != nil {
+		t.Fatalf("RenderLoadgenJob: %v", err)
+	}
+	for _, w := range []string{`cpu: "8"`, `cpu: "16"`, `memory: "5696Mi"`, `memory: "11392Mi"`} {
+		if !strings.Contains(out, w) {
+			t.Errorf("output missing %q\n---\n%s", w, out)
+		}
+	}
 }
 
 func TestRenderInferencePerfConfig(t *testing.T) {
