@@ -227,15 +227,25 @@ func isTransformersVersionUnsupported(version, vllmVersion string) (bool, string
 
 // Host-memory checking constants. vLLM's HuggingFace loader reads weights
 // into CPU memory first, reshapes/casts them, then copies to GPU — peak
-// host RAM is ~1.3× the on-disk weight size. The Run:ai streamer path
-// (used when loading from an S3-cached prefix) streams layers directly to
-// GPU and stays under ~10% of weight size. On top of the weights, reserve
-// room for kubelet, DaemonSets (device plugin, CNI, kube-proxy), the SOCI
-// snapshotter's in-process cache (bumped by our parallel-pull tuning),
-// and eviction-threshold headroom.
+// host RAM is ~1.3× the on-disk weight size.
+//
+// The Run:ai streamer (used when loading from an S3-cached prefix) was
+// initially assumed to keep host RAM very low because layers stream
+// directly to GPU. In practice, with our concurrency=16 config and
+// shard-heavy models like Qwen3-8B (~399 safetensors shards), peak
+// CPU-side RAM during load is nearly as high as the HF loader path —
+// empirically ~0.9× the weight size. The streamer is still a
+// meaningful speed-up vs. HF download + load, but host-RAM headroom on
+// small instances isn't materially different. See PR #46 follow-up:
+// a proper fix would record observed peak memory per run and consult
+// that history instead of multiplying weight size by a constant.
+//
+// On top of the weights, reserve room for kubelet, DaemonSets (device
+// plugin, CNI, kube-proxy), the SOCI snapshotter's in-process cache
+// (bumped by our parallel-pull tuning), and eviction-threshold headroom.
 const (
 	hfLoaderHostMultiplier   = 1.3
-	s3StreamerHostMultiplier = 0.1
+	s3StreamerHostMultiplier = 0.9
 	hostMemBufferBytes       = 3 * gibBytes
 	hostMemAllocatableFrac   = 0.85
 )

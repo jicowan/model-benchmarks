@@ -100,6 +100,13 @@ export default function Runs() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [modelSearch, setModelSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  // Rows on which the user has clicked STOP. The API returns 202 immediately
+  // (PRD-40 sets a DB flag; the owning pod's cancel poller terminates the
+  // goroutine within ~5s), so without this local tracking the row still
+  // shows status="running" right after the click and users think STOP
+  // didn't work. We show "CANCELLING…" for these rows until the next
+  // listJobs response reflects the terminal status.
+  const [cancelling, setCancelling] = useState<Set<string>>(new Set());
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -121,6 +128,20 @@ export default function Runs() {
       });
       setJobs(resp.rows);
       setTotal(resp.total);
+      // Clear any "cancelling" markers whose rows have reached a terminal
+      // state on the server. The marker is purely a UX hint while the
+      // owner pod processes the DB flag; once the server reports the
+      // real status we defer to that.
+      setCancelling((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const j of resp.rows) {
+          if (j.status !== "running" && j.status !== "pending") {
+            next.delete(j.id);
+          }
+        }
+        return next;
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -139,10 +160,30 @@ export default function Runs() {
 
   const handleCancel = async (id: string) => {
     if (!window.confirm(`Cancel job ${id.slice(0, 8)}?`)) return;
+    // Optimistically mark the row as cancelling so the user sees an
+    // immediate state change. The server sets the cancel flag and the
+    // owning pod's 5s poller picks it up; schedule a follow-up refresh
+    // so the terminal status shows up without requiring another click.
+    setCancelling((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
     try {
       await cancelRun(id);
       fetchJobs();
+      // Owner pod's cancel poller runs every 5s. Refresh once ~7s later
+      // to catch the flipped status.
+      setTimeout(() => {
+        fetchJobs();
+      }, 7000);
     } catch (e: unknown) {
+      // On API error, roll back the optimistic marker.
+      setCancelling((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setError(e instanceof Error ? e.message : "Unknown error");
     }
   };
@@ -256,16 +297,26 @@ export default function Runs() {
         size: 80,
         cell: ({ row }) => {
           const j = row.original;
+          const isCancelling = cancelling.has(j.id);
           return (
             <div className="flex gap-1 justify-end">
               {(j.status === "running" || j.status === "pending") && (
-                <button
-                  onClick={() => handleCancel(j.id)}
-                  className="text-[11px] font-mono tracking-mech text-warn hover:text-danger px-1"
-                  title="Cancel"
-                >
-                  STOP
-                </button>
+                isCancelling ? (
+                  <span
+                    className="text-[11px] font-mono tracking-mech text-ink-2 px-1"
+                    title="Cancel requested; waiting for the owning API pod to tear down"
+                  >
+                    CANCELLING…
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => handleCancel(j.id)}
+                    className="text-[11px] font-mono tracking-mech text-warn hover:text-danger px-1"
+                    title="Cancel"
+                  >
+                    STOP
+                  </button>
+                )
               )}
               <button
                 onClick={() => handleDelete(j.id)}
@@ -279,11 +330,12 @@ export default function Runs() {
         },
       },
     ],
-    // handleCancel/handleDelete are stable closures over fetchJobs; safe to
-    // skip as deps (react-table only needs a fresh column array on data shape
-    // changes).
+    // handleCancel/handleDelete are stable closures over fetchJobs; react-table
+    // only needs a fresh column array when the rendering of a cell depends on
+    // state (like `cancelling`). Rebuild columns when that set changes so the
+    // action cell re-renders CANCELLING… for the newly-tagged rows.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [cancelling],
   );
 
   const table = useReactTable({
