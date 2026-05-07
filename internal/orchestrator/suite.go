@@ -262,6 +262,22 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 		}
 	}
 
+	// Results storage. Match the single-run flow: inference-perf writes
+	// directly to s3://<bucket>/results/<scope>/<scope>_summary.json,
+	// where <scope> is the scenario-run identifier. See lifecycle.go.
+	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		awsRegion = "us-east-2"
+	}
+	scope := fmt.Sprintf("suite-%s-%s", suiteRunID, scenarioID)
+	if resultsBucket != "" {
+		inferencePerfConfig.StorageBucket = resultsBucket
+		inferencePerfConfig.StoragePath = fmt.Sprintf("results/%s/", scope)
+		inferencePerfConfig.StorageReportPrefix = scope
+		inferencePerfConfig.StorageRegion = awsRegion
+	}
+
 	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)
 	if err != nil {
 		return nil, "", fmt.Errorf("render config: %w", err)
@@ -279,23 +295,11 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 		return nil, "", fmt.Errorf("resolve inference-perf image: %w", err)
 	}
 
-	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
-	resultsKey := ""
-	awsRegion := os.Getenv("AWS_REGION")
-	if awsRegion == "" {
-		awsRegion = "us-east-2"
-	}
-	if resultsBucket != "" {
-		resultsKey = fmt.Sprintf("results/suite-%s-%s.json", suiteRunID, scenarioID)
-	}
-
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               loadgenName,
 		Namespace:          ns,
 		InferencePerfImage: inferencePerfImage,
 		ConfigMapName:      configMapName,
-		ResultsS3Bucket:    resultsBucket,
-		ResultsS3Key:       resultsKey,
 		AWSRegion:          awsRegion,
 		HfToken:            o.resolveHFToken(ctx, cfg.Request.HfToken),
 	})

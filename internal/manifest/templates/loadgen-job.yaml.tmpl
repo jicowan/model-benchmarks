@@ -29,7 +29,11 @@ spec:
                     values:
                       - system
       containers:
-        # Main benchmark container - official inference-perf image
+        # Main benchmark container - official inference-perf image.
+        # Results are written directly to S3 from inside inference-perf
+        # via its native simple_storage_service integration; the
+        # ServiceAccount (accelbench-loadgen) has a Pod Identity
+        # association that grants s3:PutObject on the results bucket.
         - name: inference-perf
           image: {{ .InferencePerfImage }}
           command: ["inference-perf"]
@@ -38,6 +42,12 @@ spec:
 {{- if .HfToken }}
             - name: HF_TOKEN
               value: "{{ .HfToken }}"
+{{- end }}
+{{- if .AWSRegion }}
+            - name: AWS_REGION
+              value: "{{ .AWSRegion }}"
+            - name: AWS_DEFAULT_REGION
+              value: "{{ .AWSRegion }}"
 {{- end }}
           volumeMounts:
             - name: config
@@ -52,44 +62,12 @@ spec:
             limits:
               cpu: "4"
               memory: "8Gi"
-{{- if .ResultsS3Bucket }}
-        # Sidecar for S3 upload - waits for results, uploads, exits
-        - name: s3-upload
-          image: amazon/aws-cli:latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              echo "Waiting for benchmark to complete..."
-              # Wait for inference-perf to write results (check for any JSON file)
-              while [ -z "$(ls /tmp/results/*.json 2>/dev/null)" ]; do
-                sleep 5
-              done
-              # Give it a moment to finish writing
-              sleep 2
-              echo "Uploading results to S3..."
-              # Find and upload the results file
-              for f in /tmp/results/*.json; do
-                aws s3 cp "$f" "s3://{{ .ResultsS3Bucket }}/{{ .ResultsS3Key }}"
-                echo "Uploaded $f to s3://{{ .ResultsS3Bucket }}/{{ .ResultsS3Key }}"
-              done
-              echo "Upload complete"
-          volumeMounts:
-            - name: results
-              mountPath: /tmp/results
-          env:
-            - name: AWS_REGION
-              value: "{{ .AWSRegion }}"
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-{{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ .ConfigMapName }}
+        # Scratch space for inference-perf's intermediate files. It still
+        # writes to a local path internally even when uploading to S3;
+        # keeping this mount avoids surprises on that code path.
         - name: results
           emptyDir: {}

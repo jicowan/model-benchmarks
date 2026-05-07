@@ -49,14 +49,15 @@ type ModelDeploymentParams struct {
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.
+// Result storage is now configured inside the inference-perf YAML (see
+// InferencePerfConfigParams.StorageBucket); inference-perf uploads to S3
+// natively via boto3, so there's no upload sidecar here.
 type LoadgenJobParams struct {
 	Name               string
 	Namespace          string
 	InferencePerfImage string // inference-perf container image
 	ConfigMapName      string // ConfigMap containing inference-perf config
-	ResultsS3Bucket    string // S3 bucket for results upload
-	ResultsS3Key       string // S3 key for results file
-	AWSRegion          string // AWS region for S3 upload
+	AWSRegion          string // AWS region; exported to the container so boto3 signs SigV4 correctly
 	HfToken            string // HuggingFace token for downloading datasets (sharegpt, cnn_dailymail)
 }
 

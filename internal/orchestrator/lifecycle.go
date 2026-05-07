@@ -450,6 +450,23 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		}
 	}
 
+	// Results storage. inference-perf writes directly to S3 via boto3 when
+	// storage.simple_storage_service is configured. Layout:
+	//   s3://<bucket>/results/<run_id>/<run_id>_summary.json
+	// The orchestrator reads back the summary file from the same prefix
+	// in waitAndCollect.
+	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		awsRegion = "us-east-2"
+	}
+	if resultsBucket != "" {
+		inferencePerfConfig.StorageBucket = resultsBucket
+		inferencePerfConfig.StoragePath = fmt.Sprintf("results/%s/", cfg.RunID)
+		inferencePerfConfig.StorageReportPrefix = cfg.RunID
+		inferencePerfConfig.StorageRegion = awsRegion
+	}
+
 	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)
 	if err != nil {
 		return fmt.Errorf("render inference-perf config: %w", err)
@@ -471,24 +488,11 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		return fmt.Errorf("resolve inference-perf image: %w", err)
 	}
 
-	// Use S3 for results to avoid container log truncation
-	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
-	resultsKey := ""
-	awsRegion := os.Getenv("AWS_REGION")
-	if awsRegion == "" {
-		awsRegion = "us-east-2"
-	}
-	if resultsBucket != "" {
-		resultsKey = fmt.Sprintf("results/%s.json", cfg.RunID)
-	}
-
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               name,
 		Namespace:          ns,
 		InferencePerfImage: inferencePerfImage,
 		ConfigMapName:      configMapName,
-		ResultsS3Bucket:    resultsBucket,
-		ResultsS3Key:       resultsKey,
 		AWSRegion:          awsRegion,
 		HfToken:            o.resolveHFToken(ctx, cfg.Request.HfToken),
 	})
@@ -508,10 +512,13 @@ func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName, runID st
 		}
 		for _, cond := range job.Status.Conditions {
 			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-				// Try S3 first, fall back to logs
+				// Try S3 first, fall back to logs. inference-perf writes
+				// several files under results/<run_id>/; we want the
+				// *_summary.json file (or any .json if that doesn't match,
+				// as a defensive fallback for naming drift).
 				if bucket := os.Getenv("RESULTS_S3_BUCKET"); bucket != "" {
-					key := fmt.Sprintf("results/%s.json", runID)
-					data, err := o.readResultsFromS3(ctx, bucket, key)
+					prefix := fmt.Sprintf("results/%s/", runID)
+					data, err := o.readResultsFromS3Prefix(ctx, bucket, prefix, runID)
 					if err == nil {
 						return data, nil
 					}
@@ -532,22 +539,60 @@ func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName, runID st
 	return nil, fmt.Errorf("loadgen job %s timed out after %v", jobName, jobTimeout)
 }
 
-func (o *Orchestrator) readResultsFromS3(ctx context.Context, bucket, key string) ([]byte, error) {
+// readResultsFromS3Prefix lists objects under the given prefix and returns
+// the contents of the summary report file. inference-perf (v0.2.0) names
+// uploaded files as `<path>/<report_file_prefix><filename>`, where
+// `filename` is chosen by the report writer (e.g. "summary.json",
+// "request_stats.json"). With our config the summary lands at
+// `results/<runID>/<runID>summary.json`. We scan for any file containing
+// "summary" with a .json suffix (robust to upstream naming changes), and
+// fall back to the first .json file found if nothing matches.
+func (o *Orchestrator) readResultsFromS3Prefix(ctx context.Context, bucket, prefix, runID string) ([]byte, error) {
+	_ = runID // reserved for future exact-match probing
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-
 	client := s3.NewFromConfig(cfg)
-	result, err := client.GetObject(ctx, &s3.GetObjectInput{
+
+	listOut, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: &bucket,
-		Key:    &key,
+		Prefix: &prefix,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get S3 object: %w", err)
+		return nil, fmt.Errorf("list s3://%s/%s: %w", bucket, prefix, err)
+	}
+	if len(listOut.Contents) == 0 {
+		return nil, fmt.Errorf("no objects under s3://%s/%s", bucket, prefix)
+	}
+
+	var pickedKey string
+	for _, obj := range listOut.Contents {
+		if obj.Key == nil {
+			continue
+		}
+		if strings.Contains(*obj.Key, "summary") && strings.HasSuffix(*obj.Key, ".json") {
+			pickedKey = *obj.Key
+			break
+		}
+	}
+	if pickedKey == "" {
+		for _, obj := range listOut.Contents {
+			if obj.Key != nil && strings.HasSuffix(*obj.Key, ".json") {
+				pickedKey = *obj.Key
+				break
+			}
+		}
+	}
+	if pickedKey == "" {
+		return nil, fmt.Errorf("no .json result objects under s3://%s/%s", bucket, prefix)
+	}
+
+	result, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: &bucket, Key: &pickedKey})
+	if err != nil {
+		return nil, fmt.Errorf("get s3://%s/%s: %w", bucket, pickedKey, err)
 	}
 	defer result.Body.Close()
-
 	return io.ReadAll(result.Body)
 }
 
@@ -746,9 +791,11 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 	shortID := runID[:8]
 	log.Printf("[recovery] attempting to recover run %s", shortID)
 
-	// Try to fetch results from S3
-	key := fmt.Sprintf("results/%s.json", runID)
-	data, err := o.readResultsFromS3(ctx, bucket, key)
+	// Try to fetch results from S3. inference-perf now writes to
+	// s3://<bucket>/results/<runID>/<runID>_summary.json (a prefix with
+	// several files); the helper lists the prefix and picks the summary.
+	prefix := fmt.Sprintf("results/%s/", runID)
+	data, err := o.readResultsFromS3Prefix(ctx, bucket, prefix, runID)
 	if err != nil {
 		log.Printf("[recovery] %s: no S3 results found, marking as failed: %v", shortID, err)
 		o.markFailed(ctx, runID, fmt.Sprintf("orphaned run: no S3 results found (%v)", err))

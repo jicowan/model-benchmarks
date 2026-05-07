@@ -141,13 +141,16 @@ func TestRenderModelDeployment_NoQuantization(t *testing.T) {
 }
 
 func TestRenderLoadgenJob(t *testing.T) {
+	// The loadgen Job no longer has an S3 upload sidecar — inference-perf
+	// writes results directly to S3 via its native
+	// simple_storage_service integration (configured inside the inference-
+	// perf YAML, tested separately). The Job spec only needs the main
+	// container + AWS region for boto3's SigV4 signer.
 	params := LoadgenJobParams{
 		Name:               "loadgen-abc123",
 		Namespace:          "accelbench",
 		InferencePerfImage: "quay.io/inference-perf/inference-perf:v0.2.0",
 		ConfigMapName:      "loadgen-config-abc123",
-		ResultsS3Bucket:    "accelbench-results",
-		ResultsS3Key:       "results/test-run.json",
 		AWSRegion:          "us-east-2",
 	}
 
@@ -167,13 +170,10 @@ func TestRenderLoadgenJob(t *testing.T) {
 		{"config mount path", "/workspace/config.yml"},
 		{"configmap name", "loadgen-config-abc123"},
 		{"results mount", "/tmp/results"},
-		{"s3 bucket", "accelbench-results"},
-		{"s3 key", "results/test-run.json"},
-		{"aws region", "us-east-2"},
+		{"aws region env", "us-east-2"},
 		{"system node affinity", "accelbench/node-type"},
 		{"service account", "serviceAccountName: accelbench-loadgen"},
 		{"backoff limit", "backoffLimit: 0"},
-		{"s3-upload sidecar", "name: s3-upload"},
 	}
 
 	for _, c := range checks {
@@ -181,30 +181,12 @@ func TestRenderLoadgenJob(t *testing.T) {
 			t.Errorf("%s: output does not contain %q", c.name, c.want)
 		}
 	}
-}
 
-func TestRenderLoadgenJob_NoS3(t *testing.T) {
-	params := LoadgenJobParams{
-		Name:               "loadgen-nos3",
-		Namespace:          "accelbench",
-		InferencePerfImage: "quay.io/inference-perf/inference-perf:v0.2.0",
-		ConfigMapName:      "loadgen-config-nos3",
-		ResultsS3Bucket:    "", // No S3
-	}
-
-	out, err := RenderLoadgenJob(params)
-	if err != nil {
-		t.Fatalf("RenderLoadgenJob: %v", err)
-	}
-
-	// Should NOT contain S3 sidecar when no bucket specified
 	if strings.Contains(out, "s3-upload") {
-		t.Error("output should not contain s3-upload sidecar when no S3 bucket")
+		t.Error("s3-upload sidecar should no longer appear in the rendered Job")
 	}
-
-	// Should still contain main inference-perf container
-	if !strings.Contains(out, "inference-perf") {
-		t.Error("output missing inference-perf container")
+	if strings.Contains(out, "amazon/aws-cli") {
+		t.Error("aws-cli sidecar image should no longer appear")
 	}
 }
 
@@ -259,6 +241,48 @@ func TestRenderInferencePerfConfig(t *testing.T) {
 		if !strings.Contains(out, c.want) {
 			t.Errorf("%s: output does not contain %q", c.name, c.want)
 		}
+	}
+}
+
+func TestRenderInferencePerfConfig_S3Storage(t *testing.T) {
+	params := InferencePerfConfigParams{
+		ModelHfID:           "meta-llama/Llama-3.1-8B-Instruct",
+		TargetHost:          "bench-run1",
+		TargetPort:          8000,
+		Streaming:           true,
+		DatasetType:         "synthetic",
+		LoadType:            "constant",
+		Stages:              []LoadStage{{Rate: 5, Duration: 60}},
+		NumWorkers:          4,
+		StorageBucket:       "accelbench-results",
+		StoragePath:         "results/run-abc/",
+		StorageReportPrefix: "run-abc",
+		StorageRegion:       "us-east-2",
+	}
+
+	out, err := RenderInferencePerfConfig(params)
+	if err != nil {
+		t.Fatalf("RenderInferencePerfConfig: %v", err)
+	}
+
+	for _, w := range []string{
+		"simple_storage_service",
+		"bucket_name: accelbench-results",
+		"path: results/run-abc/",
+		"report_file_prefix: run-abc",
+	} {
+		if !strings.Contains(out, w) {
+			t.Errorf("output missing %q\n---\n%s", w, out)
+		}
+	}
+
+	// v0.2.0 doesn't accept region_name; boto3 resolves region from the
+	// container env. Make sure we don't accidentally re-add it.
+	if strings.Contains(out, "region_name:") {
+		t.Error("v0.2.0 doesn't accept region_name; remove or guard behind a version check")
+	}
+	if strings.Contains(out, "local_storage:") {
+		t.Error("S3-configured output should not include local_storage block")
 	}
 }
 
