@@ -295,6 +295,10 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 		return nil, "", fmt.Errorf("resolve inference-perf image: %w", err)
 	}
 
+	// Scale the loadgen container's CPU/memory with num_workers (same
+	// rule as single runs; see loadgen_resources.go).
+	cpuReq, cpuLim, memReq, memLim := loadgenResources(inferencePerfConfig.NumWorkers)
+
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               loadgenName,
 		Namespace:          ns,
@@ -302,6 +306,10 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 		ConfigMapName:      configMapName,
 		AWSRegion:          awsRegion,
 		HfToken:            o.resolveHFToken(ctx, cfg.Request.HfToken),
+		CPURequest:         cpuReq,
+		CPULimit:           cpuLim,
+		MemoryRequest:      memReq,
+		MemoryLimit:        memLim,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("render loadgen job: %w", err)

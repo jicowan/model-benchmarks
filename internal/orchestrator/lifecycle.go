@@ -488,6 +488,13 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		return fmt.Errorf("resolve inference-perf image: %w", err)
 	}
 
+	// Scale the loadgen container's CPU/memory with num_workers so large
+	// worker counts don't strangle themselves at the historical 4-CPU
+	// limit. Karpenter's general-purpose NodePool will auto-provision a
+	// larger m6i instance if the request exceeds existing system nodes'
+	// free capacity.
+	cpuReq, cpuLim, memReq, memLim := loadgenResources(inferencePerfConfig.NumWorkers)
+
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               name,
 		Namespace:          ns,
@@ -495,6 +502,10 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		ConfigMapName:      configMapName,
 		AWSRegion:          awsRegion,
 		HfToken:            o.resolveHFToken(ctx, cfg.Request.HfToken),
+		CPURequest:         cpuReq,
+		CPULimit:           cpuLim,
+		MemoryRequest:      memReq,
+		MemoryLimit:        memLim,
 	})
 	if err != nil {
 		return err

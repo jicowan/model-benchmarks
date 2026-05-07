@@ -57,11 +57,11 @@ spec:
               mountPath: /tmp/results
           resources:
             requests:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "{{ if .CPURequest }}{{ .CPURequest }}{{ else }}2{{ end }}"
+              memory: "{{ if .MemoryRequest }}{{ .MemoryRequest }}{{ else }}4Gi{{ end }}"
             limits:
-              cpu: "4"
-              memory: "8Gi"
+              cpu: "{{ if .CPULimit }}{{ .CPULimit }}{{ else }}4{{ end }}"
+              memory: "{{ if .MemoryLimit }}{{ .MemoryLimit }}{{ else }}8Gi{{ end }}"
       volumes:
         - name: config
           configMap:
