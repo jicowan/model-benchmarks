@@ -126,9 +126,13 @@ const (
 	gpuMemoryUtilization = 0.90
 	gibBytes             = 1024 * 1024 * 1024
 
-	// maxSupportedTransformersMajor is the highest major version of transformers
-	// that vLLM 0.19.0 supports. Models requiring 5.x or higher won't work.
-	maxSupportedTransformersMajor = 4
+	// maxSupportedTransformersMajor is the highest major version of the
+	// transformers package that the bundled vLLM supports. vLLM 0.19.1+
+	// requires transformers 5.x (see release notes), so we accept up to 5.
+	// When vLLM ships a version requiring transformers 6.x, bump this and
+	// update the infeasibility reason wording in
+	// isTransformersVersionUnsupported.
+	maxSupportedTransformersMajor = 5
 )
 
 // unsupportedPipelineTags names HuggingFace pipeline tags that vLLM +
@@ -225,28 +229,27 @@ func isTransformersVersionUnsupported(version, vllmVersion string) (bool, string
 	return false, ""
 }
 
-// Host-memory checking constants. vLLM's HuggingFace loader reads weights
-// into CPU memory first, reshapes/casts them, then copies to GPU — peak
-// host RAM is ~1.3× the on-disk weight size.
+// Host-memory checking constants. Calibrated from empirical cgroup
+// memory.peak observations during vLLM weight loading:
 //
-// The Run:ai streamer (used when loading from an S3-cached prefix) was
-// initially assumed to keep host RAM very low because layers stream
-// directly to GPU. In practice, with our concurrency=16 config and
-// shard-heavy models like Qwen3-8B (~399 safetensors shards), peak
-// CPU-side RAM during load is nearly as high as the HF loader path —
-// empirically ~0.9× the weight size. The streamer is still a
-// meaningful speed-up vs. HF download + load, but host-RAM headroom on
-// small instances isn't materially different. See PR #46 follow-up:
-// a proper fix would record observed peak memory per run and consult
-// that history instead of multiplying weight size by a constant.
+//   Qwen3-8B (15.25 GiB weights) / g6.xlarge / streamer  → 13+ GiB, OOM'd
+//   Phi-4   (30.2  GiB weights) / g6e.2xlarge / HF      → 31.1 GiB peak
 //
-// On top of the weights, reserve room for kubelet, DaemonSets (device
-// plugin, CNI, kube-proxy), the SOCI snapshotter's in-process cache
-// (bumped by our parallel-pull tuning), and eviction-threshold headroom.
+// The Phi-4 measurement pins the HF-loader peak at ~1.03× the on-disk
+// weight size — much lower than the 1.3× we originally guessed. The
+// streamer path with concurrency=16 on shard-heavy models sits closer
+// to 0.9×. With a 2 GiB baseline buffer on top (kubelet reservation,
+// DaemonSets, SOCI snapshotter cache, eviction headroom), the effective
+// multipliers below give a small but safe margin over observed peaks
+// without rejecting legitimate (model, instance) pairs.
+//
+// A proper fix is to record observed peak memory per run and consult
+// that history instead of multiplying weight size by a constant; until
+// that lands, tune these numbers when a new data point disagrees.
 const (
-	hfLoaderHostMultiplier   = 1.3
-	s3StreamerHostMultiplier = 0.9
-	hostMemBufferBytes       = 3 * gibBytes
+	hfLoaderHostMultiplier   = 1.08
+	s3StreamerHostMultiplier = 0.95
+	hostMemBufferBytes       = 2 * gibBytes
 	hostMemAllocatableFrac   = 0.85
 )
 
