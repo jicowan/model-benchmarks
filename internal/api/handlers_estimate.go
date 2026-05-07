@@ -163,6 +163,13 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 		recOpts.VLLMVersion = tv.FrameworkVersion
 	}
 
+	// If the model is cached in S3, every row in the estimate uses the
+	// Run:ai streamer path, which lowers the host-RAM peak used by the
+	// recommender's host-memory feasibility check.
+	if mc, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main"); mc != nil && mc.Status == "cached" {
+		recOpts.UseS3Streamer = true
+	}
+
 	// Generate estimates for each instance type
 	var estimates []EstimateRow
 	var feasibleNative, feasibleQuantized, infeasible int

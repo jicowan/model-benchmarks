@@ -225,6 +225,99 @@ func isTransformersVersionUnsupported(version, vllmVersion string) (bool, string
 	return false, ""
 }
 
+// Host-memory checking constants. vLLM's HuggingFace loader reads weights
+// into CPU memory first, reshapes/casts them, then copies to GPU — peak
+// host RAM is ~1.3× the on-disk weight size. The Run:ai streamer path
+// (used when loading from an S3-cached prefix) streams layers directly to
+// GPU and stays under ~10% of weight size. On top of the weights, reserve
+// room for kubelet, DaemonSets (device plugin, CNI, kube-proxy), the SOCI
+// snapshotter's in-process cache (bumped by our parallel-pull tuning),
+// and eviction-threshold headroom.
+const (
+	hfLoaderHostMultiplier   = 1.3
+	s3StreamerHostMultiplier = 0.1
+	hostMemBufferBytes       = 3 * gibBytes
+	hostMemAllocatableFrac   = 0.85
+)
+
+// peakHostMemBytes estimates peak host RAM during model load. The
+// multiplier reflects whether vLLM's HuggingFace loader (CPU-resident
+// weights) or Run:ai streamer (streaming layers) is used.
+func peakHostMemBytes(modelWeightBytes float64, useS3Streamer bool) float64 {
+	mult := hfLoaderHostMultiplier
+	if useS3Streamer {
+		mult = s3StreamerHostMultiplier
+	}
+	return modelWeightBytes*mult + hostMemBufferBytes
+}
+
+// checkHostMemory returns (ok, reason, suggestedInstance). ok=true when
+// peak host-RAM usage fits comfortably under the instance's allocatable
+// host memory. On failure, suggestedInstance is the smallest larger GPU
+// instance from allInstances that would fit, or "" if none found.
+//
+// `modelWeightBytes` is the native-precision weight size — we intentionally
+// don't reduce it for on-the-fly quantization (int8/int4 via bitsandbytes)
+// because the loader still materializes full BF16 weights in host RAM
+// before quantizing. Only pre-quantized models (GPTQ/AWQ/NVFP4/etc., with
+// smaller on-disk weights) would reduce peak host RAM, and callers should
+// pass cfg.ActualMemoryBytes in that case.
+func checkHostMemory(
+	modelWeightBytes float64,
+	inst InstanceSpec,
+	allInstances []InstanceSpec,
+	useS3Streamer bool,
+) (bool, string, string) {
+	// inst.MemoryGiB == 0 means the instance catalog doesn't carry host-mem
+	// info. Skip the check rather than reject conservatively.
+	if inst.MemoryGiB == 0 {
+		return true, "", ""
+	}
+	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer)
+	allocatable := float64(inst.MemoryGiB) * gibBytes * hostMemAllocatableFrac
+	if peak <= allocatable {
+		return true, "", ""
+	}
+
+	path := "HuggingFace"
+	remedy := "Use a larger instance, or cache the model in S3 to load via the Run:ai streamer (which keeps host RAM close to the weight-stream buffer)"
+	if useS3Streamer {
+		path = "the Run:ai streamer from S3"
+		remedy = "Use a larger instance"
+	}
+
+	reason := fmt.Sprintf(
+		"Model weights in %s precision (%.1f GiB) require ~%.1f GiB of host RAM to load via %s, but %s allocates only %.1f GiB after kubelet/DaemonSet reservations. %s.",
+		// The precision label is a best-effort hint; callers can't easily
+		// thread the dtype name in without cfg, so just say "native" here.
+		"native",
+		modelWeightBytes/gibBytes,
+		peak/gibBytes,
+		path,
+		inst.Name,
+		allocatable/gibBytes,
+		remedy,
+	)
+
+	var suggested string
+	for _, alt := range allInstances {
+		if !strings.EqualFold(alt.AcceleratorType, "gpu") {
+			continue
+		}
+		// Only suggest strictly larger host memory; if the caller passes
+		// the current instance in allInstances, we don't want to echo it.
+		if alt.MemoryGiB <= inst.MemoryGiB {
+			continue
+		}
+		altAllocatable := float64(alt.MemoryGiB) * gibBytes * hostMemAllocatableFrac
+		if peak <= altAllocatable {
+			suggested = alt.Name
+			break
+		}
+	}
+	return false, reason, suggested
+}
+
 // bytesPerParam returns the bytes per parameter for a given dtype/quantization.
 func bytesPerParam(quant string) float64 {
 	switch quant {
@@ -377,6 +470,15 @@ type RecommendOptions struct {
 	// actually running instead of a hardcoded "vLLM 0.19.0" string. Empty
 	// string falls back to a generic wording.
 	VLLMVersion string
+
+	// UseS3Streamer indicates the model will be loaded via vLLM's Run:ai
+	// streamer from an S3-cached prefix (ModelS3URI set on the run request).
+	// The streamer keeps only a small layer buffer in host RAM, so peak host
+	// memory during load is far lower than the HuggingFace loader path
+	// (which materializes full weights in CPU memory before copying to GPU).
+	// The host-memory feasibility check consults this to decide whether a
+	// given instance can fit the model weight load in container RAM.
+	UseS3Streamer bool
 }
 
 // DefaultOverheadGiB calculates the default runtime overhead for a model based on its dimensions.
@@ -462,6 +564,47 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		modelMemEffective = modelMemoryBytes(cfg.ParameterCount, dtype)
 	}
 	modelMemNative := modelMemoryBytes(cfg.ParameterCount, dtype)
+
+	// Host-memory check. Runs AFTER model-memory computation so the helper
+	// can compare peak loader RAM against the instance's allocatable host
+	// memory. Failing this gate marks the pair infeasible and suggests a
+	// larger instance, even if the GPU math would otherwise succeed. This
+	// catches cases like "Qwen3-8B bfloat16 on g6.xlarge" where 15 GiB
+	// weights fit in 24 GiB GPU memory but won't fit in 13 GiB container
+	// RAM during HuggingFace-loader weight materialization.
+	//
+	// Pre-quantized models use modelMemEffective (smaller on-disk weight
+	// size); everything else uses modelMemNative, since on-the-fly INT8/
+	// INT4 via bitsandbytes doesn't reduce peak host RAM.
+	hostCheckBytes := modelMemNative
+	if cfg.PreQuantized && cfg.ActualMemoryBytes > 0 {
+		hostCheckBytes = modelMemEffective
+	}
+	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer); !ok {
+		rec := &Recommendation{
+			ModelInfo: ModelInfo{
+				ParameterCount:        cfg.ParameterCount,
+				NativeDtype:           dtype,
+				MaxPositionEmbeddings: cfg.MaxPositionEmbeddings,
+				Architecture:          cfg.ModelType,
+				SlidingWindow:         cfg.SlidingWindow,
+			},
+			InstanceInfo: InstanceInfo{
+				AcceleratorCount:     inst.AcceleratorCount,
+				AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,
+				AcceleratorName:      inst.AcceleratorName,
+			},
+			Explanation: Explanation{
+				Feasible:          false,
+				Reason:            reason,
+				SuggestedInstance: suggested,
+			},
+		}
+		if suggested != "" {
+			rec.Alternatives = &Alternatives{LargerInstance: suggested}
+		}
+		return rec
+	}
 	minGPUs := int(math.Ceil(modelMemEffective / usablePerDevice))
 	if minGPUs < 1 {
 		minGPUs = 1
