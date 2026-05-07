@@ -208,8 +208,12 @@ func (s *Seeder) run(id string, opts Options) {
 			if strings.EqualFold(inst.AcceleratorType, "neuron") {
 				rec = recommend.RecommendNeuron(*modelCfg, inst)
 			} else {
+				// Tell the recommender whether this run will use the Run:ai
+				// streamer (for S3-cached models), so its host-memory check
+				// accounts for the lower host-RAM peak that path provides.
 				rec = recommend.Recommend(*modelCfg, inst, allSpecs, recommend.RecommendOptions{
-					VLLMVersion: tv.FrameworkVersion,
+					VLLMVersion:   tv.FrameworkVersion,
+					UseS3Streamer: s3URI != "",
 				})
 			}
 			if rec == nil || !rec.Explanation.Feasible {

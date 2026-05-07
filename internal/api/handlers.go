@@ -801,6 +801,14 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		opts.VLLMVersion = tv.FrameworkVersion
 	}
 
+	// If the model is cached in S3, the run will use the Run:ai streamer,
+	// which keeps host RAM close to a small layer buffer. Informs the
+	// recommender's host-memory check (host-RAM peak is ~10% of weight
+	// size instead of ~130%).
+	if mc, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main"); mc != nil && mc.Status == "cached" {
+		opts.UseS3Streamer = true
+	}
+
 	// Look up instance type from DB.
 	instType, err := s.repo.GetInstanceTypeByName(r.Context(), instanceName)
 	if err != nil {
