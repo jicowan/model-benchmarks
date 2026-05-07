@@ -504,21 +504,25 @@ func TestModelMemoryBytes(t *testing.T) {
 }
 
 func TestTransformersVersionCheck(t *testing.T) {
+	// vLLM 0.19.1+ supports transformers 5.x; maxSupportedTransformersMajor
+	// is now 5 and we reject 6.x and higher.
 	tests := []struct {
 		version     string
 		unsupported bool
 	}{
-		{"", false},           // Empty = assume compatible
-		{"4.45.0", false},     // 4.x is supported
-		{"4.0.0", false},      // Old 4.x is supported
-		{"5.0.0", true},       // 5.x is too new
-		{"5.3.0", true},       // 5.3 is too new
-		{"5.5.0.dev0", true},  // Dev version of 5.x is too new
-		{"invalid", false},    // Can't parse = assume compatible
+		{"", false},          // Empty = assume compatible
+		{"4.45.0", false},    // 4.x supported
+		{"4.0.0", false},     // Old 4.x supported
+		{"5.0.0", false},     // 5.x now supported (was rejected in vLLM 0.19.0 era)
+		{"5.3.0", false},     // 5.3 supported
+		{"5.5.0.dev0", false}, // Dev version of 5.x supported
+		{"6.0.0", true},      // 6.x too new
+		{"7.2.0", true},      // 7.x too new
+		{"invalid", false},   // Can't parse = assume compatible
 	}
 
 	for _, tc := range tests {
-		unsupported, reason := isTransformersVersionUnsupported(tc.version, "v0.19.0")
+		unsupported, reason := isTransformersVersionUnsupported(tc.version, "v0.20.1")
 		if unsupported != tc.unsupported {
 			t.Errorf("isTransformersVersionUnsupported(%q) = %v, want %v (reason: %s)",
 				tc.version, unsupported, tc.unsupported, reason)
@@ -526,11 +530,11 @@ func TestTransformersVersionCheck(t *testing.T) {
 	}
 
 	// Verify the message reflects the configured vLLM version, not a hardcode.
-	_, reason := isTransformersVersionUnsupported("5.5.0.dev0", "v0.20.0")
-	if !strings.Contains(reason, "vLLM v0.20.0") {
-		t.Errorf("expected message to include 'vLLM v0.20.0', got: %s", reason)
+	_, reason := isTransformersVersionUnsupported("6.0.0", "v0.20.1")
+	if !strings.Contains(reason, "vLLM v0.20.1") {
+		t.Errorf("expected message to include 'vLLM v0.20.1', got: %s", reason)
 	}
-	_, reason = isTransformersVersionUnsupported("5.5.0.dev0", "")
+	_, reason = isTransformersVersionUnsupported("6.0.0", "")
 	if !strings.Contains(reason, "configured vLLM") {
 		t.Errorf("expected fallback wording 'configured vLLM', got: %s", reason)
 	}
@@ -610,7 +614,8 @@ func TestRecommendTextGenerationTagPasses(t *testing.T) {
 }
 
 func TestRecommendUnsupportedTransformersVersion(t *testing.T) {
-	// Model that requires transformers 5.x (like Gemma 4 or HybridQwen3)
+	// vLLM 0.19.1+ supports transformers 5.x, so rejection now kicks in at
+	// 6.x. Pick an arbitrary future major version.
 	model := ModelConfig{
 		ParameterCount:        32_000_000_000,
 		HiddenSize:            4096,
@@ -619,8 +624,8 @@ func TestRecommendUnsupportedTransformersVersion(t *testing.T) {
 		NumHiddenLayers:       40,
 		MaxPositionEmbeddings: 32768,
 		TorchDtype:            "bfloat16",
-		ModelType:             "hybrid_qwen3",
-		TransformersVersion:   "5.3.0", // Too new for vLLM 0.19.0
+		ModelType:             "hybrid_qwen4",
+		TransformersVersion:   "6.1.0", // Too new for vLLM we support today
 	}
 	inst := InstanceSpec{
 		Name: "p5.48xlarge", AcceleratorType: "GPU", AcceleratorName: "H100",
@@ -630,12 +635,12 @@ func TestRecommendUnsupportedTransformersVersion(t *testing.T) {
 	rec := Recommend(model, inst, allInstances, RecommendOptions{})
 
 	if rec.Explanation.Feasible {
-		t.Error("expected infeasible for model requiring transformers 5.x")
+		t.Error("expected infeasible for model requiring transformers 6.x")
 	}
 	if !strings.Contains(rec.Explanation.Reason, "transformers") {
 		t.Errorf("expected reason to mention transformers, got: %s", rec.Explanation.Reason)
 	}
-	if !strings.Contains(rec.Explanation.Reason, "5.3.0") {
+	if !strings.Contains(rec.Explanation.Reason, "6.1.0") {
 		t.Errorf("expected reason to mention required version, got: %s", rec.Explanation.Reason)
 	}
 }
