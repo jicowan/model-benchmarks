@@ -362,18 +362,39 @@ export default function Run() {
     }, 300);
   }
 
+  // PRD-47 PR #6: classify the recommender's rejection (if any). We
+  // split host-memory rejections (overridable) from everything else so
+  // the submit button reflects whether the user still has a path to
+  // "Start Benchmark". Keep this in sync with the hostMemOnly test in
+  // the warning panel below.
+  const infeasibleReason =
+    recommendation?.explanation && !recommendation.explanation.feasible
+      ? recommendation.explanation.reason ?? ""
+      : "";
+  const hostMemOnlyInfeasible =
+    infeasibleReason !== "" &&
+    /host RAM/i.test(infeasibleReason) &&
+    !/VRAM|accelerator memory|divides.*heads|transformers/i.test(infeasibleReason);
+  const archInfeasible = infeasibleReason !== "" && !hostMemOnlyInfeasible;
+
   // Mirror handleSubmit's payload requirements: model + instance are
   // always required; single-mode additionally needs scenario + dataset,
   // suite-mode needs a suite selected. Everything else has defaults or
   // comes from auto-recommend. Disable the submit button until the
   // required fields are populated so admins don't hit a server-side
   // 400 that would land them on an error banner.
+  //
+  // PRD-47 PR #6: also gate on feasibility. Architectural infeasibility
+  // (GPU memory, TP, transformers) is a hard block — no override. Host-
+  // memory infeasibility needs the explicit "Run anyway" checkbox.
   const canSubmit =
     form.model_hf_id.trim() !== "" &&
     form.instance_type_name.trim() !== "" &&
     (runMode === "suite"
       ? selectedSuite !== ""
-      : selectedScenario !== "" && selectedDataset !== "");
+      : selectedScenario !== "" && selectedDataset !== "") &&
+    !archInfeasible &&
+    (!hostMemOnlyInfeasible || allowHostMemOverride);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -766,12 +787,10 @@ export default function Run() {
         )}
 
         {/* Infeasibility warning with alternatives. PRD-47 PR #6:
-            host-memory-only rejections can be overridden by the user. */}
+            host-memory-only rejections can be overridden by the user
+            via the checkbox below; canSubmit above is kept in sync. */}
         {recommendation?.explanation && !recommendation.explanation.feasible && (() => {
-          const reason = recommendation.explanation.reason ?? "";
-          const hostMemOnly =
-            /host RAM/i.test(reason) &&
-            !/VRAM|accelerator memory|divides.*heads|transformers/i.test(reason);
+          const hostMemOnly = hostMemOnlyInfeasible;
           return (
           <div className="border border-warn/40 bg-warn/5 p-4">
             <div className="flex items-center gap-2 mb-3">
