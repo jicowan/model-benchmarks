@@ -107,6 +107,36 @@ func TestHostMemCheck_S3StreamerFitsOnMidInstance(t *testing.T) {
 	}
 }
 
+// PRD-47 PR #5: when per-family calibration flags a known-bad family,
+// the recommender should flip back to infeasible even though PR #3's
+// relaxed default would let it through.
+func TestHostMemCheck_CalibrationReclaimsQwen3(t *testing.T) {
+	// With PR #3's default S3 multiplier (0.5), Qwen3-8B passes on
+	// g6.xlarge. Calibration carrying the observed worst-case (0.9)
+	// should restore the infeasible verdict for this specific family.
+	rec := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
+		UseS3Streamer: true,
+		ModelFamily:   "qwen3",
+		HostMemCalibration: map[string]float64{
+			"qwen3|s3": 0.9,
+		},
+	})
+	if rec.Explanation.Feasible {
+		t.Fatal("expected infeasible once observed ratio replaces the default")
+	}
+	// Other families shouldn't be affected by Qwen3's calibration.
+	rec2 := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
+		UseS3Streamer: true,
+		ModelFamily:   "llama", // deliberate misattribution
+		HostMemCalibration: map[string]float64{
+			"qwen3|s3": 0.9,
+		},
+	})
+	if !rec2.Explanation.Feasible {
+		t.Fatal("llama key shouldn't inherit qwen3 calibration")
+	}
+}
+
 func TestHostMemCheck_SkippedWhenMemoryGiBUnset(t *testing.T) {
 	// Older InstanceSpec records in the DB may lack host-memory info.
 	// Don't reject conservatively when we can't do the math.
@@ -151,10 +181,67 @@ func TestHostAllocatableFrac_TieredByHostSize(t *testing.T) {
 	}
 }
 
+// PRD-47 PR #5: calibration overrides defaults when a matching key
+// exists, and unseen families keep the defaults.
+func TestPeakHostMemBytes_CalibrationOverridesDefault(t *testing.T) {
+	const weightBytes = 10.0 * gibBytes
+
+	defaultHF := peakHostMemBytes(weightBytes, false, "", nil)
+	defaultS3 := peakHostMemBytes(weightBytes, true, "", nil)
+
+	calib := map[string]float64{
+		"qwen3|s3": 0.9,  // observed worst case for Qwen3 streamer
+		"llama|hf": 1.02, // observed lean HF path for Llama
+	}
+
+	// Matching key → use the calibration multiplier.
+	qwen3S3 := peakHostMemBytes(weightBytes, true, "qwen3", calib)
+	wantQwen3 := 10.0*0.9*gibBytes + hostMemBufferBytes
+	if qwen3S3 != wantQwen3 {
+		t.Errorf("qwen3+s3: got %.2f GiB, want %.2f GiB (0.9×)", qwen3S3/gibBytes, wantQwen3/gibBytes)
+	}
+	if qwen3S3 <= defaultS3 {
+		t.Errorf("qwen3 calibration should raise peak above default (0.5×); got %.2f vs default %.2f",
+			qwen3S3/gibBytes, defaultS3/gibBytes)
+	}
+
+	llamaHF := peakHostMemBytes(weightBytes, false, "llama", calib)
+	wantLlama := 10.0*1.02*gibBytes + hostMemBufferBytes
+	if llamaHF != wantLlama {
+		t.Errorf("llama+hf: got %.2f GiB, want %.2f GiB (1.02×)", llamaHF/gibBytes, wantLlama/gibBytes)
+	}
+	if llamaHF >= defaultHF {
+		t.Errorf("llama calibration should lower peak vs default (1.08×); got %.2f vs default %.2f",
+			llamaHF/gibBytes, defaultHF/gibBytes)
+	}
+
+	// Non-matching family → default unchanged.
+	mistralHF := peakHostMemBytes(weightBytes, false, "mistral", calib)
+	if mistralHF != defaultHF {
+		t.Errorf("mistral (uncalibrated): got %.2f GiB, want default %.2f GiB",
+			mistralHF/gibBytes, defaultHF/gibBytes)
+	}
+
+	// Loader mismatch → default unchanged.
+	qwen3HF := peakHostMemBytes(weightBytes, false, "qwen3", calib)
+	if qwen3HF != defaultHF {
+		t.Errorf("qwen3+hf (only s3 calibrated): got %.2f GiB, want default %.2f GiB",
+			qwen3HF/gibBytes, defaultHF/gibBytes)
+	}
+
+	// Empty family or nil map → default unchanged.
+	if peakHostMemBytes(weightBytes, true, "", calib) != defaultS3 {
+		t.Error("empty family should use default")
+	}
+	if peakHostMemBytes(weightBytes, true, "qwen3", nil) != defaultS3 {
+		t.Error("nil calibration map should use default")
+	}
+}
+
 func TestPeakHostMemBytes_Multipliers(t *testing.T) {
 	const weightBytes = 10.0 * gibBytes
-	hf := peakHostMemBytes(weightBytes, false)
-	s3 := peakHostMemBytes(weightBytes, true)
+	hf := peakHostMemBytes(weightBytes, false, "", nil)
+	s3 := peakHostMemBytes(weightBytes, true, "", nil)
 
 	// HF path: 10 × 1.08 + 2 = ~12.8 GiB (matches measured Phi-4 peak within ~5%).
 	expectHF := 10.0*hfLoaderHostMultiplier*gibBytes + hostMemBufferBytes

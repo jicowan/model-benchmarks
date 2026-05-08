@@ -52,6 +52,9 @@ func (f *fakeRepo) CreateCatalogSeedStatus(_ context.Context, id string, total i
 	return nil
 }
 func (f *fakeRepo) ClaimSeed(_ context.Context, _, _ string) error { return nil }
+func (f *fakeRepo) GetHostMemCalibration(_ context.Context) (map[string]float64, error) {
+	return nil, nil
+}
 func (f *fakeRepo) UpdateCatalogSeedProgress(_ context.Context, _ string, completed int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

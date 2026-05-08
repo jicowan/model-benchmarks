@@ -24,6 +24,8 @@ type Repo interface {
 	// PRD-47: peak container workingSetBytes during the load phase.
 	SetRunHostMemoryPeak(ctx context.Context, runID string, gib float64) error
 	SetSuiteRunHostMemoryPeak(ctx context.Context, suiteRunID string, gib float64) error
+	// PRD-47 PR #5: p95 of observed (host_peak / weights) by model_family × loader.
+	GetHostMemCalibration(ctx context.Context) (map[string]float64, error)
 	PersistMetrics(ctx context.Context, runID string, m *BenchmarkMetrics) error
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)

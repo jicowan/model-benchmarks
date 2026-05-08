@@ -283,10 +283,28 @@ func hostAllocatableFrac(memoryGiB int) float64 {
 // peakHostMemBytes estimates peak host RAM during model load. The
 // multiplier reflects whether vLLM's HuggingFace loader (CPU-resident
 // weights) or Run:ai streamer (streaming layers) is used.
-func peakHostMemBytes(modelWeightBytes float64, useS3Streamer bool) float64 {
+//
+// PRD-47 PR #5: when modelFamily is non-empty AND the calibration map
+// has a matching entry, use the observed p95 ratio instead of the
+// hand-tuned default. Unseen families keep the conservative default.
+func peakHostMemBytes(
+	modelWeightBytes float64,
+	useS3Streamer bool,
+	modelFamily string,
+	calibration map[string]float64,
+) float64 {
 	mult := hfLoaderHostMultiplier
 	if useS3Streamer {
 		mult = s3StreamerHostMultiplier
+	}
+	if modelFamily != "" && len(calibration) > 0 {
+		loader := "hf"
+		if useS3Streamer {
+			loader = "s3"
+		}
+		if observed, ok := calibration[modelFamily+"|"+loader]; ok && observed > 0 {
+			mult = observed
+		}
 	}
 	return modelWeightBytes*mult + hostMemBufferBytes
 }
@@ -307,13 +325,15 @@ func checkHostMemory(
 	inst InstanceSpec,
 	allInstances []InstanceSpec,
 	useS3Streamer bool,
+	modelFamily string,
+	calibration map[string]float64,
 ) (bool, string, string) {
 	// inst.MemoryGiB == 0 means the instance catalog doesn't carry host-mem
 	// info. Skip the check rather than reject conservatively.
 	if inst.MemoryGiB == 0 {
 		return true, "", ""
 	}
-	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer)
+	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer, modelFamily, calibration)
 	allocatable := float64(inst.MemoryGiB) * gibBytes * hostAllocatableFrac(inst.MemoryGiB)
 	if peak <= allocatable {
 		return true, "", ""
@@ -542,6 +562,20 @@ type RecommendOptions struct {
 	// The host-memory feasibility check consults this to decide whether a
 	// given instance can fit the model weight load in container RAM.
 	UseS3Streamer bool
+
+	// ModelFamily identifies the model lineage ("llama", "qwen", "qwen3",
+	// "mistral", "phi", etc.) for per-family calibration lookup. Empty
+	// string disables calibration for this call; the recommender falls
+	// back to the hand-tuned default multipliers. PRD-47 PR #5.
+	ModelFamily string
+
+	// HostMemCalibration maps `"{model_family}|{loader}"` to the observed
+	// p95 of host_memory_peak / weight_size for completed runs in that
+	// bucket. Loader is "hf" or "s3". When a matching key is present and
+	// the ratio is positive, the recommender uses that instead of the
+	// hard-coded defaults for the host-memory feasibility check.
+	// Unseen buckets keep the defaults. PRD-47 PR #5.
+	HostMemCalibration map[string]float64
 }
 
 // DefaultOverheadGiB calculates the default runtime overhead for a model based on its dimensions.
@@ -643,7 +677,7 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	if cfg.PreQuantized && cfg.ActualMemoryBytes > 0 {
 		hostCheckBytes = modelMemEffective
 	}
-	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer); !ok {
+	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer, opts.ModelFamily, opts.HostMemCalibration); !ok {
 		rec := &Recommendation{
 			ModelInfo: ModelInfo{
 				ParameterCount:        cfg.ParameterCount,

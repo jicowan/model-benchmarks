@@ -27,6 +27,9 @@ type MockRepo struct {
 	toolVersions    *ToolVersions                // PRD-34
 	heartbeats      map[string]time.Time         // PRD-40: pod_name → last_seen_at
 	nextID          int
+	// PRD-47 PR #5: canned calibration map for GetHostMemCalibration.
+	// Exported so tests can seed values. Keys are "{model_family}|{loader}".
+	HostMemCalibration map[string]float64
 }
 
 // NewMockRepo creates a new MockRepo.
@@ -224,6 +227,18 @@ func (m *MockRepo) SetSuiteRunHostMemoryPeak(_ context.Context, suiteRunID strin
 	v := gib
 	run.HostMemoryPeakGiB = &v
 	return nil
+}
+
+// PRD-47 PR #5: mock returns the preset HostMemCalibration map (empty
+// by default, so the recommender falls back to defaults).
+func (m *MockRepo) GetHostMemCalibration(_ context.Context) (map[string]float64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]float64, len(m.HostMemCalibration))
+	for k, v := range m.HostMemCalibration {
+		out[k] = v
+	}
+	return out, nil
 }
 
 func (m *MockRepo) GetLoadgenStartedAt(_ context.Context, runID string) (*time.Time, error) {
