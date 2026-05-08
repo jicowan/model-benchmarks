@@ -2,6 +2,7 @@ package recommend
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -61,21 +62,48 @@ var validationModels = []struct {
 		NumAttentionHeads: 25, NumKeyValueHeads: 25, NumHiddenLayers: 48,
 		MaxPositionEmbeddings: 1024, TorchDtype: "float32", ModelType: "gpt2",
 	}},
+	// Real-world models we run in production — useful to sanity-check
+	// that recent host-memory calibration didn't make them infeasible on
+	// instances where they actually work in practice.
+	{"Qwen3-8B", ModelConfig{
+		ParameterCount: 8_190_000_000, HiddenSize: 4096,
+		NumAttentionHeads: 32, NumKeyValueHeads: 8, NumHiddenLayers: 36,
+		MaxPositionEmbeddings: 32768, TorchDtype: "bfloat16", ModelType: "qwen3",
+		Architectures: []string{"Qwen3ForCausalLM"}, PipelineTag: "text-generation",
+	}},
+	{"Qwen2.5-1.5B", ModelConfig{
+		ParameterCount: 1_543_714_304, HiddenSize: 1536,
+		NumAttentionHeads: 12, NumKeyValueHeads: 2, NumHiddenLayers: 28,
+		MaxPositionEmbeddings: 32768, TorchDtype: "bfloat16", ModelType: "qwen2",
+		Architectures: []string{"Qwen2ForCausalLM"}, PipelineTag: "text-generation",
+	}},
+	{"Phi-4", ModelConfig{
+		ParameterCount: 14_659_507_200, HiddenSize: 5120,
+		NumAttentionHeads: 40, NumKeyValueHeads: 10, NumHiddenLayers: 40,
+		MaxPositionEmbeddings: 16384, TorchDtype: "bfloat16", ModelType: "phi3",
+		Architectures: []string{"Phi3ForCausalLM"}, PipelineTag: "text-generation",
+	}},
 }
 
-// GPU instances for validation
+// GPU instances for validation. MemoryGiB values mirror the AWS catalog;
+// without them the recommender's host-memory check short-circuits and the
+// matrix only stresses the GPU-side math. See host_memory_test.go for the
+// companion test that exercises the host-memory path in isolation.
 var validationInstances = []InstanceSpec{
 	// Single GPU - small memory
-	{Name: "g5.xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G", AcceleratorCount: 1, AcceleratorMemoryGiB: 24},
-	{Name: "g6.xlarge", AcceleratorType: "GPU", AcceleratorName: "L4", AcceleratorCount: 1, AcceleratorMemoryGiB: 24},
-	// Single GPU - large memory
-	{Name: "g6e.xlarge", AcceleratorType: "GPU", AcceleratorName: "L40S", AcceleratorCount: 1, AcceleratorMemoryGiB: 48},
+	{Name: "g5.xlarge", AcceleratorType: "gpu", AcceleratorName: "A10G", AcceleratorCount: 1, AcceleratorMemoryGiB: 24, MemoryGiB: 16},
+	{Name: "g5.2xlarge", AcceleratorType: "gpu", AcceleratorName: "A10G", AcceleratorCount: 1, AcceleratorMemoryGiB: 24, MemoryGiB: 32},
+	{Name: "g6.xlarge", AcceleratorType: "gpu", AcceleratorName: "L4", AcceleratorCount: 1, AcceleratorMemoryGiB: 24, MemoryGiB: 16},
+	{Name: "g6.2xlarge", AcceleratorType: "gpu", AcceleratorName: "L4", AcceleratorCount: 1, AcceleratorMemoryGiB: 24, MemoryGiB: 32},
+	// Single GPU - large memory (L40S)
+	{Name: "g6e.xlarge", AcceleratorType: "gpu", AcceleratorName: "L40S", AcceleratorCount: 1, AcceleratorMemoryGiB: 48, MemoryGiB: 16},
+	{Name: "g6e.2xlarge", AcceleratorType: "gpu", AcceleratorName: "L40S", AcceleratorCount: 1, AcceleratorMemoryGiB: 48, MemoryGiB: 64},
 	// Multi-GPU - medium
-	{Name: "g5.12xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G", AcceleratorCount: 4, AcceleratorMemoryGiB: 96},
-	{Name: "g6e.12xlarge", AcceleratorType: "GPU", AcceleratorName: "L40S", AcceleratorCount: 4, AcceleratorMemoryGiB: 192},
+	{Name: "g5.12xlarge", AcceleratorType: "gpu", AcceleratorName: "A10G", AcceleratorCount: 4, AcceleratorMemoryGiB: 96, MemoryGiB: 192},
+	{Name: "g6e.12xlarge", AcceleratorType: "gpu", AcceleratorName: "L40S", AcceleratorCount: 4, AcceleratorMemoryGiB: 192, MemoryGiB: 384},
 	// Multi-GPU - large
-	{Name: "p4d.24xlarge", AcceleratorType: "GPU", AcceleratorName: "A100", AcceleratorCount: 8, AcceleratorMemoryGiB: 320},
-	{Name: "p5.48xlarge", AcceleratorType: "GPU", AcceleratorName: "H100", AcceleratorCount: 8, AcceleratorMemoryGiB: 640},
+	{Name: "p4d.24xlarge", AcceleratorType: "gpu", AcceleratorName: "A100", AcceleratorCount: 8, AcceleratorMemoryGiB: 320, MemoryGiB: 1152},
+	{Name: "p5.48xlarge", AcceleratorType: "gpu", AcceleratorName: "H100", AcceleratorCount: 8, AcceleratorMemoryGiB: 640, MemoryGiB: 2048},
 }
 
 func TestValidateRecommendationsUniversal(t *testing.T) {
@@ -175,33 +203,53 @@ func TestPrintRecommendationMatrix(t *testing.T) {
 		t.Skip("skipping matrix print in short mode")
 	}
 
-	fmt.Println("\n=== Recommendation Matrix ===")
-	fmt.Printf("%-20s | %-15s | %-8s | %-6s | %-6s | %-10s | %-5s\n",
-		"Model", "Instance", "Feasible", "Quant", "TP", "MaxLen", "Conc")
-	fmt.Println("--------------------+-----------------+----------+--------+--------+------------+------")
+	// Two passes: HF loader (default) and Run:ai streamer. Lets us eyeball
+	// whether the host-memory calibration is rejecting pairs that the
+	// streamer would make feasible.
+	for _, useS3 := range []bool{false, true} {
+		loader := "HF loader"
+		if useS3 {
+			loader = "Run:ai streamer (S3)"
+		}
+		fmt.Printf("\n=== Recommendation Matrix — %s ===\n", loader)
+		fmt.Printf("%-20s | %-15s | %-8s | %-8s | %-3s | %-8s | %-5s | %s\n",
+			"Model", "Instance", "Feasible", "Quant", "TP", "MaxLen", "Conc", "Reason (if infeasible)")
+		fmt.Println(strings.Repeat("-", 120))
 
-	for _, m := range validationModels {
-		for _, inst := range validationInstances {
-			rec := Recommend(m.config, inst, validationInstances, RecommendOptions{})
+		for _, m := range validationModels {
+			for _, inst := range validationInstances {
+				rec := Recommend(m.config, inst, validationInstances, RecommendOptions{
+					UseS3Streamer: useS3,
+				})
 
-			feasible := "Yes"
-			quant := "native"
-			tp := fmt.Sprintf("%d", rec.TensorParallelDegree)
-			maxLen := fmt.Sprintf("%d", rec.MaxModelLen)
-			conc := fmt.Sprintf("%d", rec.Concurrency)
+				feasible := "Yes"
+				quant := "native"
+				tp := fmt.Sprintf("%d", rec.TensorParallelDegree)
+				maxLen := fmt.Sprintf("%d", rec.MaxModelLen)
+				conc := fmt.Sprintf("%d", rec.Concurrency)
+				reason := ""
 
-			if !rec.Explanation.Feasible {
-				feasible = "No"
-				quant = "-"
-				tp = "-"
-				maxLen = "-"
-				conc = "-"
-			} else if rec.Quantization != nil {
-				quant = *rec.Quantization
+				if !rec.Explanation.Feasible {
+					feasible = "No"
+					quant = "-"
+					tp = "-"
+					maxLen = "-"
+					conc = "-"
+					reason = rec.Explanation.Reason
+					if len(reason) > 80 {
+						reason = reason[:77] + "..."
+					}
+				} else if rec.Quantization != nil {
+					quant = *rec.Quantization
+				}
+
+				name := m.name
+				if len(name) > 20 {
+					name = name[:20]
+				}
+				fmt.Printf("%-20s | %-15s | %-8s | %-8s | %-3s | %-8s | %-5s | %s\n",
+					name, inst.Name, feasible, quant, tp, maxLen, conc, reason)
 			}
-
-			fmt.Printf("%-20s | %-15s | %-8s | %-6s | %-6s | %-10s | %-5s\n",
-				m.name[:min(20, len(m.name))], inst.Name, feasible, quant, tp, maxLen, conc)
 		}
 	}
 }

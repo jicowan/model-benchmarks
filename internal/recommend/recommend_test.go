@@ -84,11 +84,35 @@ func TestSupportsFP8(t *testing.T) {
 }
 
 func TestKVCachePerTokenBytes(t *testing.T) {
-	// Mistral 7B: head_dim=128, kv_per_token = 2*32*8*128*2 = 131072
-	got := kvCachePerTokenBytes(mistral7B)
+	// Mistral 7B: head_dim=128, kv_per_token (fp16) = 2*32*8*128*2 = 131072
+	got := kvCachePerTokenBytes(mistral7B, "")
 	want := float64(2 * 32 * 8 * 128 * 2)
 	if got != want {
-		t.Errorf("kvCachePerTokenBytes(mistral7B) = %v, want %v", got, want)
+		t.Errorf("kvCachePerTokenBytes(mistral7B, fp16) = %v, want %v", got, want)
+	}
+}
+
+// PRD-47: fp8 KV cache halves per-token memory. Recommender must size
+// the KV budget accordingly or under-use premium-GPU memory.
+func TestKVCachePerTokenBytes_FP8HalvesBudget(t *testing.T) {
+	fp16 := kvCachePerTokenBytes(mistral7B, "")
+	fp8 := kvCachePerTokenBytes(mistral7B, "fp8")
+	if fp8*2 != fp16 {
+		t.Errorf("expected fp8 kv-per-token == fp16/2, got fp8=%v fp16=%v", fp8, fp16)
+	}
+
+	// All three fp8 variants must produce the same number.
+	for _, dtype := range []string{"fp8_e4m3", "fp8_e5m2"} {
+		if kvCachePerTokenBytes(mistral7B, dtype) != fp8 {
+			t.Errorf("%s should match fp8 byte count", dtype)
+		}
+	}
+
+	// Auto / unknown / bf16 all fall back to fp16 sizing.
+	for _, dtype := range []string{"", "auto", "bf16", "bfloat16", "fp16"} {
+		if kvCachePerTokenBytes(mistral7B, dtype) != fp16 {
+			t.Errorf("dtype %q should use fp16 byte count", dtype)
+		}
 	}
 }
 

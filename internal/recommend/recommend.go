@@ -377,10 +377,20 @@ func modelMemoryBytes(params int64, quant string) float64 {
 }
 
 // kvCachePerTokenBytes returns KV cache memory per token in bytes.
-// Formula: 2 (K+V) × num_layers × num_kv_heads × head_dim × 2 (FP16 bytes)
-func kvCachePerTokenBytes(cfg ModelConfig) float64 {
+// Formula: 2 (K+V) × num_layers × num_kv_heads × head_dim × bytes_per_element
+//
+// bytes_per_element is derived from kvCacheDtype: fp16/bf16 = 2, fp8 = 1.
+// PRD-46 wires --kv-cache-dtype=fp8 as the default on H100/H200/L40S, so the
+// recommender must size KV budget to match. An empty string means
+// "auto / matches compute dtype", which we treat as fp16.
+func kvCachePerTokenBytes(cfg ModelConfig, kvCacheDtype string) float64 {
+	bytesPerElement := 2.0 // fp16 / bf16 / auto
+	switch kvCacheDtype {
+	case "fp8", "fp8_e4m3", "fp8_e5m2":
+		bytesPerElement = 1.0
+	}
 	headDim := float64(cfg.HiddenSize) / float64(cfg.NumAttentionHeads)
-	return 2 * float64(cfg.NumHiddenLayers) * float64(cfg.NumKeyValueHeads) * headDim * 2
+	return 2 * float64(cfg.NumHiddenLayers) * float64(cfg.NumKeyValueHeads) * headDim * bytesPerElement
 }
 
 // effectiveKVCacheLength returns the effective context length for KV cache sizing.
@@ -807,6 +817,15 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 
 	rec.Explanation.Feasible = true
 
+	// PRD-46: decide --kv-cache-dtype up front so KV budget math below
+	// matches the dtype vLLM will actually use. On FP8-capable GPUs
+	// (H100/H200/L40S) we default to fp8, which halves KV per token and
+	// roughly doubles max_model_len / concurrency compared to fp16.
+	kvCacheDtype := ""
+	if supportsFP8(inst.AcceleratorName) {
+		kvCacheDtype = "fp8"
+	}
+
 	// Calculate max model length.
 	// Beyond raw weights, vLLM consumes GPU memory for:
 	//   1. CUDA context + runtime: ~0.5 GiB (fixed)
@@ -814,7 +833,7 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	//      batch sizes (sum ≈ 3400 tokens). Each graph allocates per-layer
 	//      activation buffers proportional to hidden_size and FFN width.
 	//      FFN intermediate_size ≈ 3.5 × hidden_size for gated architectures.
-	kvPerToken := kvCachePerTokenBytes(cfg)
+	kvPerToken := kvCachePerTokenBytes(cfg, kvCacheDtype)
 	effectiveModelMem := modelMemoryBytes(cfg.ParameterCount, chosenQuant)
 	// Use user-provided overhead if specified, otherwise calculate from model dimensions
 	var runtimeOverhead float64
@@ -960,13 +979,11 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	}
 	rec.MaxNumBatchedTokens = mnbt
 
-	// PRD-46: KV cache dtype. FP8-capable accelerators halve KV memory
-	// with negligible quality impact under throughput benchmarks; on
-	// everything else, leave empty so vLLM picks its default (matches
-	// compute dtype). PR #3 wires this into the orchestrator + template.
-	if supportsFP8(inst.AcceleratorName) {
-		rec.KVCacheDtype = "fp8"
-	}
+	// PRD-46 / PRD-47: KV cache dtype decided up front (see kvCacheDtype
+	// above) so the KV budget math uses the right bytes/element; emit
+	// it here. FP8 on H100/H200/L40S halves KV memory with negligible
+	// quality impact under throughput benchmarks.
+	rec.KVCacheDtype = kvCacheDtype
 
 	return rec
 }
