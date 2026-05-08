@@ -168,6 +168,10 @@ export default function SuiteResults() {
               label: "Max Num Seqs",
               value: suiteRun.max_num_seqs ?? null,
             },
+            {
+              label: "KV Cache Dtype",
+              value: suiteRun.kv_cache_dtype ?? null,
+            },
           ]}
         />
 

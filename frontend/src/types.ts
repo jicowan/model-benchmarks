@@ -59,6 +59,7 @@ export interface BenchmarkRun {
   // panel can render every knob used at deploy time.
   max_model_len?: number;
   max_num_batched_tokens?: number | null;
+  kv_cache_dtype?: string | null;
   scenario_id?: string | null;
   model_s3_uri?: string | null;
   status: string;
@@ -148,6 +149,7 @@ export interface RunRequest {
   scenario_id?: string;
   max_model_len?: number;
   max_num_batched_tokens?: number;
+  kv_cache_dtype?: string;
   api_type?: string;
   model_s3_uri?: string;
   hf_token?: string;
@@ -454,6 +456,7 @@ export interface SuiteRunRequest {
   quantization?: string;
   max_model_len?: number;
   max_num_batched_tokens?: number;
+  kv_cache_dtype?: string;
   model_s3_uri?: string;
   hf_token?: string;
 }
@@ -547,6 +550,7 @@ export interface TestSuiteRun {
   max_model_len?: number;
   max_num_batched_tokens?: number | null;
   max_num_seqs?: number;
+  kv_cache_dtype?: string | null;
   framework?: string | null;
   framework_version?: string | null;
   model_s3_uri?: string | null;

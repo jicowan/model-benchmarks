@@ -354,6 +354,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		MaxModelLen:          cfg.Request.MaxModelLen,
 		MaxNumBatchedTokens:  cfg.Request.MaxNumBatchedTokens,
 		MaxNumSeqs:           cfg.Request.Concurrency,
+		KVCacheDtype:         cfg.Request.KVCacheDtype,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
 		ModelS3URI:           modelS3URI,

@@ -235,6 +235,10 @@ export default function ResultDetail() {
               label: "Max Num Seqs",
               value: run.concurrency ?? null,
             },
+            {
+              label: "KV Cache Dtype",
+              value: run.kv_cache_dtype ?? null,
+            },
           ]}
         />
 
