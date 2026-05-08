@@ -153,6 +153,8 @@ export interface RunRequest {
   api_type?: string;
   model_s3_uri?: string;
   hf_token?: string;
+  // PRD-47 PR #6: skip the host-memory feasibility check when set.
+  allow_host_mem_override?: boolean;
 }
 
 export interface RunListItem {
@@ -462,6 +464,8 @@ export interface SuiteRunRequest {
   kv_cache_dtype?: string;
   model_s3_uri?: string;
   hf_token?: string;
+  // PRD-47 PR #6: skip the host-memory feasibility check when set.
+  allow_host_mem_override?: boolean;
 }
 
 export interface ScenarioProgress {
