@@ -202,8 +202,9 @@ func RecommendNeuron(cfg ModelConfig, inst InstanceSpec) *Recommendation {
 		tp, modelMemBytes/gibBytes, totalCores, memPerCore)
 	rec.Explanation.Quantization = "Neuron instances use BF16 precision only (no quantization support)."
 
-	// Calculate max model length
-	kvPerToken := kvCachePerTokenBytes(cfg)
+	// Calculate max model length. Neuron vLLM doesn't support
+	// --kv-cache-dtype, so always size KV for fp16 (bytes-per-element=2).
+	kvPerToken := kvCachePerTokenBytes(cfg, "")
 	runtimeOverhead := neuronRuntimeOverheadBytes(cfg)
 	remainingBytes := usableBytes - modelMemBytes - runtimeOverhead
 	if remainingBytes < 0 {
