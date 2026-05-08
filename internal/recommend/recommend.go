@@ -885,13 +885,25 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		rec.OutputSequenceLength = maxModelLen / 3
 	}
 
-	// Calculate concurrency: KV budget / (tokens per sequence × bytes per token).
-	avgSeqLen := float64(rec.InputSequenceLength + rec.OutputSequenceLength)
-	effectiveSeqLen := float64(effectiveKVCacheLength(int(avgSeqLen), cfg.SlidingWindow))
+	// PRD-47: concurrency is sized against maxModelLen consistently.
+	// vLLM pre-provisions a KV slot big enough to fit a full-length
+	// request per in-flight sequence (paged attention reclaims idle
+	// pages, but worst-case inputs still push toward the full slot).
+	// Using avgSeqLen here and maxModelLen in the joint constraint
+	// below chained two different cost models together and produced
+	// outputs that were hard to reason about. One model, one scalar:
+	// plan the budget for the largest request vLLM might accept.
+	//
+	// Cost: on models where the user keeps a long max_model_len for
+	// headroom but actually runs short requests, the recommended
+	// concurrency is 2-3× lower than the workload needs. Remedy:
+	// lower max_model_len (explained in Explanation.Concurrency below).
+	effectiveSeqLen := float64(effectiveKVCacheLength(maxModelLen, cfg.SlidingWindow))
 	memPerSeq := kvPerToken * effectiveSeqLen
+	kvBudgetBytes := 0.9 * remainingBytes // 10% headroom for paged-attention churn
 	maxConcurrent := 1
 	if memPerSeq > 0 {
-		maxConcurrent = int(remainingBytes / memPerSeq)
+		maxConcurrent = int(kvBudgetBytes / memPerSeq)
 	}
 	if maxConcurrent > 64 {
 		maxConcurrent = 64
@@ -900,33 +912,31 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		maxConcurrent = 1
 	}
 
-	// Joint constraint: ensure max_model_len × concurrency fits within 90%
-	// of the KV cache budget. vLLM uses paged attention so not every slot is
-	// fully allocated, but we need headroom to prevent OOM under load.
-	kvBudgetTokens := int(0.9 * remainingBytes / kvPerToken)
-	benchMaxModelLen := maxModelLen // save before adjustment for production note
-	if maxModelLen*maxConcurrent > kvBudgetTokens {
-		if userOverrideMaxModelLen {
-			// User chose max_model_len; adjust concurrency to fit.
-			maxConcurrent = kvBudgetTokens / maxModelLen
-			if maxConcurrent < 1 {
-				maxConcurrent = 1
-			}
-		} else {
-			// Auto mode: prefer keeping concurrency high, reduce max_model_len.
-			safeMaxModelLen := roundDownContext(kvBudgetTokens / maxConcurrent)
-			minModelLen := roundDownContext((rec.InputSequenceLength + rec.OutputSequenceLength) * 2)
-			if safeMaxModelLen >= minModelLen {
-				maxModelLen = safeMaxModelLen
-			} else {
+	// Auto mode: if maxConcurrent ended up at 1 because maxModelLen is
+	// huge, try trimming maxModelLen down to recover parallelism.
+	// User-overridden maxModelLen is sacred — we respect their choice.
+	benchMaxModelLen := maxModelLen // save for production note
+	if !userOverrideMaxModelLen && maxConcurrent == 1 && memPerSeq > 0 {
+		minModelLen := roundDownContext((rec.InputSequenceLength + rec.OutputSequenceLength) * 2)
+		for maxConcurrent < 4 && maxModelLen > minModelLen {
+			maxModelLen = roundDownContext(maxModelLen / 2)
+			if maxModelLen < minModelLen {
 				maxModelLen = minModelLen
-				maxConcurrent = kvBudgetTokens / maxModelLen
-				if maxConcurrent < 1 {
-					maxConcurrent = 1
-				}
 			}
-			benchMaxModelLen = maxModelLen
+			effectiveSeqLen = float64(effectiveKVCacheLength(maxModelLen, cfg.SlidingWindow))
+			memPerSeq = kvPerToken * effectiveSeqLen
+			if memPerSeq > 0 {
+				maxConcurrent = int(kvBudgetBytes / memPerSeq)
+			}
+			if maxConcurrent > 64 {
+				maxConcurrent = 64
+				break
+			}
+			if maxModelLen == minModelLen {
+				break
+			}
 		}
+		benchMaxModelLen = maxModelLen
 	}
 
 	rec.MaxModelLen = maxModelLen
@@ -934,6 +944,7 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 
 	// Production note: when the benchmark config uses less than the model's
 	// full context, show what concurrency would look like at full context.
+	kvBudgetTokens := int(kvBudgetBytes / kvPerToken)
 	if !userOverrideMaxModelLen && benchMaxModelLen < nativeMaxModelLen && kvBudgetTokens > 0 {
 		fullContextConcurrency := kvBudgetTokens / nativeMaxModelLen
 		if fullContextConcurrency < 1 {
@@ -953,13 +964,16 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen, maxConcurrent)
 	}
 
-	// Generate explanation for concurrency
-	if cfg.SlidingWindow > 0 && cfg.SlidingWindow < int(avgSeqLen) {
-		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory. Sliding window (%d tokens) caps KV per sequence, enabling higher concurrency.",
-			remainingBytes/gibBytes, cfg.SlidingWindow)
+	// Generate explanation for concurrency. PRD-47 sizes concurrency
+	// against max_model_len (not avg request length) so vLLM can still
+	// fit worst-case inputs per slot. Lowering max_model_len trades
+	// context for parallelism.
+	if cfg.SlidingWindow > 0 && cfg.SlidingWindow < maxModelLen {
+		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory (90%% budgeted). Sliding window (%d tokens) caps KV per sequence, enabling higher concurrency than max_model_len=%d alone would allow.",
+			remainingBytes/gibBytes, cfg.SlidingWindow, maxModelLen)
 	} else {
-		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory with %d-token average sequence length.",
-			remainingBytes/gibBytes, int(avgSeqLen))
+		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory (90%% budgeted), sized for max_model_len=%d tokens per slot. Lower max_model_len for higher concurrency.",
+			remainingBytes/gibBytes, maxModelLen)
 	}
 
 	// PRD-46: --max-num-batched-tokens sizes vLLM's per-iteration

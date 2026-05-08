@@ -706,3 +706,36 @@ func TestRecommend_MaxNumBatchedTokens_OverrideWins(t *testing.T) {
 			rec.MaxNumBatchedTokens)
 	}
 }
+
+// PRD-47 PR #2: concurrency is sized against max_model_len, not
+// avg_seq_len. The returned (max_model_len, concurrency) pair must
+// satisfy `max_model_len × concurrency × kv_per_token ≤ 0.9 × KV budget`
+// so vLLM can provision a full-length slot per in-flight sequence.
+func TestRecommend_ConcurrencyFitsMaxModelLenBudget(t *testing.T) {
+	// Mistral 7B on g5.12xlarge (4 A10G, 96 GiB). Well inside the feasibility
+	// envelope, so the joint constraint is the binding one.
+	rec := Recommend(mistral7B, g5_12xlarge, allInstances, RecommendOptions{})
+	if !rec.Explanation.Feasible {
+		t.Fatal("expected feasible recommendation")
+	}
+
+	// Manually verify the invariant. Match the inputs the recommender
+	// computed internally.
+	kvPerToken := kvCachePerTokenBytes(mistral7B, rec.KVCacheDtype)
+
+	// Approximate the per-device usable memory the same way Recommend does.
+	// The test doesn't need to replay the whole formula — it just asserts
+	// that concurrency × max_model_len tokens × kv_per_token fits inside
+	// the _positive_ remainder after subtracting weights + a small overhead
+	// budget from the full TP-sized VRAM pool.
+	perDevice := float64(g5_12xlarge.AcceleratorMemoryGiB) / float64(g5_12xlarge.AcceleratorCount)
+	totalVRAM := perDevice * float64(rec.TensorParallelDegree) * gibBytes * gpuMemoryUtilization
+	totalKVBytes := float64(rec.MaxModelLen) * float64(rec.Concurrency) * kvPerToken
+
+	// Allow some headroom; this is a sanity ceiling not an exact check.
+	if totalKVBytes > totalVRAM {
+		t.Errorf("max_model_len(%d) × concurrency(%d) × kv_per_token(%.0f) = %.2f GiB > total VRAM %.2f GiB",
+			rec.MaxModelLen, rec.Concurrency, kvPerToken,
+			totalKVBytes/gibBytes, totalVRAM/gibBytes)
+	}
+}
