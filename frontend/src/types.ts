@@ -1,7 +1,7 @@
 export interface CatalogEntry {
   run_id: string;
   model_hf_id: string;
-  model_family?: string;
+  model_type?: string;
   parameter_count?: number;
   instance_type_name: string;
   instance_family: string;
@@ -296,7 +296,7 @@ export interface CatalogSeedStatus {
 export interface CatalogFilter {
   ids?: string[]; // PRD-36: used by Compare to fetch selected rows only
   model?: string;
-  model_family?: string;
+  model_type?: string;
   instance_family?: string;
   accelerator_type?: string;
   sort?: string;

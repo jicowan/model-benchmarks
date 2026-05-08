@@ -51,8 +51,8 @@ func TestListCatalog(t *testing.T) {
 func TestListCatalog_AllFilters(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("model_family") != "llama" {
-			t.Errorf("expected model_family=llama, got %s", q.Get("model_family"))
+		if q.Get("model_type") != "llama" {
+			t.Errorf("expected model_type=llama, got %s", q.Get("model_type"))
 		}
 		if q.Get("instance_family") != "p5" {
 			t.Errorf("expected instance_family=p5, got %s", q.Get("instance_family"))
@@ -73,7 +73,7 @@ func TestListCatalog_AllFilters(t *testing.T) {
 
 	c := New(srv.URL)
 	_, err := c.ListCatalog(context.Background(), database.CatalogFilter{
-		ModelFamily:     "llama",
+		ModelType:       "llama",
 		InstanceFamily:  "p5",
 		AcceleratorType: "gpu",
 		SortBy:          "throughput_aggregate",

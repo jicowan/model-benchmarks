@@ -3,48 +3,19 @@ package database
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ExtractModelFamily derives the model family from a HuggingFace ID.
-// Exported (PRD-47 PR #5) so callers that need the calibration key
-// can use the same taxonomy the model row uses.
-// Returns one of: llama, mistral, qwen, deepseek, gemma, phi, or empty string.
-// Priority: check organization name first (before /), then model name.
-func ExtractModelFamily(hfID string) string {
-	return extractModelFamily(hfID)
-}
-
-// extractModelFamily extracts the model family from a HuggingFace model ID.
-// Returns one of: llama, mistral, qwen, deepseek, gemma, phi, or empty string.
-// Priority: check organization name first (before /), then model name.
-func extractModelFamily(hfID string) string {
-	lower := strings.ToLower(hfID)
-	families := []string{"llama", "mistral", "qwen", "deepseek", "gemma", "phi"}
-
-	// Split into org and model name
-	parts := strings.SplitN(lower, "/", 2)
-	org := parts[0]
-
-	// Check organization name first (more reliable)
-	for _, f := range families {
-		if strings.Contains(org, f) {
-			return f
-		}
-	}
-
-	// Fall back to checking full ID (for cases like TinyLlama/...)
-	for _, f := range families {
-		if strings.Contains(lower, f) {
-			return f
-		}
-	}
-	return ""
-}
+// Model family derivation moved to ModelConfig.ModelType: HF's
+// config.json carries a canonical architecture name ("llama", "qwen2",
+// "qwen3", "phi3", "mistral", "gpt_oss", …) that we use verbatim as
+// the calibration key. The recommend path populates models.model_type
+// via SetModelType when it fetches the config; callers that just have
+// an hfID (no config) leave it NULL and the calibration query ignores
+// those rows.
 
 // Repository provides database operations for benchmark data.
 type Repository struct {
@@ -78,9 +49,9 @@ func (r *Repository) Ping(ctx context.Context) error {
 func (r *Repository) GetModelByHfID(ctx context.Context, hfID, hfRevision string) (*Model, error) {
 	var m Model
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, hf_id, hf_revision, model_family, parameter_count, created_at
+		`SELECT id, hf_id, hf_revision, model_type, parameter_count, created_at
 		 FROM models WHERE hf_id = $1 AND hf_revision = $2`, hfID, hfRevision,
-	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.ModelFamily, &m.ParameterCount, &m.CreatedAt)
+	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.ModelType, &m.ParameterCount, &m.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -94,9 +65,9 @@ func (r *Repository) GetModelByHfID(ctx context.Context, hfID, hfRevision string
 func (r *Repository) GetModelByID(ctx context.Context, id string) (*Model, error) {
 	var m Model
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, hf_id, hf_revision, model_family, parameter_count, created_at
+		`SELECT id, hf_id, hf_revision, model_type, parameter_count, created_at
 		 FROM models WHERE id = $1`, id,
-	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.ModelFamily, &m.ParameterCount, &m.CreatedAt)
+	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.ModelType, &m.ParameterCount, &m.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -147,7 +118,10 @@ func (r *Repository) SetModelParameterCount(ctx context.Context, modelID string,
 	return nil
 }
 
-// EnsureModel returns an existing model or creates one if it doesn't exist.
+// EnsureModel returns an existing model or creates one if it doesn't
+// exist. model_type is populated later via SetModelType on the recommend
+// path (when we have the HF config in hand), so new rows created here
+// carry NULL.
 func (r *Repository) EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error) {
 	m, err := r.GetModelByHfID(ctx, hfID, hfRevision)
 	if err != nil {
@@ -157,64 +131,37 @@ func (r *Repository) EnsureModel(ctx context.Context, hfID, hfRevision string) (
 		return m, nil
 	}
 
-	// Extract model family from HuggingFace ID
-	family := extractModelFamily(hfID)
-	var familyPtr *string
-	if family != "" {
-		familyPtr = &family
-	}
-
 	var created Model
 	err = r.pool.QueryRow(ctx,
-		`INSERT INTO models (hf_id, hf_revision, model_family)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (hf_id, hf_revision) DO UPDATE SET model_family = COALESCE(models.model_family, EXCLUDED.model_family)
-		 RETURNING id, hf_id, hf_revision, model_family, parameter_count, created_at`,
-		hfID, hfRevision, familyPtr,
-	).Scan(&created.ID, &created.HfID, &created.HfRevision, &created.ModelFamily, &created.ParameterCount, &created.CreatedAt)
+		`INSERT INTO models (hf_id, hf_revision)
+		 VALUES ($1, $2)
+		 ON CONFLICT (hf_id, hf_revision) DO UPDATE SET hf_id = EXCLUDED.hf_id
+		 RETURNING id, hf_id, hf_revision, model_type, parameter_count, created_at`,
+		hfID, hfRevision,
+	).Scan(&created.ID, &created.HfID, &created.HfRevision, &created.ModelType, &created.ParameterCount, &created.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("upsert model: %w", err)
 	}
 	return &created, nil
 }
 
-// BackfillModelFamilies updates model_family for all models using the same
-// priority logic as extractModelFamily (org takes priority over model name).
-func (r *Repository) BackfillModelFamilies(ctx context.Context) (int64, error) {
-	var totalUpdated int64
-
-	// First pass: match by organization (higher priority)
-	// Process in order so that more specific orgs are checked first
-	families := []string{"deepseek", "llama", "mistral", "qwen", "gemma", "phi"}
-	for _, family := range families {
-		pattern := "%" + family + "%"
-		result, err := r.pool.Exec(ctx,
-			`UPDATE models SET model_family = $1
-			 WHERE model_family IS NULL
-			   AND LOWER(SPLIT_PART(hf_id, '/', 1)) LIKE $2`,
-			family, pattern,
-		)
-		if err != nil {
-			return totalUpdated, fmt.Errorf("backfill org %s: %w", family, err)
-		}
-		totalUpdated += result.RowsAffected()
+// SetModelType records the HuggingFace model_type from config.json for
+// a model. Called by the recommend path after FetchModelConfig. Only
+// writes when the stored value is NULL so revisions don't overwrite
+// each other if they disagree (architectures don't change between
+// checkpoints of the same model).
+func (r *Repository) SetModelType(ctx context.Context, modelID, modelType string) error {
+	if modelType == "" {
+		return nil
 	}
-
-	// Second pass: match by full ID (for remaining NULL values)
-	for _, family := range families {
-		pattern := "%" + family + "%"
-		result, err := r.pool.Exec(ctx,
-			`UPDATE models SET model_family = $1
-			 WHERE model_family IS NULL AND LOWER(hf_id) LIKE $2`,
-			family, pattern,
-		)
-		if err != nil {
-			return totalUpdated, fmt.Errorf("backfill full %s: %w", family, err)
-		}
-		totalUpdated += result.RowsAffected()
+	_, err := r.pool.Exec(ctx,
+		`UPDATE models SET model_type = $1
+		 WHERE id = $2 AND model_type IS NULL`,
+		modelType, modelID)
+	if err != nil {
+		return fmt.Errorf("set model_type: %w", err)
 	}
-
-	return totalUpdated, nil
+	return nil
 }
 
 // GetInstanceTypeByName returns an instance type by name, or nil if not found.

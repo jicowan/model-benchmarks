@@ -32,8 +32,8 @@ func (c *Client) ListCatalog(ctx context.Context, f database.CatalogFilter) ([]d
 	if f.ModelHfID != "" {
 		params.Set("model", f.ModelHfID)
 	}
-	if f.ModelFamily != "" {
-		params.Set("model_family", f.ModelFamily)
+	if f.ModelType != "" {
+		params.Set("model_type", f.ModelType)
 	}
 	if f.InstanceFamily != "" {
 		params.Set("instance_family", f.InstanceFamily)

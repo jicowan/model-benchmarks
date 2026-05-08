@@ -138,6 +138,24 @@ func (m *MockRepo) SetModelParameterCount(_ context.Context, modelID string, par
 	return fmt.Errorf("model %s not found", modelID)
 }
 
+func (m *MockRepo) SetModelType(_ context.Context, modelID, modelType string) error {
+	if modelType == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mdl := range m.models {
+		if mdl.ID == modelID {
+			if mdl.ModelType == nil {
+				v := modelType
+				mdl.ModelType = &v
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("model %s not found", modelID)
+}
+
 func (m *MockRepo) GetInstanceTypeByName(_ context.Context, name string) (*InstanceType, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -838,7 +856,7 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 		) {
 			continue
 		}
-		if f.ModelFamily != "" && (model.ModelFamily == nil || *model.ModelFamily != f.ModelFamily) {
+		if f.ModelType != "" && (model.ModelType == nil || *model.ModelType != f.ModelType) {
 			continue
 		}
 		if f.InstanceFamily != "" && inst.Family != f.InstanceFamily {
@@ -851,7 +869,7 @@ func (m *MockRepo) ListCatalog(_ context.Context, f CatalogFilter) ([]CatalogEnt
 		entries = append(entries, CatalogEntry{
 			RunID:                     runID,
 			ModelHfID:                 model.HfID,
-			ModelFamily:               model.ModelFamily,
+			ModelType:                 model.ModelType,
 			ParameterCount:            model.ParameterCount,
 			InstanceTypeName:          inst.Name,
 			InstanceFamily:            inst.Family,

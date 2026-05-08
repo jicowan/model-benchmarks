@@ -12,7 +12,7 @@ import (
 type CatalogEntry struct {
 	RunID                string   `json:"run_id"`
 	ModelHfID            string   `json:"model_hf_id"`
-	ModelFamily          *string  `json:"model_family,omitempty"`
+	ModelType            *string  `json:"model_type,omitempty"`
 	ParameterCount       *int64   `json:"parameter_count,omitempty"`
 	InstanceTypeName     string   `json:"instance_type_name"`
 	InstanceFamily       string   `json:"instance_family"`
@@ -58,7 +58,7 @@ type CatalogEntry struct {
 type CatalogFilter struct {
 	RunIDs          []string // exact match on br.id (used by Compare)
 	ModelHfID       string   // substring ILIKE on model hf_id (UI is a free-text search)
-	ModelFamily     string   // exact match on model_family
+	ModelType       string   // exact match on model_type (HF architecture name)
 	InstanceFamily  string   // exact match on instance family (e.g. "p5")
 	AcceleratorType string   // "gpu" or "neuron"
 	SortBy          string   // column name to sort by
@@ -121,10 +121,10 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 		conditions = append(conditions, fmt.Sprintf("hf_id ILIKE $%d", argIdx))
 		args = append(args, "%"+f.ModelHfID+"%")
 	}
-	if f.ModelFamily != "" {
+	if f.ModelType != "" {
 		argIdx++
-		conditions = append(conditions, fmt.Sprintf("model_family = $%d", argIdx))
-		args = append(args, f.ModelFamily)
+		conditions = append(conditions, fmt.Sprintf("model_type = $%d", argIdx))
+		args = append(args, f.ModelType)
 	}
 	if f.InstanceFamily != "" {
 		argIdx++
@@ -172,7 +172,7 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 
 	query := fmt.Sprintf(`
 		SELECT
-			run_id, hf_id, model_family, parameter_count,
+			run_id, hf_id, model_type, parameter_count,
 			instance_type_name, instance_family, accelerator_type, accelerator_name,
 			accelerator_count, accelerator_memory_gib,
 			framework, framework_version, tensor_parallel_degree,
@@ -209,7 +209,7 @@ func (r *Repository) ListCatalog(ctx context.Context, f CatalogFilter) ([]Catalo
 	for rows.Next() {
 		var e CatalogEntry
 		err := rows.Scan(
-			&e.RunID, &e.ModelHfID, &e.ModelFamily, &e.ParameterCount,
+			&e.RunID, &e.ModelHfID, &e.ModelType, &e.ParameterCount,
 			&e.InstanceTypeName, &e.InstanceFamily, &e.AcceleratorType, &e.AcceleratorName,
 			&e.AcceleratorCount, &e.AcceleratorMemoryGiB,
 			&e.Framework, &e.FrameworkVersion, &e.TensorParallelDegree,

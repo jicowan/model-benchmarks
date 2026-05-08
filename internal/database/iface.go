@@ -16,6 +16,8 @@ type Repo interface {
 	// PRD-47 PR #5: record parameter_count at recommend time so the
 	// per-family calibration query has a weight-size denominator.
 	SetModelParameterCount(ctx context.Context, modelID string, params int64) error
+	// PRD-47 follow-up: HF model_type as the calibration family key.
+	SetModelType(ctx context.Context, modelID, modelType string) error
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
 	GetInstanceTypeByID(ctx context.Context, id string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)
