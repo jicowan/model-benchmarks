@@ -60,6 +60,10 @@ type EstimateConfig struct {
 	Concurrency          int     `json:"concurrency"`
 	InputSequenceLength  int     `json:"input_sequence_length"`
 	OutputSequenceLength int     `json:"output_sequence_length"`
+	// PRD-46: scheduler knobs from the recommender so the Estimate →
+	// Run handoff pre-fills them on the New Benchmark form.
+	MaxNumBatchedTokens int    `json:"max_num_batched_tokens,omitempty"`
+	KVCacheDtype        string `json:"kv_cache_dtype,omitempty"`
 }
 
 // MemoryEstimate shows memory breakdown.
@@ -226,6 +230,8 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 				Concurrency:          rec.Concurrency,
 				InputSequenceLength:  rec.InputSequenceLength,
 				OutputSequenceLength: rec.OutputSequenceLength,
+				MaxNumBatchedTokens:  rec.MaxNumBatchedTokens,
+				KVCacheDtype:         rec.KVCacheDtype,
 			}
 
 			// Apply min context filter

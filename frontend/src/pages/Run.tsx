@@ -63,6 +63,10 @@ export default function Run() {
       input_sequence_length: Number(searchParams.get("input_seq")) || 512,
       output_sequence_length: Number(searchParams.get("output_seq")) || 256,
       max_model_len: Number(searchParams.get("max_model_len")) || 0,
+      // PRD-46: pre-filled by the recommender when a model+instance is
+      // selected; users can override both from the form.
+      max_num_batched_tokens: Number(searchParams.get("max_num_batched_tokens")) || 0,
+      kv_cache_dtype: searchParams.get("kv_cache_dtype") || "",
       hf_token: searchParams.get("hf_token") || "",
       overhead_gib: 0, // 0 = auto-calculated
       api_type: "",
@@ -135,6 +139,10 @@ export default function Run() {
             input_sequence_length: rec.input_sequence_length,
             output_sequence_length: rec.output_sequence_length,
             overhead_gib: rec.overhead_gib,
+            // PRD-46: pull the scheduler knobs from the recommender
+            // too so they're populated before the user edits anything.
+            max_num_batched_tokens: rec.max_num_batched_tokens ?? 0,
+            kv_cache_dtype: rec.kv_cache_dtype ?? "",
           }));
         }
       } catch (err) {
@@ -377,6 +385,8 @@ export default function Run() {
           tensor_parallel_degree: form.tensor_parallel_degree,
           quantization: form.quantization || undefined,
           max_model_len: form.max_model_len || undefined,
+          max_num_batched_tokens: form.max_num_batched_tokens || undefined,
+          kv_cache_dtype: form.kv_cache_dtype || undefined,
           model_s3_uri: form.model_s3_uri || undefined,
           hf_token: form.hf_token || undefined,
         });
@@ -387,6 +397,8 @@ export default function Run() {
           ...form,
           quantization: form.quantization || undefined,
           max_model_len: form.max_model_len || undefined,
+          max_num_batched_tokens: form.max_num_batched_tokens || undefined,
+          kv_cache_dtype: form.kv_cache_dtype || undefined,
           hf_token: form.hf_token || undefined,
           scenario_id: selectedScenario,
           dataset_name: selectedDataset,
@@ -943,6 +955,43 @@ export default function Run() {
               }
               className="input w-full"
             />
+          </div>
+        </div>
+
+        {/* PRD-46: vLLM scheduler knobs. Pre-filled by the recommender;
+            users can override. Leaving blank falls back to vLLM defaults. */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+              Max Num Batched Tokens
+              <InfoTip text="vLLM's per-iteration prefill budget. Higher values let a single long prompt finish prefill in one step but cost more memory. The recommender defaults to max(2048, input_sequence_length) capped at max_model_len. Leave blank to use vLLM's default (2048)." />
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={form.max_num_batched_tokens}
+              onChange={(e) =>
+                set("max_num_batched_tokens", Number(e.target.value))
+              }
+              placeholder="0 = vLLM default"
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+              KV Cache Dtype
+              <InfoTip text="Storage precision for the KV cache. fp8 halves KV-cache memory on H100/H200/L40S with negligible quality impact. The recommender sets fp8 automatically on FP8-capable GPUs. Blank/auto = match compute dtype (bf16/fp16)." />
+            </label>
+            <select
+              value={form.kv_cache_dtype}
+              onChange={(e) => set("kv_cache_dtype", e.target.value)}
+              className="input w-full"
+            >
+              <option value="">auto (match compute dtype)</option>
+              <option value="fp8">fp8</option>
+              <option value="fp8_e4m3">fp8_e4m3</option>
+              <option value="fp8_e5m2">fp8_e5m2</option>
+            </select>
           </div>
         </div>
 
