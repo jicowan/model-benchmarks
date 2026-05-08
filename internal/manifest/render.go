@@ -40,6 +40,7 @@ type ModelDeploymentParams struct {
 	InstanceFamily       string // e.g. "p5", "inf2"
 	MaxModelLen          int    // 0 = auto-detect from model config
 	MaxNumBatchedTokens  int    // 0 = vLLM default; emits --max-num-batched-tokens when > 0
+	MaxNumSeqs           int    // 0 = vLLM default; emits --max-num-seqs when > 0
 	CPURequest           string
 	MemoryRequest        string
 	ModelS3URI           string // s3://bucket/models/org/model (empty = use HF)

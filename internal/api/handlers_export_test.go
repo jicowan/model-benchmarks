@@ -30,6 +30,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		Quantization:         &q,
 		MaxModelLen:          8192,
 		MaxNumBatchedTokens:  &mnbt,
+		Concurrency:          32,
 		AcceleratorType:      "gpu",
 		AcceleratorName:      "L40S",
 		AcceleratorCount:     1,
@@ -54,6 +55,8 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		`"--max-model-len"`,
 		`"8192"`,
 		`"--max-num-batched-tokens"`,
+		`"--max-num-seqs"`,
+		`"32"`,
 		`"--load-format"`,
 		`"runai_streamer"`,
 		`"--model-loader-extra-config"`,
@@ -73,6 +76,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		"# Tensor Parallel: 1",
 		"# Max Model Length: 8192",
 		"# Max Num Batched Tokens: 8192",
+		"# Max Num Seqs: 32",
 	}
 	for _, w := range wantComments {
 		if !strings.Contains(out, w) {

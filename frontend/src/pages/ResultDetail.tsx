@@ -231,6 +231,10 @@ export default function ResultDetail() {
               label: "Max Num Batched Tokens",
               value: run.max_num_batched_tokens ?? null,
             },
+            {
+              label: "Max Num Seqs",
+              value: run.concurrency ?? null,
+            },
           ]}
         />
 

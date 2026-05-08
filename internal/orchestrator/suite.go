@@ -87,6 +87,19 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 		return
 	}
 
+	// PRD-46: --max-num-seqs sizes vLLM's concurrent sequence slots. A
+	// suite shares one model deployment across scenarios that may drive
+	// different worker counts, so size the slots for the busiest
+	// scenario to avoid reshaping the deployment mid-suite.
+	maxSeqs := 0
+	for _, sid := range suite.Scenarios {
+		if sc := o.resolveScenario(ctx, sid); sc != nil {
+			if sc.NumWorkers > maxSeqs {
+				maxSeqs = sc.NumWorkers
+			}
+		}
+	}
+
 	cfg := RunConfig{
 		RunID:        suiteRunID,
 		Model:        model,
@@ -101,6 +114,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 			Quantization:         req.Quantization,
 			MaxModelLen:          req.MaxModelLen,
 			MaxNumBatchedTokens:  req.MaxNumBatchedTokens,
+			Concurrency:          maxSeqs,
 			ModelS3URI:           req.ModelS3URI,
 			HfToken:              req.HfToken,
 		},
