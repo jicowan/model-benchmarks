@@ -233,7 +233,9 @@ resource "kubectl_manifest" "gpu_node_pool" {
         cpu: "1000"
       disruption:
         consolidationPolicy: WhenEmpty
-        consolidateAfter: 10m
+        # GPU nodes are expensive ($0.80-$30+/hr); deprovision aggressively
+        # once the benchmark's model Deployment + loadgen Job are torn down.
+        consolidateAfter: 1m
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
@@ -271,7 +273,9 @@ resource "kubectl_manifest" "neuron_node_pool" {
         cpu: "1000"
       disruption:
         consolidationPolicy: WhenEmpty
-        consolidateAfter: 10m
+        # Same reasoning as the gpu nodepool — Neuron instances (inf2/trn)
+        # are also costly, so deprovision within a minute of becoming empty.
+        consolidateAfter: 1m
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
