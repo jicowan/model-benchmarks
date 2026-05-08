@@ -546,6 +546,7 @@ export interface TestSuiteRun {
   quantization?: string | null;
   max_model_len?: number;
   max_num_batched_tokens?: number | null;
+  max_num_seqs?: number;
   framework?: string | null;
   framework_version?: string | null;
   model_s3_uri?: string | null;

@@ -164,6 +164,10 @@ export default function SuiteResults() {
               label: "Max Num Batched Tokens",
               value: suiteRun.max_num_batched_tokens ?? null,
             },
+            {
+              label: "Max Num Seqs",
+              value: suiteRun.max_num_seqs ?? null,
+            },
           ]}
         />
 

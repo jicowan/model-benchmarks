@@ -97,6 +97,10 @@ spec:
             - "--max-num-batched-tokens"
             - "{{ .MaxNumBatchedTokens }}"
 {{- end }}
+{{- if gt .MaxNumSeqs 0 }}
+            - "--max-num-seqs"
+            - "{{ .MaxNumSeqs }}"
+{{- end }}
 {{- else }}
           command: ["vllm"]
           args:
@@ -116,6 +120,10 @@ spec:
 {{- if gt .MaxNumBatchedTokens 0 }}
             - "--max-num-batched-tokens"
             - "{{ .MaxNumBatchedTokens }}"
+{{- end }}
+{{- if gt .MaxNumSeqs 0 }}
+            - "--max-num-seqs"
+            - "{{ .MaxNumSeqs }}"
 {{- end }}
 {{- end }}
           resources:

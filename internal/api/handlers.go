@@ -1254,6 +1254,10 @@ type suiteRunResponse struct {
 	AcceleratorName      string                    `json:"accelerator_name,omitempty"`
 	AcceleratorCount     int                       `json:"accelerator_count,omitempty"`
 	AcceleratorMemoryGiB int                       `json:"accelerator_memory_gib,omitempty"`
+	// PRD-46: computed --max-num-seqs value used when the model was
+	// deployed. Not persisted separately (derived from the busiest
+	// scenario's NumWorkers), so we compute it on read for display.
+	MaxNumSeqs           int                       `json:"max_num_seqs,omitempty"`
 	Progress             suiteProgressInfo         `json:"progress"`
 	Results              []database.ScenarioResult `json:"results"`
 	ScenarioDefinitions  []suiteScenarioDefinition `json:"scenario_definitions"`
@@ -1298,8 +1302,20 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scenarioDefs := make([]suiteScenarioDefinition, 0, len(results))
+	maxNumSeqs := 0
 	for _, r := range results {
 		if sc := scenario.Get(r.ScenarioID); sc != nil {
+			if ov, _ := s.repo.GetScenarioOverride(ctx, r.ScenarioID); ov != nil {
+				sc = sc.Merge(&scenario.Override{
+					NumWorkers: ov.NumWorkers,
+					Streaming:  ov.Streaming,
+					InputMean:  ov.InputMean,
+					OutputMean: ov.OutputMean,
+				})
+			}
+			if sc.NumWorkers > maxNumSeqs {
+				maxNumSeqs = sc.NumWorkers
+			}
 			scenarioDefs = append(scenarioDefs, suiteScenarioDefinition{
 				ID:              sc.ID,
 				Name:            sc.Name,
@@ -1312,6 +1328,7 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	resp := suiteRunResponse{
 		TestSuiteRun: suiteRun,
+		MaxNumSeqs:   maxNumSeqs,
 		Progress: suiteProgressInfo{
 			Completed: completed,
 			Total:     len(results),
