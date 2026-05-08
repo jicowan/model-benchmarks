@@ -77,23 +77,27 @@ func TestHostMemCheck_LargerInstancePasses(t *testing.T) {
 	}
 }
 
-func TestHostMemCheck_S3StreamerStillInfeasibleOnSmallInstance(t *testing.T) {
-	// Empirical: the Run:ai streamer with concurrency=16 on shard-heavy
-	// models (Qwen3-8B has ~399 safetensors shards) keeps nearly as much
-	// host RAM resident as the HF loader path during load. Peak ~15.25
-	// × 0.9 + 3 = 16.7 GiB, which still exceeds g6.xlarge's 13.6 GiB
-	// allocatable. Observed OOMKill at 13 GiB in a live run with
-	// --load-format=runai_streamer, concurrency=16.
+func TestHostMemCheck_S3StreamerFeasibleOnSmallInstanceByDefault(t *testing.T) {
+	// PRD-47 PR #3 relaxed the default streamer multiplier from 0.95 to
+	// 0.5 because architectural behavior (streamer holds concurrency ×
+	// shard_size, not full weights) is what the common case looks like.
+	// The Qwen3-8B outlier (399 shards, concurrency=16, observed OOM on
+	// g6.xlarge) is no longer caught by the default path — it's caught
+	// instead by per-family calibration (PR #5) once we have observations.
+	//
+	// Math: 15.25 × 0.5 + 2 = 9.6 GiB peak; g6.xlarge allocatable =
+	// 16 × 0.85 = 13.6 GiB. Feasible at default multipliers.
 	rec := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
 	})
-	if rec.Explanation.Feasible {
-		t.Fatal("expected infeasible on g6.xlarge even with S3 streamer")
+	if !rec.Explanation.Feasible {
+		t.Fatalf("expected feasible by default; per-family calibration (PR #5) will catch Qwen3's shard-pathology. Got: %s",
+			rec.Explanation.Reason)
 	}
 }
 
 func TestHostMemCheck_S3StreamerFitsOnMidInstance(t *testing.T) {
-	// Streamer peak ~16.7 GiB fits in g6.2xlarge's 27.2 GiB allocatable.
+	// Streamer peak ~9.6 GiB fits in g6.2xlarge's 27.2 GiB allocatable.
 	rec := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
 	})
@@ -120,18 +124,46 @@ func TestHostMemCheck_SkippedWhenMemoryGiBUnset(t *testing.T) {
 	}
 }
 
+// PRD-47 PR #3: kubelet+system reservations on EKS AL2023 are ~fixed
+// absolute (~1 GiB), not proportional. Large hosts should see more of
+// their total RAM as allocatable.
+func TestHostAllocatableFrac_TieredByHostSize(t *testing.T) {
+	small := hostAllocatableFrac(16)
+	medium := hostAllocatableFrac(32)
+	justBelowThreshold := hostAllocatableFrac(63)
+	atThreshold := hostAllocatableFrac(64)
+	large := hostAllocatableFrac(1024)
+
+	if small != hostMemAllocatableFracSmall {
+		t.Errorf("16 GiB host: got %v, want %v", small, hostMemAllocatableFracSmall)
+	}
+	if medium != hostMemAllocatableFracSmall {
+		t.Errorf("32 GiB host: got %v, want %v", medium, hostMemAllocatableFracSmall)
+	}
+	if justBelowThreshold != hostMemAllocatableFracSmall {
+		t.Errorf("63 GiB host: got %v, want %v (small bucket)", justBelowThreshold, hostMemAllocatableFracSmall)
+	}
+	if atThreshold != hostMemAllocatableFracLarge {
+		t.Errorf("64 GiB host: got %v, want %v (large bucket)", atThreshold, hostMemAllocatableFracLarge)
+	}
+	if large != hostMemAllocatableFracLarge {
+		t.Errorf("1024 GiB host: got %v, want %v", large, hostMemAllocatableFracLarge)
+	}
+}
+
 func TestPeakHostMemBytes_Multipliers(t *testing.T) {
 	const weightBytes = 10.0 * gibBytes
 	hf := peakHostMemBytes(weightBytes, false)
 	s3 := peakHostMemBytes(weightBytes, true)
 
-	// HF path ~= 10 × 1.3 + 3 = 16 GiB
+	// HF path: 10 × 1.08 + 2 = ~12.8 GiB (matches measured Phi-4 peak within ~5%).
 	expectHF := 10.0*hfLoaderHostMultiplier*gibBytes + hostMemBufferBytes
 	if hf != expectHF {
 		t.Errorf("HF peak = %.2f GiB, want %.2f GiB", hf/gibBytes, expectHF/gibBytes)
 	}
 
-	// S3 path ~= 10 × 0.9 + 3 = 12 GiB, still lower than HF but not by much
+	// S3 path: 10 × 0.5 + 2 = ~7 GiB (PRD-47 PR #3 — streamer streams
+	// concurrency × shard_size rather than materializing full weights).
 	expectS3 := 10.0*s3StreamerHostMultiplier*gibBytes + hostMemBufferBytes
 	if s3 != expectS3 {
 		t.Errorf("S3 peak = %.2f GiB, want %.2f GiB", s3/gibBytes, expectS3/gibBytes)
