@@ -235,29 +235,50 @@ func isTransformersVersionUnsupported(version, vllmVersion string) (bool, string
 	return false, ""
 }
 
-// Host-memory checking constants. Calibrated from empirical cgroup
-// memory.peak observations during vLLM weight loading:
+// Host-memory checking constants. Defaults; overridden per-family by
+// observed p95 when available (PRD-47 PR #5).
 //
-//   Qwen3-8B (15.25 GiB weights) / g6.xlarge / streamer  → 13+ GiB, OOM'd
-//   Phi-4   (30.2  GiB weights) / g6e.2xlarge / HF      → 31.1 GiB peak
+// hfLoaderHostMultiplier — the HuggingFace loader materializes full
+// BF16 weights in CPU RAM before copying to GPU. Empirical: Phi-4
+// (30.2 GiB weights) hit 31.1 GiB peak on g6e.2xlarge → ~1.03×.
+// Keep 1.08 as a safe bound; tuned across Llama / Mistral / Phi
+// observations.
 //
-// The Phi-4 measurement pins the HF-loader peak at ~1.03× the on-disk
-// weight size — much lower than the 1.3× we originally guessed. The
-// streamer path with concurrency=16 on shard-heavy models sits closer
-// to 0.9×. With a 2 GiB baseline buffer on top (kubelet reservation,
-// DaemonSets, SOCI snapshotter cache, eviction headroom), the effective
-// multipliers below give a small but safe margin over observed peaks
-// without rejecting legitimate (model, instance) pairs.
+// s3StreamerHostMultiplier — the Run:ai streamer streams `concurrency`
+// shards at a time directly to GPU, so peak is bounded by
+// concurrency × avg_shard_size. For a typical 5-30 shard model, that
+// lands well under half the weight size. 0.5 is a conservative upper
+// bound for the common case; the single observed worst case
+// (Qwen3-8B with 399 safetensors shards at concurrency=16) really did
+// push toward 0.95×, but applying that constant to every model
+// incorrectly rejected Llama / Mistral / Qwen2.5 on 16 GiB-host L40S
+// instances. Per-family calibration (PR #5) catches the Qwen3 outlier
+// once the history column fills in.
 //
-// A proper fix is to record observed peak memory per run and consult
-// that history instead of multiplying weight size by a constant; until
-// that lands, tune these numbers when a new data point disagrees.
+// hostMemAllocatableFrac — kubelet+system reservations on EKS AL2023
+// are ~750 MiB kubelet + ~250 MiB system ≈ 1 GiB fixed. On a 16 GiB
+// host that's ~94% allocatable; on 64 GiB it's ~98%. A flat 85%
+// under-approximated allocatable on larger hosts. Tiered:
+//   MemoryGiB >= 64 → 0.92
+//   MemoryGiB <  64 → 0.85 (keep safety margin where overhead bites most)
 const (
 	hfLoaderHostMultiplier   = 1.08
-	s3StreamerHostMultiplier = 0.95
+	s3StreamerHostMultiplier = 0.5
 	hostMemBufferBytes       = 2 * gibBytes
-	hostMemAllocatableFrac   = 0.85
+	hostMemAllocatableFracSmall = 0.85 // hosts < 64 GiB
+	hostMemAllocatableFracLarge = 0.92 // hosts ≥ 64 GiB
+	hostMemAllocatableLargeThresholdGiB = 64
 )
+
+// hostAllocatableFrac returns the allocatable fraction of host memory
+// for a given total-host-memory size. Larger hosts see more of their
+// RAM as usable because kubelet overhead is roughly fixed-absolute.
+func hostAllocatableFrac(memoryGiB int) float64 {
+	if memoryGiB >= hostMemAllocatableLargeThresholdGiB {
+		return hostMemAllocatableFracLarge
+	}
+	return hostMemAllocatableFracSmall
+}
 
 // peakHostMemBytes estimates peak host RAM during model load. The
 // multiplier reflects whether vLLM's HuggingFace loader (CPU-resident
@@ -293,7 +314,7 @@ func checkHostMemory(
 		return true, "", ""
 	}
 	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer)
-	allocatable := float64(inst.MemoryGiB) * gibBytes * hostMemAllocatableFrac
+	allocatable := float64(inst.MemoryGiB) * gibBytes * hostAllocatableFrac(inst.MemoryGiB)
 	if peak <= allocatable {
 		return true, "", ""
 	}
@@ -328,7 +349,7 @@ func checkHostMemory(
 		if alt.MemoryGiB <= inst.MemoryGiB {
 			continue
 		}
-		altAllocatable := float64(alt.MemoryGiB) * gibBytes * hostMemAllocatableFrac
+		altAllocatable := float64(alt.MemoryGiB) * gibBytes * hostAllocatableFrac(alt.MemoryGiB)
 		if peak <= altAllocatable {
 			suggested = alt.Name
 			break
