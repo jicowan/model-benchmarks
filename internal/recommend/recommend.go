@@ -263,7 +263,13 @@ func isTransformersVersionUnsupported(version, vllmVersion string) (bool, string
 //   MemoryGiB <  64 → 0.85 (keep safety margin where overhead bites most)
 const (
 	hfLoaderHostMultiplier   = 1.08
-	s3StreamerHostMultiplier = 0.5
+	// s3StreamerHostMultiplier: empirical median across 8 completed TP=1 runs
+	// on the S3 streamer path is ~1.15 (range 0.99–1.19). The streamer's
+	// default RUNAI_STREAMER_MEMORY_LIMIT=-1 allocates a buffer equal to the
+	// full safetensor file, so real peak is ≈ weights + small fixed overhead,
+	// not the "concurrency × shard_size" 0.5× we initially guessed. See
+	// PRD-47 and run-ai/runai-model-streamer docs for background.
+	s3StreamerHostMultiplier = 1.15
 	hostMemBufferBytes       = 2 * gibBytes
 	hostMemAllocatableFracSmall = 0.85 // hosts < 64 GiB
 	hostMemAllocatableFracLarge = 0.92 // hosts ≥ 64 GiB
@@ -417,13 +423,20 @@ func modelMemoryBytes(params int64, quant string) float64 {
 	return float64(params) * bytesPerParam(quant)
 }
 
-// kvCachePerTokenBytes returns KV cache memory per token in bytes.
+// KVCachePerTokenBytes returns KV cache memory per token in bytes.
 // Formula: 2 (K+V) × num_layers × num_kv_heads × head_dim × bytes_per_element
 //
 // bytes_per_element is derived from kvCacheDtype: fp16/bf16 = 2, fp8 = 1.
 // PRD-46 wires --kv-cache-dtype=fp8 as the default on H100/H200/L40S, so the
 // recommender must size KV budget to match. An empty string means
 // "auto / matches compute dtype", which we treat as fp16.
+//
+// Exported so the memory-breakdown handler shares one source of truth with
+// the recommender's feasibility math.
+func KVCachePerTokenBytes(cfg ModelConfig, kvCacheDtype string) float64 {
+	return kvCachePerTokenBytes(cfg, kvCacheDtype)
+}
+
 func kvCachePerTokenBytes(cfg ModelConfig, kvCacheDtype string) float64 {
 	bytesPerElement := 2.0 // fp16 / bf16 / auto
 	switch kvCacheDtype {

@@ -77,27 +77,23 @@ func TestHostMemCheck_LargerInstancePasses(t *testing.T) {
 	}
 }
 
-func TestHostMemCheck_S3StreamerFeasibleOnSmallInstanceByDefault(t *testing.T) {
-	// PRD-47 PR #3 relaxed the default streamer multiplier from 0.95 to
-	// 0.5 because architectural behavior (streamer holds concurrency ×
-	// shard_size, not full weights) is what the common case looks like.
-	// The Qwen3-8B outlier (399 shards, concurrency=16, observed OOM on
-	// g6.xlarge) is no longer caught by the default path — it's caught
-	// instead by per-family calibration (PR #5) once we have observations.
-	//
-	// Math: 15.25 × 0.5 + 2 = 9.6 GiB peak; g6.xlarge allocatable =
-	// 16 × 0.85 = 13.6 GiB. Feasible at default multipliers.
+func TestHostMemCheck_S3StreamerInfeasibleOnSmallInstanceByDefault(t *testing.T) {
+	// PRD-47: the default S3-streamer multiplier is 1.15, calibrated to
+	// empirical TP=1 runs (Run:ai streamer with default
+	// RUNAI_STREAMER_MEMORY_LIMIT=-1 allocates a full-file buffer, so
+	// real peak ≈ weights × ~1.15 + overhead). Math for Qwen3-8B on
+	// g6.xlarge: 15.25 × 1.15 + 2 = ~19.5 GiB peak; allocatable = 16 ×
+	// 0.85 = 13.6 GiB → correctly infeasible.
 	rec := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
 	})
-	if !rec.Explanation.Feasible {
-		t.Fatalf("expected feasible by default; per-family calibration (PR #5) will catch Qwen3's shard-pathology. Got: %s",
-			rec.Explanation.Reason)
+	if rec.Explanation.Feasible {
+		t.Fatalf("expected infeasible on g6.xlarge (host 16 GiB, peak ~19.5 GiB)")
 	}
 }
 
 func TestHostMemCheck_S3StreamerFitsOnMidInstance(t *testing.T) {
-	// Streamer peak ~9.6 GiB fits in g6.2xlarge's 27.2 GiB allocatable.
+	// Streamer peak ~19.5 GiB fits in g6.2xlarge's 27.2 GiB allocatable.
 	rec := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
 	})
@@ -107,29 +103,28 @@ func TestHostMemCheck_S3StreamerFitsOnMidInstance(t *testing.T) {
 	}
 }
 
-// PRD-47 PR #5: when per-family calibration flags a known-bad family,
-// the recommender should flip back to infeasible even though PR #3's
-// relaxed default would let it through.
-func TestHostMemCheck_CalibrationReclaimsQwen3(t *testing.T) {
-	// With PR #3's default S3 multiplier (0.5), Qwen3-8B passes on
-	// g6.xlarge. Calibration carrying the observed worst-case (0.9)
-	// should restore the infeasible verdict for this specific family.
-	rec := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
+// PRD-47 PR #5: per-family calibration overrides the default multiplier
+// for families we have observations on.
+func TestHostMemCheck_CalibrationAppliesToMatchingFamily(t *testing.T) {
+	// An empirical ratio of 2.0 for qwen3|s3 should push a pair that
+	// was feasible at the 1.15 default into infeasible territory on a
+	// small host (15.25 × 2.0 + 2 = 32.5 GiB > 27.2 GiB allocatable).
+	rec := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
 		ModelFamily:   "qwen3",
 		HostMemCalibration: map[string]float64{
-			"qwen3|s3": 0.9,
+			"qwen3|s3": 2.0,
 		},
 	})
 	if rec.Explanation.Feasible {
-		t.Fatal("expected infeasible once observed ratio replaces the default")
+		t.Fatal("expected infeasible once observed 2.0x ratio replaces the default 1.15x")
 	}
-	// Other families shouldn't be affected by Qwen3's calibration.
-	rec2 := Recommend(qwen3_8b, g6xlargeFull, allWithHostMem, RecommendOptions{
+	// Non-matching family shouldn't inherit the qwen3 ratio.
+	rec2 := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
-		ModelFamily:   "llama", // deliberate misattribution
+		ModelFamily:   "llama",
 		HostMemCalibration: map[string]float64{
-			"qwen3|s3": 0.9,
+			"qwen3|s3": 2.0,
 		},
 	})
 	if !rec2.Explanation.Feasible {
@@ -190,18 +185,18 @@ func TestPeakHostMemBytes_CalibrationOverridesDefault(t *testing.T) {
 	defaultS3 := peakHostMemBytes(weightBytes, true, "", nil)
 
 	calib := map[string]float64{
-		"qwen3|s3": 0.9,  // observed worst case for Qwen3 streamer
+		"qwen3|s3": 2.8,  // observed worst case for shard-heavy Qwen3 TP=4 runs
 		"llama|hf": 1.02, // observed lean HF path for Llama
 	}
 
 	// Matching key → use the calibration multiplier.
 	qwen3S3 := peakHostMemBytes(weightBytes, true, "qwen3", calib)
-	wantQwen3 := 10.0*0.9*gibBytes + hostMemBufferBytes
+	wantQwen3 := 10.0*2.8*gibBytes + hostMemBufferBytes
 	if qwen3S3 != wantQwen3 {
-		t.Errorf("qwen3+s3: got %.2f GiB, want %.2f GiB (0.9×)", qwen3S3/gibBytes, wantQwen3/gibBytes)
+		t.Errorf("qwen3+s3: got %.2f GiB, want %.2f GiB (2.8×)", qwen3S3/gibBytes, wantQwen3/gibBytes)
 	}
 	if qwen3S3 <= defaultS3 {
-		t.Errorf("qwen3 calibration should raise peak above default (0.5×); got %.2f vs default %.2f",
+		t.Errorf("qwen3 calibration should raise peak above default (1.15×); got %.2f vs default %.2f",
 			qwen3S3/gibBytes, defaultS3/gibBytes)
 	}
 
@@ -249,14 +244,16 @@ func TestPeakHostMemBytes_Multipliers(t *testing.T) {
 		t.Errorf("HF peak = %.2f GiB, want %.2f GiB", hf/gibBytes, expectHF/gibBytes)
 	}
 
-	// S3 path: 10 × 0.5 + 2 = ~7 GiB (PRD-47 PR #3 — streamer streams
-	// concurrency × shard_size rather than materializing full weights).
+	// S3 path: 10 × 1.15 + 2 = ~13.5 GiB. Empirical ratio from 8 TP=1
+	// runs; Run:ai streamer at default RUNAI_STREAMER_MEMORY_LIMIT=-1
+	// allocates a buffer equal to the full safetensor file, so peak is
+	// slightly higher than the HF loader, not lower.
 	expectS3 := 10.0*s3StreamerHostMultiplier*gibBytes + hostMemBufferBytes
 	if s3 != expectS3 {
 		t.Errorf("S3 peak = %.2f GiB, want %.2f GiB", s3/gibBytes, expectS3/gibBytes)
 	}
-	if s3 >= hf {
-		t.Errorf("expected S3 streamer peak (%.2f GiB) < HF peak (%.2f GiB)",
+	if s3 <= hf {
+		t.Errorf("expected S3 streamer peak (%.2f GiB) > HF peak (%.2f GiB) — streamer allocates full-file buffer by default",
 			s3/gibBytes, hf/gibBytes)
 	}
 }
