@@ -177,7 +177,7 @@ export async function listCatalog(
   const params = new URLSearchParams();
   if (filter.ids && filter.ids.length > 0) params.set("ids", filter.ids.join(","));
   if (filter.model) params.set("model", filter.model);
-  if (filter.model_family) params.set("model_family", filter.model_family);
+  if (filter.model_type) params.set("model_type", filter.model_type);
   if (filter.instance_family)
     params.set("instance_family", filter.instance_family);
   if (filter.accelerator_type)

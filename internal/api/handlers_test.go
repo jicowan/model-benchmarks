@@ -260,7 +260,7 @@ func seedCatalogServer() (*database.MockRepo, *http.ServeMux) {
 	llama := "llama"
 	repo.SeedModel(&database.Model{
 		ID: "model-002", HfID: "meta-llama/Llama-3.1-70B", HfRevision: "def456",
-		ModelFamily: &llama, CreatedAt: time.Now(),
+		ModelType: &llama, CreatedAt: time.Now(),
 	})
 	repo.SeedInstanceType(&database.InstanceType{
 		ID: "inst-002", Name: "p5.48xlarge", Family: "p5",

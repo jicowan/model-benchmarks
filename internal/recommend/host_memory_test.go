@@ -111,7 +111,7 @@ func TestHostMemCheck_CalibrationAppliesToMatchingFamily(t *testing.T) {
 	// small host (15.25 × 2.0 + 2 = 32.5 GiB > 27.2 GiB allocatable).
 	rec := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
-		ModelFamily:   "qwen3",
+		ModelType:     "qwen3",
 		HostMemCalibration: map[string]float64{
 			"qwen3|s3": 2.0,
 		},
@@ -122,7 +122,7 @@ func TestHostMemCheck_CalibrationAppliesToMatchingFamily(t *testing.T) {
 	// Non-matching family shouldn't inherit the qwen3 ratio.
 	rec2 := Recommend(qwen3_8b, g6_2xlargeFull, allWithHostMem, RecommendOptions{
 		UseS3Streamer: true,
-		ModelFamily:   "llama",
+		ModelType:     "llama",
 		HostMemCalibration: map[string]float64{
 			"qwen3|s3": 2.0,
 		},

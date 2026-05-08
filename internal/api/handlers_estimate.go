@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/recommend"
 )
 
@@ -175,11 +174,15 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 		recOpts.UseS3Streamer = true
 	}
 
-	// PRD-47 PR #5: apply per-family host-memory calibration.
+	// PRD-47 PR #5: apply per-family host-memory calibration. Model
+	// type is derived from the HF config's model_type field (populated
+	// just below once FetchModelConfig returns).
 	if calib, err := s.repo.GetHostMemCalibration(r.Context()); err == nil {
 		recOpts.HostMemCalibration = calib
 	}
-	recOpts.ModelFamily = database.ExtractModelFamily(modelID)
+	if modelCfg != nil {
+		recOpts.ModelType = modelCfg.ModelType
+	}
 
 	// Generate estimates for each instance type
 	var estimates []EstimateRow

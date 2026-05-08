@@ -25,7 +25,7 @@ Examples:
 
 var (
 	queryModel          string
-	queryModelFamily    string
+	queryModelType      string
 	queryInstanceFamily string
 	queryAccelType      string
 	querySort           string
@@ -35,7 +35,7 @@ var (
 
 func init() {
 	queryCmd.Flags().StringVar(&queryModel, "model", "", "Filter by model HuggingFace ID")
-	queryCmd.Flags().StringVar(&queryModelFamily, "model-family", "", "Filter by model family (e.g. llama, mistral)")
+	queryCmd.Flags().StringVar(&queryModelType, "model-type", "", "Filter by HF model_type architecture (e.g. llama, qwen3, mistral, phi3, gpt_oss)")
 	queryCmd.Flags().StringVar(&queryInstanceFamily, "instance-family", "", "Filter by instance family (e.g. p5, g6e, inf2)")
 	queryCmd.Flags().StringVar(&queryAccelType, "accelerator-type", "", "Filter by accelerator type (gpu or neuron)")
 	queryCmd.Flags().StringVar(&querySort, "sort", "", "Sort by column (e.g. throughput_aggregate, ttft_p50, e2e_latency_p50)")
@@ -48,7 +48,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	c := newClient()
 	filter := database.CatalogFilter{
 		ModelHfID:       queryModel,
-		ModelFamily:     queryModelFamily,
+		ModelType:       queryModelType,
 		InstanceFamily:  queryInstanceFamily,
 		AcceleratorType: queryAccelType,
 		SortBy:          querySort,

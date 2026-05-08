@@ -6,18 +6,18 @@ import (
 )
 
 // GetHostMemCalibration returns a map of observed p95 host-memory
-// multipliers keyed by `"{model_family}|{loader}"` (loader is "hf" or
+// multipliers keyed by `"{model_type}|{loader}"` (loader is "hf" or
 // "s3"). Only groups with >=3 completed runs are returned so one noisy
 // observation can't swing the recommender.
 //
 // The ratio is peak_host_memory_gib / weight_size_gib. Weight size is
 // computed from parameter_count × 2 bytes (BF16, which is what the HF
 // loader materializes in host RAM before quantization kicks in).
-// PRD-47 PR #5.
+// PRD-47 PR #5; follow-up renamed model_family → model_type.
 func (r *Repository) GetHostMemCalibration(ctx context.Context) (map[string]float64, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT
-		    m.model_family,
+		    m.model_type,
 		    CASE WHEN br.model_s3_uri IS NOT NULL THEN 's3' ELSE 'hf' END AS loader,
 		    percentile_cont(0.95) WITHIN GROUP (
 		        ORDER BY br.host_memory_peak_gib / (m.parameter_count * 2.0 / (1024.0^3))
@@ -29,8 +29,8 @@ func (r *Repository) GetHostMemCalibration(ctx context.Context) (map[string]floa
 		  AND br.status = 'completed'
 		  AND m.parameter_count IS NOT NULL
 		  AND m.parameter_count > 0
-		  AND m.model_family IS NOT NULL
-		GROUP BY m.model_family, loader
+		  AND m.model_type IS NOT NULL
+		GROUP BY m.model_type, loader
 		HAVING COUNT(*) >= 3
 	`)
 	if err != nil {

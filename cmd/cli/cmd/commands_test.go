@@ -52,7 +52,7 @@ func TestQueryCommand_Table(t *testing.T) {
 
 	outputFormat = "table"
 	queryModel = "meta-llama/Llama-3.1-70B"
-	queryModelFamily = ""
+	queryModelType = ""
 	queryInstanceFamily = ""
 	queryAccelType = ""
 	querySort = ""

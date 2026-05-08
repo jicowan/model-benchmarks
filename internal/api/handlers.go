@@ -217,7 +217,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	p.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
 	p.Handle("POST /api/v1/catalog/seed", admin(http.HandlerFunc(s.handleCatalogSeed)))
 	p.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
-	p.Handle("POST /api/v1/admin/backfill-model-families", admin(http.HandlerFunc(s.handleBackfillModelFamilies)))
 	// PRD-15: Memory breakdown and OOM history
 	p.HandleFunc("GET /api/v1/memory-breakdown", s.handleMemoryBreakdown)
 	p.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
@@ -292,7 +291,7 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := database.CatalogFilter{
 		ModelHfID:       q.Get("model"),
-		ModelFamily:     q.Get("model_family"),
+		ModelType:       q.Get("model_type"),
 		InstanceFamily:  q.Get("instance_family"),
 		AcceleratorType: q.Get("accelerator_type"),
 		SortBy:          q.Get("sort"),
@@ -830,7 +829,8 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("recommend: host mem calibration query failed: %v", err)
 	}
-	opts.ModelFamily = database.ExtractModelFamily(modelID)
+	// opts.ModelType is set below, after FetchModelConfig, so we use
+	// HF's canonical architecture name instead of a substring heuristic.
 
 	// Look up instance type from DB.
 	instType, err := s.repo.GetInstanceTypeByName(r.Context(), instanceName)
@@ -855,17 +855,30 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// PRD-47 PR #5 depends on parameter_count being populated on the
-	// models row so the calibration query can derive a weight-size
-	// denominator. This is our only reliable hook for it — the create-
-	// run path doesn't have the config. Ensure the model exists and
-	// write the count if it's missing.
-	if modelCfg != nil && modelCfg.ParameterCount > 0 {
+	// PRD-47 PR #5 depends on parameter_count AND model_type being
+	// populated on the models row so the calibration query can derive
+	// a weight-size denominator and a per-architecture group key. This
+	// is our only reliable hook for it — the create-run path doesn't
+	// have the config. Ensure the model exists and write both fields
+	// if they're missing.
+	if modelCfg != nil {
 		if m, err := s.repo.EnsureModel(r.Context(), modelID, "main"); err == nil && m != nil {
-			if err := s.repo.SetModelParameterCount(r.Context(), m.ID, modelCfg.ParameterCount); err != nil {
-				log.Printf("recommend: set parameter_count: %v", err)
+			if modelCfg.ParameterCount > 0 {
+				if err := s.repo.SetModelParameterCount(r.Context(), m.ID, modelCfg.ParameterCount); err != nil {
+					log.Printf("recommend: set parameter_count: %v", err)
+				}
+			}
+			if modelCfg.ModelType != "" {
+				if err := s.repo.SetModelType(r.Context(), m.ID, modelCfg.ModelType); err != nil {
+					log.Printf("recommend: set model_type: %v", err)
+				}
 			}
 		}
+	}
+	// Calibration key = HF model_type. Drives which bucket the
+	// recommender's host-memory check uses when it runs below.
+	if modelCfg != nil {
+		opts.ModelType = modelCfg.ModelType
 	}
 
 	// Get all GPU instances for suggesting alternatives.
@@ -1024,29 +1037,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
-}
-
-func (s *Server) handleBackfillModelFamilies(w http.ResponseWriter, r *http.Request) {
-	// Check if repo supports backfill (real repo does, mock may not)
-	type backfiller interface {
-		BackfillModelFamilies(ctx context.Context) (int64, error)
-	}
-	bf, ok := s.repo.(backfiller)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, "backfill not supported")
-		return
-	}
-
-	updated, err := bf.BackfillModelFamilies(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"updated": updated,
-		"message": fmt.Sprintf("Updated model_family for %d models", updated),
-	})
 }
 
 // handleListScenarios returns all available benchmark scenarios.

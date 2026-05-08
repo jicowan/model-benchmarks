@@ -225,7 +225,7 @@ func (s *Seeder) run(id string, opts Options) {
 				rec = recommend.Recommend(*modelCfg, inst, allSpecs, recommend.RecommendOptions{
 					VLLMVersion:        tv.FrameworkVersion,
 					UseS3Streamer:      s3URI != "",
-					ModelFamily:        database.ExtractModelFamily(m.HfID),
+					ModelType:          modelCfg.ModelType,
 					HostMemCalibration: hostMemCalibration,
 				})
 			}

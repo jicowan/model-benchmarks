@@ -77,7 +77,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 func exportHeaders() []string {
 	return []string{
-		"run_id", "model", "model_family", "instance_type", "instance_family",
+		"run_id", "model", "model_type", "instance_type", "instance_family",
 		"accelerator_type", "accelerator_name", "accelerator_count", "accelerator_memory_gib",
 		"framework", "framework_version", "tensor_parallel_degree", "quantization",
 		"concurrency", "input_seq_len", "output_seq_len",
@@ -91,9 +91,9 @@ func exportHeaders() []string {
 func exportRows(entries []database.CatalogEntry) [][]string {
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
-		modelFamily := ""
-		if e.ModelFamily != nil {
-			modelFamily = *e.ModelFamily
+		modelType := ""
+		if e.ModelType != nil {
+			modelType = *e.ModelType
 		}
 		quant := ""
 		if e.Quantization != nil {
@@ -102,7 +102,7 @@ func exportRows(entries []database.CatalogEntry) [][]string {
 		rows[i] = []string{
 			e.RunID,
 			e.ModelHfID,
-			modelFamily,
+			modelType,
 			e.InstanceTypeName,
 			e.InstanceFamily,
 			e.AcceleratorType,

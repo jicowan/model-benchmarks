@@ -15,9 +15,9 @@ func seedCatalogRepo() *MockRepo {
 	paramSmall := int64(8000000000)
 	paramLarge := int64(70000000000)
 
-	repo.SeedModel(&Model{ID: "m1", HfID: "meta-llama/Llama-3.1-8B", HfRevision: "abc", ModelFamily: &llama, ParameterCount: &paramSmall})
-	repo.SeedModel(&Model{ID: "m2", HfID: "meta-llama/Llama-3.1-70B", HfRevision: "def", ModelFamily: &llama, ParameterCount: &paramLarge})
-	repo.SeedModel(&Model{ID: "m3", HfID: "mistralai/Mistral-7B", HfRevision: "ghi", ModelFamily: &mistral, ParameterCount: &paramSmall})
+	repo.SeedModel(&Model{ID: "m1", HfID: "meta-llama/Llama-3.1-8B", HfRevision: "abc", ModelType: &llama, ParameterCount: &paramSmall})
+	repo.SeedModel(&Model{ID: "m2", HfID: "meta-llama/Llama-3.1-70B", HfRevision: "def", ModelType: &llama, ParameterCount: &paramLarge})
+	repo.SeedModel(&Model{ID: "m3", HfID: "mistralai/Mistral-7B", HfRevision: "ghi", ModelType: &mistral, ParameterCount: &paramSmall})
 
 	repo.SeedInstanceType(&InstanceType{ID: "i1", Name: "g5.xlarge", Family: "g5", AcceleratorType: "gpu", AcceleratorName: "A10G", AcceleratorCount: 1, AcceleratorMemoryGiB: 24, VCPUs: 4, MemoryGiB: 16})
 	repo.SeedInstanceType(&InstanceType{ID: "i2", Name: "p5.48xlarge", Family: "p5", AcceleratorType: "gpu", AcceleratorName: "H100", AcceleratorCount: 8, AcceleratorMemoryGiB: 640, VCPUs: 192, MemoryGiB: 2048})
@@ -93,10 +93,10 @@ func TestListCatalog_FilterByModel(t *testing.T) {
 	}
 }
 
-func TestListCatalog_FilterByModelFamily(t *testing.T) {
+func TestListCatalog_FilterByModelType(t *testing.T) {
 	repo := seedCatalogRepo()
 	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
-		ModelFamily: "mistral",
+		ModelType: "mistral",
 	})
 	if err != nil {
 		t.Fatalf("ListCatalog: %v", err)
@@ -141,7 +141,7 @@ func TestListCatalog_FilterByAcceleratorType(t *testing.T) {
 func TestListCatalog_CombinedFilters(t *testing.T) {
 	repo := seedCatalogRepo()
 	entries, _, err := repo.ListCatalog(context.Background(), CatalogFilter{
-		ModelFamily:     "llama",
+		ModelType:       "llama",
 		AcceleratorType: "gpu",
 	})
 	if err != nil {

@@ -290,25 +290,25 @@ func hostAllocatableFrac(memoryGiB int) float64 {
 // multiplier reflects whether vLLM's HuggingFace loader (CPU-resident
 // weights) or Run:ai streamer (streaming layers) is used.
 //
-// PRD-47 PR #5: when modelFamily is non-empty AND the calibration map
-// has a matching entry, use the observed p95 ratio instead of the
-// hand-tuned default. Unseen families keep the conservative default.
+// PRD-47: when modelType is non-empty AND the calibration map has a
+// matching entry, use the observed p95 ratio instead of the hand-tuned
+// default. Unseen types keep the conservative default.
 func peakHostMemBytes(
 	modelWeightBytes float64,
 	useS3Streamer bool,
-	modelFamily string,
+	modelType string,
 	calibration map[string]float64,
 ) float64 {
 	mult := hfLoaderHostMultiplier
 	if useS3Streamer {
 		mult = s3StreamerHostMultiplier
 	}
-	if modelFamily != "" && len(calibration) > 0 {
+	if modelType != "" && len(calibration) > 0 {
 		loader := "hf"
 		if useS3Streamer {
 			loader = "s3"
 		}
-		if observed, ok := calibration[modelFamily+"|"+loader]; ok && observed > 0 {
+		if observed, ok := calibration[modelType+"|"+loader]; ok && observed > 0 {
 			mult = observed
 		}
 	}
@@ -331,7 +331,7 @@ func checkHostMemory(
 	inst InstanceSpec,
 	allInstances []InstanceSpec,
 	useS3Streamer bool,
-	modelFamily string,
+	modelType string,
 	calibration map[string]float64,
 ) (bool, string, string) {
 	// inst.MemoryGiB == 0 means the instance catalog doesn't carry host-mem
@@ -339,7 +339,7 @@ func checkHostMemory(
 	if inst.MemoryGiB == 0 {
 		return true, "", ""
 	}
-	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer, modelFamily, calibration)
+	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer, modelType, calibration)
 	allocatable := float64(inst.MemoryGiB) * gibBytes * hostAllocatableFrac(inst.MemoryGiB)
 	if peak <= allocatable {
 		return true, "", ""
@@ -576,18 +576,19 @@ type RecommendOptions struct {
 	// given instance can fit the model weight load in container RAM.
 	UseS3Streamer bool
 
-	// ModelFamily identifies the model lineage ("llama", "qwen", "qwen3",
-	// "mistral", "phi", etc.) for per-family calibration lookup. Empty
+	// ModelType is HuggingFace's canonical architecture name from
+	// config.json ("llama", "qwen2", "qwen3", "phi3", "mistral",
+	// "gpt_oss", …). Used as the per-family calibration key. Empty
 	// string disables calibration for this call; the recommender falls
-	// back to the hand-tuned default multipliers. PRD-47 PR #5.
-	ModelFamily string
+	// back to the hand-tuned default multipliers.
+	ModelType string
 
-	// HostMemCalibration maps `"{model_family}|{loader}"` to the observed
+	// HostMemCalibration maps `"{model_type}|{loader}"` to the observed
 	// p95 of host_memory_peak / weight_size for completed runs in that
 	// bucket. Loader is "hf" or "s3". When a matching key is present and
 	// the ratio is positive, the recommender uses that instead of the
 	// hard-coded defaults for the host-memory feasibility check.
-	// Unseen buckets keep the defaults. PRD-47 PR #5.
+	// Unseen buckets keep the defaults. PRD-47.
 	HostMemCalibration map[string]float64
 }
 
@@ -690,7 +691,7 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	if cfg.PreQuantized && cfg.ActualMemoryBytes > 0 {
 		hostCheckBytes = modelMemEffective
 	}
-	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer, opts.ModelFamily, opts.HostMemCalibration); !ok {
+	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer, opts.ModelType, opts.HostMemCalibration); !ok {
 		rec := &Recommendation{
 			ModelInfo: ModelInfo{
 				ParameterCount:        cfg.ParameterCount,

@@ -8,7 +8,12 @@ type Model struct {
 	ID             string    `json:"id"`
 	HfID           string    `json:"hf_id"`
 	HfRevision     string    `json:"hf_revision"`
-	ModelFamily    *string   `json:"model_family,omitempty"`
+	// ModelType is HuggingFace's canonical architecture name from
+	// config.json (e.g. "llama", "qwen2", "qwen3", "phi3", "mistral",
+	// "gpt_oss"). Used as the family key for PRD-47 per-family host-
+	// memory calibration. Nullable for rows where the config was never
+	// fetched.
+	ModelType      *string   `json:"model_type,omitempty"`
 	ParameterCount *int64    `json:"parameter_count,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
