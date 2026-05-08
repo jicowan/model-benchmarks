@@ -9,6 +9,7 @@ import ModelCombobox from "../components/ModelCombobox";
 import MemoryBreakdown from "../components/MemoryBreakdown";
 import OOMWarning from "../components/OOMWarning";
 import RecommendationCards from "../components/RecommendationCards";
+import InfoTip from "../components/InfoTip";
 
 type RunMode = "single" | "suite";
 type TokenStatus = "idle" | "validating" | "valid" | "invalid";
@@ -813,8 +814,9 @@ export default function Run() {
         {/* Config */}
         <div className="grid grid-cols-4 gap-4">
           <div>
-            <label className="eyebrow block mb-1.5">
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
               Tensor Parallel
+              <InfoTip text="Number of accelerators (GPUs/NeuronCores) the model is sharded across. Higher TP spreads the model over more devices, cutting per-device memory use but adding inter-device communication overhead. vLLM requires TP to divide the number of attention heads evenly." />
             </label>
             {validTPOptions.length > 0 ? (
               <select
@@ -842,8 +844,9 @@ export default function Run() {
             )}
           </div>
           <div>
-            <label className="eyebrow block mb-1.5">
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
               Concurrency
+              <InfoTip text="Target number of in-flight requests the loadgen drives against the model. Controls how much parallelism vLLM sees: higher concurrency increases throughput but also queueing latency and KV-cache pressure, and can trigger OOM on memory-bound configs." />
             </label>
             <input
               type="number"
@@ -855,8 +858,9 @@ export default function Run() {
             />
           </div>
           <div>
-            <label className="eyebrow block mb-1.5">
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
               Quantization
+              <InfoTip text="Compresses model weights to reduce memory. FP16 is half-precision (no compression vs native bf16, just a dtype cast). INT8/INT4 use bitsandbytes to shrink weights ~2×/4× at some quality cost. Leave as None to use the model's native dtype (typically bf16/fp16)." />
             </label>
             <select
               value={form.quantization}
@@ -870,8 +874,9 @@ export default function Run() {
             </select>
           </div>
           <div>
-            <label className="eyebrow block mb-1.5">
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
               Max Model Len
+              <InfoTip text="Maximum total tokens (prompt + generation) vLLM will allocate KV-cache for per request. Higher values support longer contexts but consume more GPU memory per concurrent request. Set to 0 for auto (capped at the model's architectural max). Must satisfy input + output ≤ max_model_len." />
             </label>
             <input
               type="number"
@@ -910,8 +915,9 @@ export default function Run() {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="eyebrow block mb-1.5">
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
               Input Seq Length
+              <InfoTip text="Number of prompt tokens sent per request by the loadgen. Affects prefill cost (compute-bound, ~quadratic in length) and KV-cache footprint. Must fit alongside Output Seq Length within Max Model Len." />
             </label>
             <input
               type="number"
@@ -924,8 +930,9 @@ export default function Run() {
             />
           </div>
           <div>
-            <label className="eyebrow block mb-1.5">
+            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
               Output Seq Length
+              <InfoTip text="Number of tokens the model generates per request. Drives decode time (memory-bandwidth-bound, linear in length) and the bulk of end-to-end latency. Must fit alongside Input Seq Length within Max Model Len." />
             </label>
             <input
               type="number"
