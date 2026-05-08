@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { getSuiteRun, getSuiteCSVUrl, getSuiteExportManifestUrl } from "../api";
 import type { TestSuiteRun } from "../types";
 import HeroBlock from "../components/HeroBlock";
+import ConfigPanel from "../components/ConfigPanel";
 import SuiteCharts from "../components/SuiteCharts";
 import ScenarioTable from "../components/ScenarioTable";
 import PrintButton from "../components/PrintButton";
@@ -137,6 +138,29 @@ export default function SuiteResults() {
                 ]
               : undefined
           }
+        />
+
+        <ConfigPanel
+          headline={[
+            { label: "TP Degree", value: suiteRun.tensor_parallel_degree ?? null },
+            { label: "Quantization", value: suiteRun.quantization ?? "default" },
+            { label: "Max Model Len", value: suiteRun.max_model_len ?? null },
+            {
+              label: "Framework",
+              value:
+                `${suiteRun.framework ?? ""} ${suiteRun.framework_version ?? ""}`.trim() || null,
+            },
+          ]}
+          details={[
+            {
+              label: "Load Format",
+              value: suiteRun.model_s3_uri ? "runai_streamer" : "hf",
+            },
+            {
+              label: "Model Source",
+              value: suiteRun.model_s3_uri ? suiteRun.model_s3_uri : suiteRun.model_hf_id ?? null,
+            },
+          ]}
         />
 
         {/* Progress — only while running */}

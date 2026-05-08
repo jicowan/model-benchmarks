@@ -54,6 +54,12 @@ export interface BenchmarkRun {
   output_sequence_length: number;
   dataset_name: string;
   run_type: string;
+  // vLLM deployment configuration. These already flow on the JSON from
+  // the run detail endpoint; surfaced on the TS type so the Configuration
+  // panel can render every knob used at deploy time.
+  max_model_len?: number;
+  scenario_id?: string | null;
+  model_s3_uri?: string | null;
   status: string;
   error_message?: string;
   superseded: boolean;
@@ -528,6 +534,16 @@ export interface TestSuiteRun {
   accelerator_name?: string;
   accelerator_count?: number;
   accelerator_memory_gib?: number;
+  // vLLM deployment configuration. These are set at suite creation time
+  // and shared across every scenario in the suite (one model deployment
+  // serving all scenarios). Surfaced in the Configuration panel on the
+  // Suite result page so users see the knobs used to launch the model.
+  tensor_parallel_degree?: number;
+  quantization?: string | null;
+  max_model_len?: number;
+  framework?: string | null;
+  framework_version?: string | null;
+  model_s3_uri?: string | null;
   // PRD-35: cost frozen at suite completion (hourly × own started→completed
   // window; all scenarios share one EC2 node).
   total_cost_usd?: number | null;
