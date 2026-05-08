@@ -39,6 +39,16 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels sentencepiece
 FROM quay.io/inference-perf/inference-perf:${UPSTREAM_TAG}
 USER root
 COPY --from=wheels /wheels /tmp/wheels
-RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels \
-      sentencepiece protobuf \
+# Upstream runs inference-perf from /workspace/.venv, which is a uv-
+# managed venv without pip installed. Bootstrap pip via ensurepip,
+# then install the wheels into that specific interpreter so
+# AutoTokenizer (imported by inference-perf) can find them.
+#
+# libstdc++ is needed at runtime because sentencepiece's compiled
+# _sentencepiece.so links against it; the upstream Alpine image doesn't
+# include it by default.
+RUN apk add --no-cache libstdc++ \
+ && /workspace/.venv/bin/python -m ensurepip --upgrade \
+ && /workspace/.venv/bin/python -m pip install --no-cache-dir --no-index \
+      --find-links=/tmp/wheels sentencepiece protobuf \
  && rm -rf /tmp/wheels
