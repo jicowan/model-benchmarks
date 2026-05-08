@@ -37,6 +37,10 @@ export default function Run() {
 
   const [cachedModel, setCachedModel] = useState<ModelCache | null>(null);
   const [useS3Cache, setUseS3Cache] = useState(true);
+  // PRD-47 PR #6: operator override for the host-memory infeasibility
+  // gate. True only when the recommender rejects on host RAM AND the
+  // user has explicitly checked the "run anyway" box.
+  const [allowHostMemOverride, setAllowHostMemOverride] = useState(false);
 
   // PRD-12/13: Scenarios and test suites
   const [runMode, setRunMode] = useState<RunMode>("single");
@@ -117,6 +121,9 @@ export default function Run() {
       setValidTPOptions([]);
       setMemoryBreakdown(null);
       setOOMHistory(null);
+      // PRD-47 PR #6: a fresh recommendation invalidates any prior
+      // override checkbox state — the user is targeting a new pair now.
+      setAllowHostMemOverride(false);
 
       try {
         // Fetch recommendation and OOM history in parallel
@@ -389,6 +396,7 @@ export default function Run() {
           kv_cache_dtype: form.kv_cache_dtype || undefined,
           model_s3_uri: form.model_s3_uri || undefined,
           hf_token: form.hf_token || undefined,
+          allow_host_mem_override: allowHostMemOverride || undefined,
         });
         navigate(`/suite-runs/${res.id}`);
       } else {
@@ -403,6 +411,7 @@ export default function Run() {
           scenario_id: selectedScenario,
           dataset_name: selectedDataset,
           run_type: "on_demand",
+          allow_host_mem_override: allowHostMemOverride || undefined,
         });
         navigate(`/results/${res.id}`);
       }
@@ -756,8 +765,14 @@ export default function Run() {
           </div>
         )}
 
-        {/* Infeasibility warning with alternatives */}
-        {recommendation?.explanation && !recommendation.explanation.feasible && (
+        {/* Infeasibility warning with alternatives. PRD-47 PR #6:
+            host-memory-only rejections can be overridden by the user. */}
+        {recommendation?.explanation && !recommendation.explanation.feasible && (() => {
+          const reason = recommendation.explanation.reason ?? "";
+          const hostMemOnly =
+            /host RAM/i.test(reason) &&
+            !/VRAM|accelerator memory|divides.*heads|transformers/i.test(reason);
+          return (
           <div className="border border-warn/40 bg-warn/5 p-4">
             <div className="flex items-center gap-2 mb-3">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" className="text-warn shrink-0">
@@ -768,6 +783,28 @@ export default function Run() {
             <p className="font-mono text-[12.5px] text-ink-0 mb-4">
               {recommendation.explanation.reason}
             </p>
+            {hostMemOnly && (
+              <div className="mt-4 pt-3 border-t border-warn/30">
+                <label className="flex items-start gap-2 cursor-pointer font-mono text-[12px] text-ink-0">
+                  <input
+                    type="checkbox"
+                    checked={allowHostMemOverride}
+                    onChange={(e) => setAllowHostMemOverride(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Run anyway — I've verified this model fits on the host.
+                    <br />
+                    <span className="caption text-ink-2">
+                      The host-memory check uses a statistical estimate; it can
+                      be wrong for new models. Enabling this flag still records
+                      the run normally, so the peak will feed back into the
+                      recommender for future calls.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
             {(() => {
               const hasQuant = !!recommendation.alternatives?.quantization_option;
               const hasLarger = !!recommendation.alternatives?.larger_instance;
@@ -816,7 +853,8 @@ export default function Run() {
               );
             })()}
           </div>
-        )}
+          );
+        })()}
 
         {/* PRD-15: Memory Breakdown (always visible when recommendation exists) */}
         {recommendation?.explanation?.feasible && (

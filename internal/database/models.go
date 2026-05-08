@@ -161,6 +161,13 @@ type RunRequest struct {
 	APIType              string  `json:"api_type,omitempty"`    // "chat_completion" (default) or "completion"
 	ModelS3URI           string  `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string  `json:"hf_token,omitempty"`
+	// PRD-47 PR #6: when true, the host-memory feasibility check is
+	// downgraded to a warning for this run. Useful when the operator
+	// has verified empirically that a rejected model fits on the host
+	// (or there's just no history yet to calibrate against). Does not
+	// override GPU-memory, TP, or pipeline-tag checks — those are
+	// architectural, not statistical.
+	AllowHostMemOverride bool `json:"allow_host_mem_override,omitempty"`
 }
 
 // TestSuiteRun represents a test suite execution.
@@ -259,6 +266,8 @@ type SuiteRunRequest struct {
 	KVCacheDtype         string   `json:"kv_cache_dtype,omitempty"`
 	ModelS3URI           string   `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string   `json:"hf_token,omitempty"`
+	// PRD-47 PR #6: see RunRequest.
+	AllowHostMemOverride bool `json:"allow_host_mem_override,omitempty"`
 }
 
 // ModelCache tracks models cached from HuggingFace to S3, or custom S3 models.
