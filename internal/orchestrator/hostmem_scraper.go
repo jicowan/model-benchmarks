@@ -12,11 +12,18 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// HostMemScraper samples the model pod's workingSet host memory via
-// kubelet's /stats/summary endpoint and tracks the peak. It is intended
-// to run during the load phase (deploy → readiness), which is when
-// vLLM's weight loader produces the host-memory spike the recommender
-// wants to calibrate against.
+// HostMemScraper samples the model pod's RSS host memory via kubelet's
+// /stats/summary endpoint and tracks the peak. It is intended to run
+// during the load phase (deploy → readiness), which is when vLLM's
+// weight loader produces the host-memory spike the recommender wants
+// to calibrate against.
+//
+// We intentionally use rssBytes rather than workingSetBytes. The S3
+// streamer path reads every weight shard through the page cache; on
+// hosts with spare RAM those pages linger, inflating workingSet by
+// the model's on-disk size even though the pages are reclaimable and
+// irrelevant to OOMKill. RSS better reflects "what would push us over
+// the memory limit."
 //
 // The scraper proxies through the apiserver
 // (/api/v1/nodes/{node}/proxy/stats/summary) using the existing
@@ -58,8 +65,8 @@ func (s *HostMemScraper) Start(ctx context.Context) {
 	go s.loop(ctx)
 }
 
-// Stop stops the scraper and returns the peak workingSet observed, in
-// GiB. Returns 0 if no samples were collected.
+// Stop stops the scraper and returns the peak RSS observed, in GiB.
+// Returns 0 if no samples were collected.
 func (s *HostMemScraper) Stop() float64 {
 	if s.cancel != nil {
 		s.cancel()
@@ -132,19 +139,27 @@ type statsSummary struct {
 		Containers []struct {
 			Name   string `json:"name"`
 			Memory struct {
-				// WorkingSetBytes is the value OOMKiller compares against
-				// the container's limit. Exactly the "peak I care about"
-				// signal for the recommender.
-				WorkingSetBytes int64 `json:"workingSetBytes"`
+				// RSSBytes is the container's resident set size — anonymous
+				// pages + stack + unreclaimable kernel memory. This is what
+				// OOMKiller actually compares against the limit.
+				//
+				// We previously recorded WorkingSetBytes but that includes
+				// active page cache. The Run:ai streamer reads every weight
+				// shard through the page cache once; on hosts with spare
+				// RAM the kernel doesn't reclaim those pages, so peak
+				// workingSet ≈ full model size + RSS, even though none of
+				// the cache is OOM-relevant. Observed on Qwen3-14B / 384
+				// GiB host: workingSet peaked at 121 GiB, RSS stayed
+				// proportional to actual process usage.
+				RSSBytes int64 `json:"rssBytes"`
 			} `json:"memory"`
 		} `json:"containers"`
 	} `json:"pods"`
 }
 
-// sampleOnce hits the kubelet proxy and returns the largest
-// workingSetBytes across any pod matching our label in the target
-// namespace+container. Returns 0 if the pod isn't present in the
-// summary yet.
+// sampleOnce hits the kubelet proxy and returns the largest rssBytes
+// across any pod matching our label in the target namespace+container.
+// Returns 0 if the pod isn't present in the summary yet.
 func (s *HostMemScraper) sampleOnce(ctx context.Context) (int64, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, scrapeTimeout)
 	defer cancel()
@@ -187,8 +202,8 @@ func (s *HostMemScraper) sampleOnce(ctx context.Context) (int64, error) {
 			if c.Name != s.containerName {
 				continue
 			}
-			if c.Memory.WorkingSetBytes > peak {
-				peak = c.Memory.WorkingSetBytes
+			if c.Memory.RSSBytes > peak {
+				peak = c.Memory.RSSBytes
 			}
 		}
 	}

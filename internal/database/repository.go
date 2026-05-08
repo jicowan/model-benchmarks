@@ -124,6 +124,29 @@ func (r *Repository) GetInstanceTypeByID(ctx context.Context, id string) (*Insta
 	return &it, nil
 }
 
+// SetModelParameterCount records the parameter count discovered at
+// recommend time. PRD-47 PR #5 depends on this for per-family
+// calibration — the query divides host_memory_peak_gib by weight size
+// derived from parameter_count, so rows without it are silently
+// excluded from the calibration map.
+//
+// Only writes if the stored value is NULL; parameter counts are
+// architectural and shouldn't change across revisions, so we don't
+// want a later call with stale/zero data to clobber a good reading.
+func (r *Repository) SetModelParameterCount(ctx context.Context, modelID string, params int64) error {
+	if params <= 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx,
+		`UPDATE models SET parameter_count = $1
+		 WHERE id = $2 AND parameter_count IS NULL`,
+		params, modelID)
+	if err != nil {
+		return fmt.Errorf("set parameter_count: %w", err)
+	}
+	return nil
+}
+
 // EnsureModel returns an existing model or creates one if it doesn't exist.
 func (r *Repository) EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error) {
 	m, err := r.GetModelByHfID(ctx, hfID, hfRevision)

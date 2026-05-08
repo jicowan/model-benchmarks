@@ -120,6 +120,24 @@ func (m *MockRepo) EnsureModel(_ context.Context, hfID, hfRevision string) (*Mod
 	return model, nil
 }
 
+func (m *MockRepo) SetModelParameterCount(_ context.Context, modelID string, params int64) error {
+	if params <= 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mdl := range m.models {
+		if mdl.ID == modelID {
+			if mdl.ParameterCount == nil {
+				v := params
+				mdl.ParameterCount = &v
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("model %s not found", modelID)
+}
+
 func (m *MockRepo) GetInstanceTypeByName(_ context.Context, name string) (*InstanceType, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
