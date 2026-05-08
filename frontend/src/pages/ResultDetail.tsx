@@ -206,14 +206,27 @@ export default function ResultDetail() {
           headline={[
             { label: "TP Degree", value: run.tensor_parallel_degree },
             { label: "Quantization", value: run.quantization ?? "default" },
-            { label: "Concurrency", value: run.concurrency },
-            { label: "Dataset", value: run.dataset_name },
+            { label: "Max Model Len", value: run.max_model_len ?? null },
+            {
+              label: "Framework",
+              value: `${run.framework ?? ""} ${run.framework_version ?? ""}`.trim() || null,
+            },
           ]}
           details={[
-            { label: "Framework", value: `${run.framework} ${run.framework_version}` },
+            { label: "Concurrency", value: run.concurrency },
+            { label: "Dataset", value: run.dataset_name },
+            { label: "Scenario", value: run.scenario_id ?? null },
             { label: "Run Type", value: run.run_type },
             { label: "Input Seq", value: run.input_sequence_length },
             { label: "Output Seq", value: run.output_sequence_length },
+            {
+              label: "Load Format",
+              value: run.model_s3_uri ? "runai_streamer" : "hf",
+            },
+            {
+              label: "Model Source",
+              value: run.model_s3_uri ? run.model_s3_uri : run.model_hf_id ?? null,
+            },
           ]}
         />
 
