@@ -101,6 +101,10 @@ spec:
             - "--max-num-seqs"
             - "{{ .MaxNumSeqs }}"
 {{- end }}
+{{- if .KVCacheDtype }}
+            - "--kv-cache-dtype"
+            - "{{ .KVCacheDtype }}"
+{{- end }}
 {{- else }}
           command: ["vllm"]
           args:

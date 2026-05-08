@@ -488,6 +488,7 @@ func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExp
 		Quantization:         run.Quantization,
 		MaxModelLen:          run.MaxModelLen,
 		MaxNumBatchedTokens:  run.MaxNumBatchedTokens,
+		KVCacheDtype:         run.KVCacheDtype,
 		AcceleratorType:      inst.AcceleratorType,
 		AcceleratorCount:     inst.AcceleratorCount,
 		AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,

@@ -440,6 +440,11 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		n := req.MaxNumBatchedTokens
 		mnbtPtr = &n
 	}
+	var kvDtypePtr *string
+	if req.KVCacheDtype != "" {
+		v := req.KVCacheDtype
+		kvDtypePtr = &v
+	}
 	run := &database.BenchmarkRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -455,6 +460,7 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		ScenarioID:           scenarioPtr,
 		MaxModelLen:          req.MaxModelLen,
 		MaxNumBatchedTokens:  mnbtPtr,
+		KVCacheDtype:         kvDtypePtr,
 		ModelS3URI:           s3URIPtr,
 		Status:               "pending",
 	}
@@ -1177,6 +1183,11 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		n := req.MaxNumBatchedTokens
 		suiteMnbtPtr = &n
 	}
+	var suiteKVDtypePtr *string
+	if req.KVCacheDtype != "" {
+		v := req.KVCacheDtype
+		suiteKVDtypePtr = &v
+	}
 	suiteRun := &database.TestSuiteRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -1185,6 +1196,7 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		Quantization:         req.Quantization,
 		MaxModelLen:          req.MaxModelLen,
 		MaxNumBatchedTokens:  suiteMnbtPtr,
+		KVCacheDtype:         suiteKVDtypePtr,
 		Status:               "pending",
 	}
 	if req.Framework != "" {

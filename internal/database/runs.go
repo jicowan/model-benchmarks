@@ -119,8 +119,10 @@ type RunExportDetails struct {
 	MaxModelLen          int
 	// PRD-46: vLLM scheduler knobs persisted on the run row so the
 	// exported manifest reproduces the flags actually passed at runtime.
-	MaxNumBatchedTokens  *int
-	KVCacheDtype         *string
+	MaxNumBatchedTokens *int
+	// KVCacheDtype emits --kv-cache-dtype when non-nil; typically "fp8"
+	// on FP8-capable accelerators, empty otherwise.
+	KVCacheDtype *string
 	// Concurrency drives --max-num-seqs at export time. Persisted on
 	// the run row under its own column; we pull it here so
 	// generateManifest has everything it needs without a second query.

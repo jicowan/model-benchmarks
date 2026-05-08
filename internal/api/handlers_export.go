@@ -79,8 +79,9 @@ type manifestData struct {
 	TensorParallelDegree int
 	Quantization         string
 	MaxModelLen          int
-	MaxNumBatchedTokens  int // 0 = use vLLM default
-	MaxNumSeqs           int // 0 = use vLLM default
+	MaxNumBatchedTokens  int    // 0 = use vLLM default
+	MaxNumSeqs           int    // 0 = use vLLM default
+	KVCacheDtype         string // empty = use vLLM default
 	AcceleratorType      string
 	AcceleratorCount     int
 	CPURequest           string
@@ -107,6 +108,9 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 	}
 	if d.MaxNumBatchedTokens != nil {
 		data.MaxNumBatchedTokens = *d.MaxNumBatchedTokens
+	}
+	if d.KVCacheDtype != nil {
+		data.KVCacheDtype = *d.KVCacheDtype
 	}
 	if d.ModelS3URI != nil && *d.ModelS3URI != "" {
 		data.ModelS3URI = *d.ModelS3URI
@@ -144,6 +148,9 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 {{- end }}
 {{- if gt .MaxNumSeqs 0 }}
 # Max Num Seqs: {{ .MaxNumSeqs }}
+{{- end }}
+{{- if .KVCacheDtype }}
+# KV Cache Dtype: {{ .KVCacheDtype }}
 {{- end }}
 {{- if .Quantization }}
 # Quantization: {{ .Quantization }}
@@ -282,6 +289,10 @@ spec:
 {{- if gt .MaxNumSeqs 0 }}
             - "--max-num-seqs"
             - "{{ .MaxNumSeqs }}"
+{{- end }}
+{{- if .KVCacheDtype }}
+            - "--kv-cache-dtype"
+            - "{{ .KVCacheDtype }}"
 {{- end }}
 {{- else }}
           command: ["vllm"]
@@ -521,6 +532,7 @@ func (s *Server) handleExportSuiteManifest(w http.ResponseWriter, r *http.Reques
 	}
 	details.MaxModelLen = suite.MaxModelLen
 	details.MaxNumBatchedTokens = suite.MaxNumBatchedTokens
+	details.KVCacheDtype = suite.KVCacheDtype
 	// PRD-46: --max-num-seqs was sized at deploy time to the busiest
 	// scenario in the suite; reproduce that value in the export by
 	// walking the suite's scenarios and taking the max NumWorkers,

@@ -19,6 +19,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 	q := "int8"
 	s3 := "s3://accelbench-models-820537372947/models/meta-llama/Llama-3.1-8B-Instruct"
 	mnbt := 8192
+	kvDtype := "fp8"
 	d := &database.RunExportDetails{
 		RunID:                "test-run-id",
 		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
@@ -30,6 +31,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		Quantization:         &q,
 		MaxModelLen:          8192,
 		MaxNumBatchedTokens:  &mnbt,
+		KVCacheDtype:         &kvDtype,
 		Concurrency:          32,
 		AcceleratorType:      "gpu",
 		AcceleratorName:      "L40S",
@@ -57,6 +59,8 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		`"--max-num-batched-tokens"`,
 		`"--max-num-seqs"`,
 		`"32"`,
+		`"--kv-cache-dtype"`,
+		`"fp8"`,
 		`"--load-format"`,
 		`"runai_streamer"`,
 		`"--model-loader-extra-config"`,
@@ -77,6 +81,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		"# Max Model Length: 8192",
 		"# Max Num Batched Tokens: 8192",
 		"# Max Num Seqs: 32",
+		"# KV Cache Dtype: fp8",
 	}
 	for _, w := range wantComments {
 		if !strings.Contains(out, w) {

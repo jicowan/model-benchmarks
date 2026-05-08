@@ -362,6 +362,15 @@ func supportsFP8(acceleratorName string) bool {
 	return false
 }
 
+// SupportsFP8KVCache returns true if the accelerator has native FP8
+// compute (Hopper / Ada Lovelace) and therefore can halve KV-cache
+// memory with --kv-cache-dtype=fp8 at negligible quality cost. Exported
+// so handlers can default the flag without re-running the full
+// recommender.
+func SupportsFP8KVCache(acceleratorName string) bool {
+	return supportsFP8(acceleratorName)
+}
+
 // modelMemoryBytes returns the model weight memory in bytes for a given quantization.
 func modelMemoryBytes(params int64, quant string) float64 {
 	return float64(params) * bytesPerParam(quant)
