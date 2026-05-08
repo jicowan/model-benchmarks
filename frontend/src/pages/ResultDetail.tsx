@@ -221,7 +221,7 @@ export default function ResultDetail() {
             { label: "Output Seq", value: run.output_sequence_length },
             {
               label: "Load Format",
-              value: run.model_s3_uri ? "runai_streamer" : "hf",
+              value: run.model_s3_uri ? "runai_streamer" : "Huggingface",
             },
             {
               label: "Model Source",

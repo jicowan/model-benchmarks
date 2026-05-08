@@ -428,7 +428,7 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        run_type, max_model_len, status, error_message, superseded,
 		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
 		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested,
-		        max_num_batched_tokens
+		        max_num_batched_tokens, scenario_id
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
@@ -436,7 +436,7 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.RunType, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
 		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI,
 		&run.TotalCostUSD, &run.LoadgenCostUSD, &run.OwnerPod, &run.CancelRequested,
-		&run.MaxNumBatchedTokens)
+		&run.MaxNumBatchedTokens, &run.ScenarioID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

@@ -154,7 +154,7 @@ export default function SuiteResults() {
           details={[
             {
               label: "Load Format",
-              value: suiteRun.model_s3_uri ? "runai_streamer" : "hf",
+              value: suiteRun.model_s3_uri ? "runai_streamer" : "Huggingface",
             },
             {
               label: "Model Source",
