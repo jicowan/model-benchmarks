@@ -644,3 +644,41 @@ func TestRecommendUnsupportedTransformersVersion(t *testing.T) {
 		t.Errorf("expected reason to mention required version, got: %s", rec.Explanation.Reason)
 	}
 }
+
+// PRD-46: max_num_batched_tokens defaults to max(2048, ISL) capped at
+// max_model_len, and can be overridden via RecommendOptions.
+func TestRecommend_MaxNumBatchedTokens_DefaultFormula(t *testing.T) {
+	// Mistral 7B on g5.12xlarge fits at native precision with a healthy
+	// context window; ISL will be well below max_model_len so the default
+	// should land at 2048 when ISL ≤ 2048.
+	rec := Recommend(mistral7B, g5_12xlarge, allInstances, RecommendOptions{})
+	if !rec.Explanation.Feasible {
+		t.Fatal("expected feasible recommendation")
+	}
+
+	expected := 2048
+	if rec.InputSequenceLength > expected {
+		expected = rec.InputSequenceLength
+	}
+	if rec.MaxModelLen > 0 && expected > rec.MaxModelLen {
+		expected = rec.MaxModelLen
+	}
+	if rec.MaxNumBatchedTokens != expected {
+		t.Errorf("max_num_batched_tokens = %d, want %d (ISL=%d, MaxModelLen=%d)",
+			rec.MaxNumBatchedTokens, expected,
+			rec.InputSequenceLength, rec.MaxModelLen)
+	}
+}
+
+func TestRecommend_MaxNumBatchedTokens_OverrideWins(t *testing.T) {
+	rec := Recommend(mistral7B, g5_12xlarge, allInstances, RecommendOptions{
+		MaxNumBatchedTokensOverride: 16384,
+	})
+	if !rec.Explanation.Feasible {
+		t.Fatal("expected feasible recommendation")
+	}
+	if rec.MaxNumBatchedTokens != 16384 {
+		t.Errorf("max_num_batched_tokens = %d, want 16384 (override)",
+			rec.MaxNumBatchedTokens)
+	}
+}

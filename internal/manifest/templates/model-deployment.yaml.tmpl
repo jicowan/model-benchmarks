@@ -93,6 +93,10 @@ spec:
             - "--max-model-len"
             - "{{ .MaxModelLen }}"
 {{- end }}
+{{- if gt .MaxNumBatchedTokens 0 }}
+            - "--max-num-batched-tokens"
+            - "{{ .MaxNumBatchedTokens }}"
+{{- end }}
 {{- else }}
           command: ["vllm"]
           args:
@@ -108,6 +112,10 @@ spec:
 {{- if gt .MaxModelLen 0 }}
             - "--max-model-len"
             - "{{ .MaxModelLen }}"
+{{- end }}
+{{- if gt .MaxNumBatchedTokens 0 }}
+            - "--max-num-batched-tokens"
+            - "{{ .MaxNumBatchedTokens }}"
 {{- end }}
 {{- end }}
           resources:

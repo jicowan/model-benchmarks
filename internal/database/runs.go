@@ -117,6 +117,14 @@ type RunExportDetails struct {
 	TensorParallelDegree int
 	Quantization         *string
 	MaxModelLen          int
+	// PRD-46: vLLM scheduler knobs persisted on the run row so the
+	// exported manifest reproduces the flags actually passed at runtime.
+	MaxNumBatchedTokens  *int
+	KVCacheDtype         *string
+	// Concurrency drives --max-num-seqs at export time. Persisted on
+	// the run row under its own column; we pull it here so
+	// generateManifest has everything it needs without a second query.
+	Concurrency          int
 	AcceleratorType      string
 	AcceleratorName      string
 	AcceleratorCount     int
@@ -135,6 +143,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 			br.id, m.hf_id, br.model_s3_uri, it.name,
 			br.framework, br.framework_version,
 			br.tensor_parallel_degree, br.quantization, br.max_model_len,
+			br.max_num_batched_tokens, br.kv_cache_dtype, br.concurrency,
 			it.accelerator_type, it.accelerator_name, it.accelerator_count, it.accelerator_memory_gib,
 			it.vcpus, it.memory_gib
 		FROM benchmark_runs br
@@ -145,6 +154,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 		&d.RunID, &d.ModelHfID, &d.ModelS3URI, &d.InstanceTypeName,
 		&d.Framework, &d.FrameworkVersion,
 		&d.TensorParallelDegree, &d.Quantization, &maxModelLen,
+		&d.MaxNumBatchedTokens, &d.KVCacheDtype, &d.Concurrency,
 		&d.AcceleratorType, &d.AcceleratorName, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
 		&d.VCPUs, &d.MemoryGiB,
 	)

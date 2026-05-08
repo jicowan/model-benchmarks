@@ -58,6 +58,7 @@ export interface BenchmarkRun {
   // the run detail endpoint; surfaced on the TS type so the Configuration
   // panel can render every knob used at deploy time.
   max_model_len?: number;
+  max_num_batched_tokens?: number | null;
   scenario_id?: string | null;
   model_s3_uri?: string | null;
   status: string;
@@ -146,6 +147,7 @@ export interface RunRequest {
   run_type?: string;
   scenario_id?: string;
   max_model_len?: number;
+  max_num_batched_tokens?: number;
   api_type?: string;
   model_s3_uri?: string;
   hf_token?: string;
@@ -251,6 +253,7 @@ export interface RecommendResponse {
   tensor_parallel_degree: number;
   quantization?: string | null;
   max_model_len: number;
+  max_num_batched_tokens?: number;
   concurrency: number;
   input_sequence_length: number;
   output_sequence_length: number;
@@ -450,6 +453,7 @@ export interface SuiteRunRequest {
   tensor_parallel_degree?: number;
   quantization?: string;
   max_model_len?: number;
+  max_num_batched_tokens?: number;
   model_s3_uri?: string;
   hf_token?: string;
 }
@@ -541,6 +545,7 @@ export interface TestSuiteRun {
   tensor_parallel_degree?: number;
   quantization?: string | null;
   max_model_len?: number;
+  max_num_batched_tokens?: number | null;
   framework?: string | null;
   framework_version?: string | null;
   model_s3_uri?: string | null;

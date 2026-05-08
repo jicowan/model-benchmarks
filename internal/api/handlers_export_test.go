@@ -18,6 +18,7 @@ import (
 func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 	q := "int8"
 	s3 := "s3://accelbench-models-820537372947/models/meta-llama/Llama-3.1-8B-Instruct"
+	mnbt := 8192
 	d := &database.RunExportDetails{
 		RunID:                "test-run-id",
 		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
@@ -28,6 +29,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		TensorParallelDegree: 1,
 		Quantization:         &q,
 		MaxModelLen:          8192,
+		MaxNumBatchedTokens:  &mnbt,
 		AcceleratorType:      "gpu",
 		AcceleratorName:      "L40S",
 		AcceleratorCount:     1,
@@ -51,6 +53,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		`"--trust-remote-code"`,
 		`"--max-model-len"`,
 		`"8192"`,
+		`"--max-num-batched-tokens"`,
 		`"--load-format"`,
 		`"runai_streamer"`,
 		`"--model-loader-extra-config"`,
@@ -69,6 +72,7 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		"# Instance: g6e.xlarge",
 		"# Tensor Parallel: 1",
 		"# Max Model Length: 8192",
+		"# Max Num Batched Tokens: 8192",
 	}
 	for _, w := range wantComments {
 		if !strings.Contains(out, w) {

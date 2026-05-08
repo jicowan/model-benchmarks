@@ -77,6 +77,7 @@ type manifestData struct {
 	TensorParallelDegree int
 	Quantization         string
 	MaxModelLen          int
+	MaxNumBatchedTokens  int // 0 = use vLLM default
 	AcceleratorType      string
 	AcceleratorCount     int
 	CPURequest           string
@@ -99,6 +100,9 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		MemoryRequest:        fmt.Sprintf("%dGi", max(d.MemoryGiB/2, 16)),
 		ShmSize:              "16Gi",
 		PullThroughRegistry:  os.Getenv("PULL_THROUGH_REGISTRY"),
+	}
+	if d.MaxNumBatchedTokens != nil {
+		data.MaxNumBatchedTokens = *d.MaxNumBatchedTokens
 	}
 	if d.ModelS3URI != nil && *d.ModelS3URI != "" {
 		data.ModelS3URI = *d.ModelS3URI
@@ -131,6 +135,9 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 # Instance: {{ .InstanceType }}
 # Tensor Parallel: {{ .TensorParallelDegree }}
 # Max Model Length: {{ .MaxModelLen }}
+{{- if gt .MaxNumBatchedTokens 0 }}
+# Max Num Batched Tokens: {{ .MaxNumBatchedTokens }}
+{{- end }}
 {{- if .Quantization }}
 # Quantization: {{ .Quantization }}
 {{- end }}
@@ -261,6 +268,10 @@ spec:
             - "--max-model-len"
             - "{{ .MaxModelLen }}"
 {{- end }}
+{{- if gt .MaxNumBatchedTokens 0 }}
+            - "--max-num-batched-tokens"
+            - "{{ .MaxNumBatchedTokens }}"
+{{- end }}
 {{- else }}
           command: ["vllm"]
           args:
@@ -276,6 +287,10 @@ spec:
 {{- if gt .MaxModelLen 0 }}
             - "--max-model-len"
             - "{{ .MaxModelLen }}"
+{{- end }}
+{{- if gt .MaxNumBatchedTokens 0 }}
+            - "--max-num-batched-tokens"
+            - "{{ .MaxNumBatchedTokens }}"
 {{- end }}
 {{- end }}
           resources:
@@ -490,6 +505,7 @@ func (s *Server) handleExportSuiteManifest(w http.ResponseWriter, r *http.Reques
 		MemoryGiB:            instance.MemoryGiB,
 	}
 	details.MaxModelLen = suite.MaxModelLen
+	details.MaxNumBatchedTokens = suite.MaxNumBatchedTokens
 	// Framework fields: use persisted values when available (suites
 	// created after migration 026), else derive from accelerator type
 	// as a safe fallback for historical rows.

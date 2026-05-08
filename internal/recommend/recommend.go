@@ -71,6 +71,12 @@ type Recommendation struct {
 	OutputSequenceLength int     `json:"output_sequence_length"`
 	OverheadGiB          float64 `json:"overhead_gib"` // Runtime overhead used (for display/tuning)
 
+	// PRD-46: vLLM scheduler knobs. Zero / empty means "let vLLM pick
+	// its default." Populated for GPU runs; Neuron recommender leaves
+	// them at zero-value since Neuron vLLM doesn't accept these flags.
+	MaxNumBatchedTokens int    `json:"max_num_batched_tokens,omitempty"`
+	KVCacheDtype        string `json:"kv_cache_dtype,omitempty"`
+
 	Explanation  Explanation  `json:"explanation"`
 	ModelInfo    ModelInfo    `json:"model_info"`
 	InstanceInfo InstanceInfo `json:"instance_info"`
@@ -478,6 +484,10 @@ type RecommendOptions struct {
 	TPOverride          int     // Force specific tensor parallel degree (0 = auto)
 	OverheadGiB         float64 // Override calculated overhead (0 = auto-calculate)
 	MaxModelLenOverride int     // Force specific max_model_len (0 = auto); concurrency adjusts to fit
+	// PRD-46: force a specific --max-num-batched-tokens (0 = auto-derive
+	// from ISL). Useful for prefill-budget sweeps; bypasses the
+	// max(2048, ISL) floor.
+	MaxNumBatchedTokensOverride int
 	// VLLMVersion is the currently-configured vLLM image tag. Used only in
 	// the transformers-compatibility error message so it reflects what's
 	// actually running instead of a hardcoded "vLLM 0.19.0" string. Empty
@@ -922,6 +932,31 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	} else {
 		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory with %d-token average sequence length.",
 			remainingBytes/gibBytes, int(avgSeqLen))
+	}
+
+	// PRD-46: --max-num-batched-tokens sizes vLLM's per-iteration
+	// prefill budget. Default to max(2048, ISL) capped at max_model_len
+	// so a single input fits in one iteration on long-ISL runs, while
+	// preserving vLLM's 2048 default on short-ISL runs. Override wins
+	// when set.
+	mnbt := 2048
+	if rec.InputSequenceLength > mnbt {
+		mnbt = rec.InputSequenceLength
+	}
+	if rec.MaxModelLen > 0 && mnbt > rec.MaxModelLen {
+		mnbt = rec.MaxModelLen
+	}
+	if opts.MaxNumBatchedTokensOverride > 0 {
+		mnbt = opts.MaxNumBatchedTokensOverride
+	}
+	rec.MaxNumBatchedTokens = mnbt
+
+	// PRD-46: KV cache dtype. FP8-capable accelerators halve KV memory
+	// with negligible quality impact under throughput benchmarks; on
+	// everything else, leave empty so vLLM picks its default (matches
+	// compute dtype). PR #3 wires this into the orchestrator + template.
+	if supportsFP8(inst.AcceleratorName) {
+		rec.KVCacheDtype = "fp8"
 	}
 
 	return rec
