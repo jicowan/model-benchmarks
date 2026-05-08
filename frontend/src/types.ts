@@ -256,6 +256,7 @@ export interface RecommendResponse {
   quantization?: string | null;
   max_model_len: number;
   max_num_batched_tokens?: number;
+  kv_cache_dtype?: string;
   concurrency: number;
   input_sequence_length: number;
   output_sequence_length: number;
@@ -327,6 +328,8 @@ export interface EstimateConfig {
   concurrency: number;
   input_sequence_length: number;
   output_sequence_length: number;
+  max_num_batched_tokens?: number;
+  kv_cache_dtype?: string;
 }
 
 export interface MemoryEstimate {

@@ -245,6 +245,11 @@ func (s *Seeder) run(id string, opts Options) {
 				InputSequenceLength:  rec.InputSequenceLength,
 				OutputSequenceLength: rec.OutputSequenceLength,
 				MaxModelLen:          rec.MaxModelLen,
+				// PRD-46: pass through the recommender's vLLM scheduler
+				// knobs so seeded catalog runs get the same defaults as
+				// runs submitted from the UI.
+				MaxNumBatchedTokens:  rec.MaxNumBatchedTokens,
+				KVCacheDtype:         rec.KVCacheDtype,
 				DatasetName:          matrix.Defaults.Dataset,
 				RunType:              "catalog",
 				ScenarioID:           matrix.Defaults.Scenario,

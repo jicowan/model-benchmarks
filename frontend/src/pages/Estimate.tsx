@@ -77,6 +77,12 @@ export default function Estimate() {
     if (row.config.quantization) {
       params.set("quantization", row.config.quantization);
     }
+    if (row.config.max_num_batched_tokens) {
+      params.set("max_num_batched_tokens", String(row.config.max_num_batched_tokens));
+    }
+    if (row.config.kv_cache_dtype) {
+      params.set("kv_cache_dtype", row.config.kv_cache_dtype);
+    }
     if (hfToken) {
       params.set("hf_token", hfToken);
     }
