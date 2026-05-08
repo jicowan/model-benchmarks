@@ -65,6 +65,10 @@ type BenchmarkRun struct {
 	// owning pod's goroutine.
 	OwnerPod        *string `json:"owner_pod,omitempty"`
 	CancelRequested bool    `json:"cancel_requested"`
+	// PRD-47: peak container workingSetBytes observed during the load
+	// phase, in GiB. Powers per-family host-memory calibration. Null on
+	// historical rows and on runs where the kubelet scrape failed.
+	HostMemoryPeakGiB *float64 `json:"host_memory_peak_gib,omitempty"`
 }
 
 type BenchmarkMetrics struct {
@@ -187,6 +191,10 @@ type TestSuiteRun struct {
 	// PRD-40: replica coordination (see BenchmarkRun).
 	OwnerPod        *string `json:"owner_pod,omitempty"`
 	CancelRequested bool    `json:"cancel_requested"`
+	// PRD-47: peak container workingSetBytes observed during the shared
+	// model-load phase, in GiB. Suite-level because one model deployment
+	// is reused across all scenarios.
+	HostMemoryPeakGiB *float64 `json:"host_memory_peak_gib,omitempty"`
 }
 
 // ScenarioResult represents the result of a single scenario within a suite run.

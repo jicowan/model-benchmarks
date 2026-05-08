@@ -21,6 +21,9 @@ type Repo interface {
 	UpdateLoadgenConfig(ctx context.Context, runID, config string) error
 	SetLoadgenStartedAt(ctx context.Context, runID string) error
 	GetLoadgenStartedAt(ctx context.Context, runID string) (*time.Time, error)
+	// PRD-47: peak container workingSetBytes during the load phase.
+	SetRunHostMemoryPeak(ctx context.Context, runID string, gib float64) error
+	SetSuiteRunHostMemoryPeak(ctx context.Context, suiteRunID string, gib float64) error
 	PersistMetrics(ctx context.Context, runID string, m *BenchmarkMetrics) error
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)

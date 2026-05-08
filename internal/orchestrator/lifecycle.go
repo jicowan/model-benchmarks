@@ -180,11 +180,32 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("deploy model: %w", err)
 	}
 
+	// PRD-47: capture peak host memory during the load phase so PR #5
+	// can calibrate per-family multipliers. Starts now, stops on
+	// readiness (success or failure). Best-effort: a failed scrape
+	// leaves host_memory_peak_gib NULL and the run continues.
+	hostMemScraper := NewHostMemScraper(o.client, ns,
+		fmt.Sprintf("app.kubernetes.io/name=%s", modelName), "vllm")
+	hostMemScraper.Start(ctx)
+
 	// Phase 3: Wait for readiness.
 	log.Printf("[%s] waiting for model readiness", cfg.RunID[:8])
-	if err := o.waitForReady(ctx, ns, modelName, cfg); err != nil {
-		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("model not ready: %v", err))
-		return fmt.Errorf("wait for readiness: %w", err)
+	readyErr := o.waitForReady(ctx, ns, modelName, cfg)
+
+	// Stop the scraper now (load phase is over). Persist whatever peak
+	// we captured even on readiness failure — OOMs produce the most
+	// useful calibration signal.
+	if peakGiB := hostMemScraper.Stop(); peakGiB > 0 {
+		if err := o.repo.SetRunHostMemoryPeak(context.Background(), cfg.RunID, peakGiB); err != nil {
+			log.Printf("[%s] warning: persist host memory peak: %v", cfg.RunID[:8], err)
+		} else {
+			log.Printf("[%s] load-phase host memory peak: %.2f GiB", cfg.RunID[:8], peakGiB)
+		}
+	}
+
+	if readyErr != nil {
+		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("model not ready: %v", readyErr))
+		return fmt.Errorf("wait for readiness: %w", readyErr)
 	}
 
 	// Start GPU scraper for GPU instances (non-fatal if it fails).
