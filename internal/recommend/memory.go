@@ -87,7 +87,11 @@ func CalculateMemoryBreakdown(
 	kvCacheBytes := kvPerTokenBytes * avgSeqLen * float64(concurrency)
 
 	totalUsed := modelWeights + quantMetadata + blockTable + kvCacheBytes + overheadBytes
-	totalAvailable := perDeviceGiB * float64(tpDegree) * gibBytes
+	// vLLM only gets gpu_memory_utilization (0.90) of per-device VRAM;
+	// the remaining 10% is reserved for CUDA context + PyTorch allocator
+	// overhead that vLLM can't touch. Reporting raw VRAM here made the
+	// memory map show phantom headroom users couldn't use.
+	totalAvailable := perDeviceGiB * float64(tpDegree) * gibBytes * gpuMemoryUtilization
 
 	return MemoryBreakdown{
 		ModelWeightsGiB:         modelWeights / gibBytes,

@@ -50,6 +50,7 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	fmt.Sscanf(q.Get("output_seq_len"), "%d", &outputSeqLen)
 	fmt.Sscanf(q.Get("overhead_gib"), "%f", &overheadGiB)
 	quant = q.Get("quantization")
+	kvCacheDtype := q.Get("kv_cache_dtype")
 
 	// Fetch model config (from S3 cache if available, else HuggingFace).
 	modelCfg, err := s.FetchModelConfig(r.Context(), modelID, hfToken)
@@ -98,9 +99,17 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Calculate KV cache per token
-	headDim := float64(modelCfg.HiddenSize) / float64(modelCfg.NumAttentionHeads)
-	kvPerToken := 2 * float64(modelCfg.NumHiddenLayers) * float64(modelCfg.NumKeyValueHeads) * headDim * 2
+	// If the caller didn't specify a KV dtype, mirror the recommender's
+	// auto behavior: fp8 on FP8-capable GPUs (H100/H200/L40S), else fp16.
+	// Without this the breakdown would over-count KV cache by 2× on
+	// Hopper/Ada instances where PRD-46 actually ships fp8.
+	if kvCacheDtype == "" && recommend.SupportsFP8KVCache(instType.AcceleratorName) {
+		kvCacheDtype = "fp8"
+	}
+
+	// Calculate KV cache per token — shared with the recommender so the
+	// breakdown and the feasibility check agree on what a KV slot costs.
+	kvPerToken := recommend.KVCachePerTokenBytes(*modelCfg, kvCacheDtype)
 
 	// Calculate overhead
 	var overheadBytes float64
