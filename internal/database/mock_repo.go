@@ -487,6 +487,7 @@ func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExp
 		TensorParallelDegree: run.TensorParallelDegree,
 		Quantization:         run.Quantization,
 		MaxModelLen:          run.MaxModelLen,
+		MaxNumBatchedTokens:  run.MaxNumBatchedTokens,
 		AcceleratorType:      inst.AcceleratorType,
 		AcceleratorCount:     inst.AcceleratorCount,
 		AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,

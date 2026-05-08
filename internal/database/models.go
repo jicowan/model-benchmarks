@@ -39,6 +39,11 @@ type BenchmarkRun struct {
 	DatasetName           string     `json:"dataset_name"`
 	RunType               string     `json:"run_type"`
 	MaxModelLen           int        `json:"max_model_len,omitempty"`
+	// PRD-46: vLLM scheduler knobs persisted so a run can be reproduced
+	// byte-for-byte from the DB. Null on historical rows; the exporter
+	// and UI treat null as "flag omitted, vLLM picked its default."
+	MaxNumBatchedTokens   *int       `json:"max_num_batched_tokens,omitempty"`
+	KVCacheDtype          *string    `json:"kv_cache_dtype,omitempty"`
 	ScenarioID            *string    `json:"scenario_id,omitempty"`    // scenario identifier (chatbot, batch, etc.)
 	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
 	ModelS3URI            *string    `json:"model_s3_uri,omitempty"`   // s3://bucket/path — set when weights loaded via Run:ai streamer
@@ -143,6 +148,11 @@ type RunRequest struct {
 	DatasetName          string  `json:"dataset_name"`
 	RunType              string  `json:"run_type"`
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
+	// PRD-46: vLLM scheduler knobs. Recommender populates these; direct
+	// API submitters may set them to override. Zero / empty means "use
+	// the recommender's choice if available, else vLLM's default."
+	MaxNumBatchedTokens  int     `json:"max_num_batched_tokens,omitempty"`
+	KVCacheDtype         string  `json:"kv_cache_dtype,omitempty"`
 	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
 	APIType              string  `json:"api_type,omitempty"`    // "chat_completion" (default) or "completion"
 	ModelS3URI           string  `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
@@ -158,6 +168,9 @@ type TestSuiteRun struct {
 	TensorParallelDegree int        `json:"tensor_parallel_degree"`
 	Quantization         *string    `json:"quantization,omitempty"`
 	MaxModelLen          int        `json:"max_model_len,omitempty"`
+	// PRD-46: vLLM scheduler knobs (see BenchmarkRun).
+	MaxNumBatchedTokens *int    `json:"max_num_batched_tokens,omitempty"`
+	KVCacheDtype        *string `json:"kv_cache_dtype,omitempty"`
 	Status               string     `json:"status"`
 	CurrentScenario      *string    `json:"current_scenario,omitempty"`
 	StartedAt            *time.Time `json:"started_at,omitempty"`
@@ -233,6 +246,9 @@ type SuiteRunRequest struct {
 	TensorParallelDegree int      `json:"tensor_parallel_degree"`
 	Quantization         *string  `json:"quantization,omitempty"`
 	MaxModelLen          int      `json:"max_model_len,omitempty"`
+	// PRD-46: vLLM scheduler knobs (see RunRequest).
+	MaxNumBatchedTokens  int      `json:"max_num_batched_tokens,omitempty"`
+	KVCacheDtype         string   `json:"kv_cache_dtype,omitempty"`
 	ModelS3URI           string   `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string   `json:"hf_token,omitempty"`
 }

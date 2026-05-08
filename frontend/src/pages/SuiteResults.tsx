@@ -160,6 +160,10 @@ export default function SuiteResults() {
               label: "Model Source",
               value: suiteRun.model_s3_uri ? suiteRun.model_s3_uri : suiteRun.model_hf_id ?? null,
             },
+            {
+              label: "Max Num Batched Tokens",
+              value: suiteRun.max_num_batched_tokens ?? null,
+            },
           ]}
         />
 

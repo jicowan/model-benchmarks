@@ -352,6 +352,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		InstanceTypeName:     cfg.InstanceType.Name,
 		InstanceFamily:       cfg.InstanceType.Family,
 		MaxModelLen:          cfg.Request.MaxModelLen,
+		MaxNumBatchedTokens:  cfg.Request.MaxNumBatchedTokens,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
 		ModelS3URI:           modelS3URI,

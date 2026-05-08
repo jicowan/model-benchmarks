@@ -435,6 +435,11 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		u := req.ModelS3URI
 		s3URIPtr = &u
 	}
+	var mnbtPtr *int
+	if req.MaxNumBatchedTokens > 0 {
+		n := req.MaxNumBatchedTokens
+		mnbtPtr = &n
+	}
 	run := &database.BenchmarkRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -449,6 +454,7 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		RunType:              runType,
 		ScenarioID:           scenarioPtr,
 		MaxModelLen:          req.MaxModelLen,
+		MaxNumBatchedTokens:  mnbtPtr,
 		ModelS3URI:           s3URIPtr,
 		Status:               "pending",
 	}
@@ -1164,6 +1170,13 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	// Create suite run record. PRD-41: persist framework/framework_version/model_s3_uri
 	// so the manifest export can reconstruct the deployment exactly.
+	// PRD-46: also persist max_num_batched_tokens so the suite manifest
+	// reproduces runtime vLLM flags byte-for-byte.
+	var suiteMnbtPtr *int
+	if req.MaxNumBatchedTokens > 0 {
+		n := req.MaxNumBatchedTokens
+		suiteMnbtPtr = &n
+	}
 	suiteRun := &database.TestSuiteRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -1171,6 +1184,7 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		TensorParallelDegree: req.TensorParallelDegree,
 		Quantization:         req.Quantization,
 		MaxModelLen:          req.MaxModelLen,
+		MaxNumBatchedTokens:  suiteMnbtPtr,
 		Status:               "pending",
 	}
 	if req.Framework != "" {

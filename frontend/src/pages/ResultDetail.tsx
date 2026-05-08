@@ -227,6 +227,10 @@ export default function ResultDetail() {
               label: "Model Source",
               value: run.model_s3_uri ? run.model_s3_uri : run.model_hf_id ?? null,
             },
+            {
+              label: "Max Num Batched Tokens",
+              value: run.max_num_batched_tokens ?? null,
+            },
           ]}
         />
 
