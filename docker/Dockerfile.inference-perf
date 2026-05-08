@@ -1,0 +1,44 @@
+# AccelBench's fork of the upstream inference-perf image.
+#
+# Adds `sentencepiece` (and `protobuf`) so AutoTokenizer can load
+# SentencePiece-only tokenizers (Mistral, older Llama, T5). Without
+# this, loadgen aborts before issuing a request:
+#     ValueError: Cannot instantiate this tokenizer from a slow version.
+#     If it's based on sentencepiece, make sure you have sentencepiece
+#     installed.
+#
+# Upstream's image is Alpine-based. PyPI's sentencepiece wheels target
+# glibc/manylinux, so on Alpine pip has to build from source. We do
+# the heavy compile in a musl-matching builder stage with CMake + GCC,
+# then pip-install the produced wheel into the final image (which
+# stays lean — no compiler).
+#
+# Build with `--build-arg UPSTREAM_TAG=v0.5.0` (matches
+# tool_versions.inference_perf_version) and tag our push the same.
+
+ARG UPSTREAM_TAG=v0.5.0
+
+# ---- stage 1: build the sentencepiece wheel under musl ----
+# python:3.12-alpine pins Python 3.12 the same as the upstream image
+# ships, and uses musl/apk so the resulting wheel is ABI-compatible.
+FROM python:3.12-alpine AS wheels
+RUN apk add --no-cache \
+      build-base \
+      cmake \
+      ninja \
+      pkgconfig
+# sentencepiece bundles its own C++ source and tries to fetch GoogleTest
+# during build; the setup script's bootstrap needs bash.
+RUN apk add --no-cache bash
+RUN pip wheel --no-cache-dir --wheel-dir /wheels protobuf
+# Give the sentencepiece build script enough cores so the ~5-minute
+# compile doesn't dominate total build time.
+RUN pip wheel --no-cache-dir --wheel-dir /wheels sentencepiece
+
+# ---- stage 2: overlay the wheels on upstream ----
+FROM quay.io/inference-perf/inference-perf:${UPSTREAM_TAG}
+USER root
+COPY --from=wheels /wheels /tmp/wheels
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels \
+      sentencepiece protobuf \
+ && rm -rf /tmp/wheels

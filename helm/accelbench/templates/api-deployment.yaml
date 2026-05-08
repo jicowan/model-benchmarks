@@ -37,8 +37,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "accelbench.dbSecretName" . }}
                   key: {{ .Values.database.existingSecretKey | default "DATABASE_URL" }}
-            {{- if .Values.image.loadgen }}
-            - name: LOADGEN_IMAGE
+            # When image.loadgen.repository is set, we pass
+            # INFERENCE_PERF_IMAGE to the orchestrator so it uses our
+            # ECR fork (upstream inference-perf + sentencepiece — see
+            # docker/Dockerfile.inference-perf). Empty repository falls
+            # back to the upstream image at
+            # quay.io/inference-perf/inference-perf:<tool_versions tag>.
+            {{- if .Values.image.loadgen.repository }}
+            - name: INFERENCE_PERF_IMAGE
               value: "{{ .Values.image.loadgen.repository }}:{{ .Values.image.loadgen.tag | default "latest" }}"
             {{- end }}
             - name: TOOLS_IMAGE
