@@ -10,6 +10,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ExtractModelFamily derives the model family from a HuggingFace ID.
+// Exported (PRD-47 PR #5) so callers that need the calibration key
+// can use the same taxonomy the model row uses.
+// Returns one of: llama, mistral, qwen, deepseek, gemma, phi, or empty string.
+// Priority: check organization name first (before /), then model name.
+func ExtractModelFamily(hfID string) string {
+	return extractModelFamily(hfID)
+}
+
 // extractModelFamily extracts the model family from a HuggingFace model ID.
 // Returns one of: llama, mistral, qwen, deepseek, gemma, phi, or empty string.
 // Priority: check organization name first (before /), then model name.

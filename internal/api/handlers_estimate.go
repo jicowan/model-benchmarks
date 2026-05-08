@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/recommend"
 )
 
@@ -173,6 +174,12 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 	if mc, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main"); mc != nil && mc.Status == "cached" {
 		recOpts.UseS3Streamer = true
 	}
+
+	// PRD-47 PR #5: apply per-family host-memory calibration.
+	if calib, err := s.repo.GetHostMemCalibration(r.Context()); err == nil {
+		recOpts.HostMemCalibration = calib
+	}
+	recOpts.ModelFamily = database.ExtractModelFamily(modelID)
 
 	// Generate estimates for each instance type
 	var estimates []EstimateRow

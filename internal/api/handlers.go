@@ -821,6 +821,17 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		opts.UseS3Streamer = true
 	}
 
+	// PRD-47 PR #5: pass observed per-family host-memory ratios into
+	// the recommender so the host-memory check uses empirical data
+	// when available. Unseen families keep the conservative default.
+	// Non-fatal on query failure.
+	if calib, err := s.repo.GetHostMemCalibration(r.Context()); err == nil {
+		opts.HostMemCalibration = calib
+	} else {
+		log.Printf("recommend: host mem calibration query failed: %v", err)
+	}
+	opts.ModelFamily = database.ExtractModelFamily(modelID)
+
 	// Look up instance type from DB.
 	instType, err := s.repo.GetInstanceTypeByName(r.Context(), instanceName)
 	if err != nil {
