@@ -18,7 +18,12 @@ image:
     tag: "latest"
     pullPolicy: IfNotPresent
   loadgen:
-    repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-loadgen
+    # Optional: our ECR fork of inference-perf that adds sentencepiece
+    # (see docker/Dockerfile.inference-perf). Set when you need Mistral
+    # / older-Llama / T5-family SentencePiece tokenizer support. Leave
+    # empty to fall back to upstream quay.io/inference-perf/inference-
+    # perf:<tool_versions.inference_perf_version>.
+    repository: ""  # e.g. <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-loadgen
     tag: "latest"
   migration:
     repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-migration
