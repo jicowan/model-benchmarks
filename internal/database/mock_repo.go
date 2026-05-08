@@ -200,6 +200,32 @@ func (m *MockRepo) SetLoadgenStartedAt(_ context.Context, runID string) error {
 	return nil
 }
 
+// PRD-47: peak load-phase host memory in GiB.
+func (m *MockRepo) SetRunHostMemoryPeak(_ context.Context, runID string, gib float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	v := gib
+	run.HostMemoryPeakGiB = &v
+	return nil
+}
+
+// PRD-47: peak load-phase host memory for a suite run (shared deployment).
+func (m *MockRepo) SetSuiteRunHostMemoryPeak(_ context.Context, suiteRunID string, gib float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.suiteRuns[suiteRunID]
+	if !ok {
+		return fmt.Errorf("suite run %s not found", suiteRunID)
+	}
+	v := gib
+	run.HostMemoryPeakGiB = &v
+	return nil
+}
+
 func (m *MockRepo) GetLoadgenStartedAt(_ context.Context, runID string) (*time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -313,6 +313,30 @@ func (r *Repository) SetLoadgenStartedAt(ctx context.Context, runID string) erro
 	return nil
 }
 
+// SetRunHostMemoryPeak records peak container workingSet during load.
+// PRD-47: consumed by per-family p95 calibration in the recommender.
+func (r *Repository) SetRunHostMemoryPeak(ctx context.Context, runID string, gib float64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE benchmark_runs SET host_memory_peak_gib = $1 WHERE id = $2`,
+		gib, runID)
+	if err != nil {
+		return fmt.Errorf("set host memory peak: %w", err)
+	}
+	return nil
+}
+
+// SetSuiteRunHostMemoryPeak records peak load-phase host memory for a
+// test suite run (one deployment shared across scenarios).
+func (r *Repository) SetSuiteRunHostMemoryPeak(ctx context.Context, suiteRunID string, gib float64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE test_suite_runs SET host_memory_peak_gib = $1 WHERE id = $2`,
+		gib, suiteRunID)
+	if err != nil {
+		return fmt.Errorf("set suite host memory peak: %w", err)
+	}
+	return nil
+}
+
 // GetLoadgenStartedAt returns the loadgen_started_at timestamp for a run.
 func (r *Repository) GetLoadgenStartedAt(ctx context.Context, runID string) (*time.Time, error) {
 	var t *time.Time
@@ -429,7 +453,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        run_type, max_model_len, status, error_message, superseded,
 		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
 		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested,
-		        max_num_batched_tokens, scenario_id, kv_cache_dtype
+		        max_num_batched_tokens, scenario_id, kv_cache_dtype,
+		        host_memory_peak_gib
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
@@ -437,7 +462,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.RunType, &maxModelLen, &run.Status, &run.ErrorMessage, &run.Superseded,
 		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI,
 		&run.TotalCostUSD, &run.LoadgenCostUSD, &run.OwnerPod, &run.CancelRequested,
-		&run.MaxNumBatchedTokens, &run.ScenarioID, &run.KVCacheDtype)
+		&run.MaxNumBatchedTokens, &run.ScenarioID, &run.KVCacheDtype,
+		&run.HostMemoryPeakGiB)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

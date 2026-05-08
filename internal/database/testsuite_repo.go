@@ -39,14 +39,16 @@ func (r *Repository) GetTestSuiteRun(ctx context.Context, id string) (*TestSuite
 		        started_at, completed_at, created_at, total_cost_usd,
 		        owner_pod, cancel_requested,
 		        framework, framework_version, model_s3_uri,
-		        max_num_batched_tokens, kv_cache_dtype
+		        max_num_batched_tokens, kv_cache_dtype,
+		        host_memory_peak_gib
 		 FROM test_suite_runs WHERE id = $1`, id,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.SuiteID,
 		&run.TensorParallelDegree, &run.Quantization, &run.MaxModelLen,
 		&run.Status, &run.CurrentScenario, &run.StartedAt, &run.CompletedAt, &run.CreatedAt,
 		&run.TotalCostUSD, &run.OwnerPod, &run.CancelRequested,
 		&run.Framework, &run.FrameworkVersion, &run.ModelS3URI,
-		&run.MaxNumBatchedTokens, &run.KVCacheDtype)
+		&run.MaxNumBatchedTokens, &run.KVCacheDtype,
+		&run.HostMemoryPeakGiB)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
