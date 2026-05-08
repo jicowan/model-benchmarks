@@ -13,6 +13,9 @@ type Repo interface {
 	GetModelByHfID(ctx context.Context, hfID, hfRevision string) (*Model, error)
 	GetModelByID(ctx context.Context, id string) (*Model, error)
 	EnsureModel(ctx context.Context, hfID, hfRevision string) (*Model, error)
+	// PRD-47 PR #5: record parameter_count at recommend time so the
+	// per-family calibration query has a weight-size denominator.
+	SetModelParameterCount(ctx context.Context, modelID string, params int64) error
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
 	GetInstanceTypeByID(ctx context.Context, id string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)

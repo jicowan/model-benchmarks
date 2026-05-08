@@ -855,6 +855,19 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// PRD-47 PR #5 depends on parameter_count being populated on the
+	// models row so the calibration query can derive a weight-size
+	// denominator. This is our only reliable hook for it — the create-
+	// run path doesn't have the config. Ensure the model exists and
+	// write the count if it's missing.
+	if modelCfg != nil && modelCfg.ParameterCount > 0 {
+		if m, err := s.repo.EnsureModel(r.Context(), modelID, "main"); err == nil && m != nil {
+			if err := s.repo.SetModelParameterCount(r.Context(), m.ID, modelCfg.ParameterCount); err != nil {
+				log.Printf("recommend: set parameter_count: %v", err)
+			}
+		}
+	}
+
 	// Get all GPU instances for suggesting alternatives.
 	allInstTypes, err := s.repo.ListInstanceTypes(r.Context())
 	if err != nil {
