@@ -679,6 +679,15 @@ export async function resetUserPassword(sub: string): Promise<CognitoUser> {
   });
 }
 
+// Resend the initial invitation email to a user still in
+// FORCE_CHANGE_PASSWORD. Backed by Cognito's AdminCreateUser with
+// MessageAction=RESEND.
+export async function resendUserInvite(sub: string): Promise<CognitoUser> {
+  return fetchJSON<CognitoUser>(`${BASE}/users/${encodeURIComponent(sub)}/resend-invite`, {
+    method: "POST",
+  });
+}
+
 export async function deleteUser(sub: string): Promise<void> {
   const res = await fetch(`${BASE}/users/${encodeURIComponent(sub)}`, {
     method: "DELETE",

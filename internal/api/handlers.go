@@ -276,6 +276,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	p.Handle("POST /api/v1/users/{sub}/disable", admin(http.HandlerFunc(s.handleDisableUser)))
 	p.Handle("POST /api/v1/users/{sub}/enable", admin(http.HandlerFunc(s.handleEnableUser)))
 	p.Handle("POST /api/v1/users/{sub}/reset-password", admin(http.HandlerFunc(s.handleResetUserPassword)))
+	p.Handle("POST /api/v1/users/{sub}/resend-invite", admin(http.HandlerFunc(s.handleResendInvite)))
 	p.Handle("DELETE /api/v1/users/{sub}", admin(http.HandlerFunc(s.handleDeleteUser)))
 
 	// PRD-35: Dashboard aggregate stats (every card on the Dashboard).

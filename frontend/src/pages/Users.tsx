@@ -7,6 +7,7 @@ import {
   disableUser,
   enableUser,
   resetUserPassword,
+  resendUserInvite,
   deleteUser,
 } from "../api";
 import { useAuth } from "../components/AuthProvider";
@@ -452,6 +453,8 @@ function BulkActions({
             await enableUser(r.sub);
           } else if (value === "reset-pw") {
             await resetUserPassword(r.sub);
+          } else if (value === "resend-invite") {
+            await resendUserInvite(r.sub);
           }
         } catch (e) {
           alert(`${r.email}: ${e instanceof Error ? e.message : "failed"}`);
@@ -532,6 +535,14 @@ function BulkActions({
             className="block w-full text-left px-3 py-2 text-ink-0 hover:bg-surface-2"
           >
             Reset password
+          </button>
+          <button
+            type="button"
+            onClick={() => run("resend-invite")}
+            className="block w-full text-left px-3 py-2 text-ink-0 hover:bg-surface-2"
+            title="Re-send the initial invitation email (use for users stuck in FORCE_CHANGE_PASSWORD)"
+          >
+            Resend invite
           </button>
           <button
             type="button"
