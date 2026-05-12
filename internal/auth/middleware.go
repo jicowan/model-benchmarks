@@ -124,3 +124,42 @@ func RequireRole(role string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// AllowRoles returns middleware that passes the request through if
+// the principal's role matches any of the listed roles. PRD-48 uses
+// this to mark read-only routes as reachable by "viewer" without
+// changing the stricter admin(...) gates on mutation endpoints.
+//
+// Missing principal → 401; role mismatch → 403 listing the allowed
+// roles so the operator can tell why access was denied.
+func AllowRoles(roles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := PrincipalFromContext(r.Context())
+			if p == nil {
+				writeUnauthorized(w, "no_principal")
+				return
+			}
+			for _, allowed := range roles {
+				if p.Role == allowed {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			writeForbidden(w, "forbidden: requires one of "+joinRoles(roles))
+		})
+	}
+}
+
+// joinRoles formats a role list like `"admin", "user"` for error
+// messages.
+func joinRoles(roles []string) string {
+	out := ""
+	for i, r := range roles {
+		if i > 0 {
+			out += ", "
+		}
+		out += "\"" + r + "\""
+	}
+	return out
+}

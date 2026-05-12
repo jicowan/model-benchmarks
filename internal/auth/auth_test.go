@@ -345,6 +345,63 @@ func TestRequireRole_NoPrincipalBlocked(t *testing.T) {
 	}
 }
 
+// ---------- PRD-48: AllowRoles middleware ----------
+
+func TestAllowRoles_AllowedRolePasses(t *testing.T) {
+	var called bool
+	h := AllowRoles("admin", "user", "viewer")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, role := range []string{"admin", "user", "viewer"} {
+		called = false
+		req := httptest.NewRequest("GET", "/protected", nil)
+		req = req.WithContext(WithPrincipal(req.Context(), &Principal{Role: role}))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("role=%s status = %d, want 200", role, rec.Code)
+		}
+		if !called {
+			t.Errorf("role=%s: next handler was not invoked", role)
+		}
+	}
+}
+
+// A role not in the allow-list is 403'd with a message that names the
+// allowed roles (so operators can see what the gate requires).
+func TestAllowRoles_DeniedRoleReturns403(t *testing.T) {
+	h := AllowRoles("admin", "user")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("next should not be called")
+	}))
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req = req.WithContext(WithPrincipal(req.Context(), &Principal{Role: "viewer"}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "admin") || !strings.Contains(body, "user") {
+		t.Errorf("body = %q, want contains both allowed roles", body)
+	}
+}
+
+func TestAllowRoles_MissingPrincipalReturns401(t *testing.T) {
+	h := AllowRoles("admin", "user")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("next should not be called")
+	}))
+	// No principal on context.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/protected", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
 // Extra: ID-token verification path (used by the login handler).
 func TestVerify_IDToken_Accepts(t *testing.T) {
 	a := newAuthTest(t)

@@ -12,6 +12,7 @@ import { listCatalog, seedCatalog, getCatalogSeedStatus, getCatalogMatrix } from
 import type { CatalogEntry, CatalogFilter, CatalogSeedStatus } from "../types";
 import FilterBar from "../components/FilterBar";
 import Pagination from "../components/Pagination";
+import { useAuth } from "../components/AuthProvider";
 import { PAGE_SIZE } from "../lib/pagination";
 
 // Map react-table column IDs (the `accessorKey` on each ColumnDef) to the
@@ -48,6 +49,7 @@ export default function Catalog() {
   const [seedFlash, setSeedFlash] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigate = useNavigate();
+  const { isViewer } = useAuth();
 
   // Fetch a page of results. Sort and filter come from component state so
   // fetchData is stable; re-runs happen via the dependency-tracking effect.
@@ -300,23 +302,25 @@ export default function Catalog() {
           {seedError && (
             <span className="font-mono text-[11.5px] text-danger">{seedError}</span>
           )}
-          <button
-            onClick={handleSeed}
-            disabled={seedStatus === "active"}
-            className="btn btn-primary"
-          >
-            {seedStatus === "active" ? (
-              <span className="flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Seeding...
-              </span>
-            ) : (
-              "Seed Benchmarks"
-            )}
-          </button>
+          {!isViewer() && (
+            <button
+              onClick={handleSeed}
+              disabled={seedStatus === "active"}
+              className="btn btn-primary"
+            >
+              {seedStatus === "active" ? (
+                <span className="flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Seeding...
+                </span>
+              ) : (
+                "Seed Benchmarks"
+              )}
+            </button>
+          )}
         </div>
       </div>
 

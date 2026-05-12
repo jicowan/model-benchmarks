@@ -199,47 +199,65 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// surface and platform-mutating ops. It runs after auth.Middleware
 	// has put a Principal on the context.
 	admin := auth.RequireRole("admin")
+	// PRD-48: routes wrapped in `nonViewer` are accessible to admin
+	// and user but not viewer (submit-run, cancel, seed status, etc.).
+	// Routes not wrapped in any role gate default to accessible by all
+	// authenticated roles including viewer — the read-only surface.
+	nonViewer := auth.AllowRoles("admin", "user")
 	p := http.NewServeMux()
 	p.HandleFunc("POST /api/v1/auth/logout", s.handleAuthLogout)
 	p.HandleFunc("GET /api/v1/auth/me", s.handleAuthMe)
 
+	// Reader allow-list — accessible by admin, user, AND viewer. These
+	// power the Dashboard, Catalog, Compare pages and run/suite detail
+	// pages plus their CSV / K8s-manifest exports.
 	p.HandleFunc("GET /api/v1/status", s.handleStatus)
 	p.HandleFunc("GET /api/v1/catalog", s.handleListCatalog)
-	p.HandleFunc("POST /api/v1/runs", s.handleCreateRun)
 	p.HandleFunc("GET /api/v1/runs/{id}", s.handleGetRun)
 	p.HandleFunc("GET /api/v1/runs/{id}/metrics", s.handleGetMetrics)
-	p.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
-	p.HandleFunc("POST /api/v1/runs/{id}/cancel", s.handleCancelRun)
-	p.HandleFunc("DELETE /api/v1/runs/{id}", s.handleDeleteRun)
-	p.HandleFunc("GET /api/v1/instance-types", s.handleListInstanceTypes)
 	p.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
-	p.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
-	p.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
-	p.Handle("POST /api/v1/catalog/seed", admin(http.HandlerFunc(s.handleCatalogSeed)))
-	p.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
-	// PRD-15: Memory breakdown and OOM history
-	p.HandleFunc("GET /api/v1/memory-breakdown", s.handleMemoryBreakdown)
-	p.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
-	// Export Kubernetes manifest
+	// PRD-48 follow-up: the Dashboard's 14-day activity chart + Recent
+	// Runs table pull from /jobs and /suite-runs. Viewers need the
+	// lists (not just the stats aggregate) so those panels render
+	// under the view-only role. Clicking a row navigates to
+	// /results/{id} or /suite-runs/{id}, both already on the allow-list.
+	p.HandleFunc("GET /api/v1/jobs", s.handleListRuns)
+	p.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
+	p.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
+	// PRD-41 / PRD-48: report exports. Print is client-side (browser
+	// dialog) and needs no endpoint; these four cover CSV + K8s YAML.
 	p.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
-	// PRD-41: CSV exports for run, suite, and compare
 	p.HandleFunc("GET /api/v1/runs/{id}/csv", s.handleExportRunCSV)
 	p.HandleFunc("GET /api/v1/suite-runs/{id}/csv", s.handleExportSuiteCSV)
-	p.HandleFunc("GET /api/v1/compare/csv", s.handleExportCompareCSV)
-	// PRD-41: suite Kubernetes manifest (same shape as per-run)
 	p.HandleFunc("GET /api/v1/suite-runs/{id}/export", s.handleExportSuiteManifest)
+	p.HandleFunc("GET /api/v1/compare/csv", s.handleExportCompareCSV)
+
+	// Admin + user only — drives the New Benchmark, Runs, Estimate,
+	// Model Cache pages (pages viewers never navigate to). Submission
+	// + cancel + delete mutations also live here because viewer is
+	// read-only by definition.
+	p.Handle("POST /api/v1/runs", nonViewer(http.HandlerFunc(s.handleCreateRun)))
+	p.Handle("POST /api/v1/runs/{id}/cancel", nonViewer(http.HandlerFunc(s.handleCancelRun)))
+	p.Handle("DELETE /api/v1/runs/{id}", nonViewer(http.HandlerFunc(s.handleDeleteRun)))
+	p.Handle("GET /api/v1/instance-types", nonViewer(http.HandlerFunc(s.handleListInstanceTypes)))
+	p.Handle("GET /api/v1/recommend", nonViewer(http.HandlerFunc(s.handleRecommend)))
+	p.Handle("GET /api/v1/estimate", nonViewer(http.HandlerFunc(s.handleEstimate)))
+	p.Handle("POST /api/v1/catalog/seed", admin(http.HandlerFunc(s.handleCatalogSeed)))
+	p.Handle("GET /api/v1/catalog/seed", nonViewer(http.HandlerFunc(s.handleCatalogSeedStatus)))
+	// PRD-15: Memory breakdown and OOM history drive the New Benchmark
+	// form, so non-viewer only.
+	p.Handle("GET /api/v1/memory-breakdown", nonViewer(http.HandlerFunc(s.handleMemoryBreakdown)))
+	p.Handle("GET /api/v1/oom-history", nonViewer(http.HandlerFunc(s.handleOOMHistory)))
 	// PRD-12/13: Scenarios and test suites
-	p.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
-	p.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
-	p.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
-	p.HandleFunc("POST /api/v1/suite-runs", s.handleCreateSuiteRun)
-	p.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
-	// PRD-20: Model cache management. List + per-item GET are
-	// readable by any authenticated user; mutations are admin-only
-	// (PRD-44) because they consume cluster resources and storage.
-	p.HandleFunc("GET /api/v1/model-cache", s.handleListModelCache)
-	p.HandleFunc("GET /api/v1/model-cache/stats", s.handleModelCacheStats) // PRD-35
-	p.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
+	p.Handle("GET /api/v1/scenarios", nonViewer(http.HandlerFunc(s.handleListScenarios)))
+	p.Handle("GET /api/v1/test-suites", nonViewer(http.HandlerFunc(s.handleListTestSuites)))
+	p.Handle("POST /api/v1/suite-runs", nonViewer(http.HandlerFunc(s.handleCreateSuiteRun)))
+	// PRD-20: Model cache management. Mutations are admin-only; list
+	// + per-item GET are admin + user (drives the New Benchmark form's
+	// S3-cache toggle and the Model Cache page) — not viewer.
+	p.Handle("GET /api/v1/model-cache", nonViewer(http.HandlerFunc(s.handleListModelCache)))
+	p.Handle("GET /api/v1/model-cache/stats", nonViewer(http.HandlerFunc(s.handleModelCacheStats))) // PRD-35
+	p.Handle("GET /api/v1/model-cache/{id}", nonViewer(http.HandlerFunc(s.handleGetModelCache)))
 	p.Handle("POST /api/v1/model-cache", admin(http.HandlerFunc(s.handleCreateModelCache)))
 	p.Handle("DELETE /api/v1/model-cache/{id}", admin(http.HandlerFunc(s.handleDeleteModelCache)))
 	p.Handle("POST /api/v1/model-cache/register", admin(http.HandlerFunc(s.handleRegisterCustomModel)))

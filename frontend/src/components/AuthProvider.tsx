@@ -19,6 +19,7 @@ type AuthState = {
   respondChallenge: (challenge: LoginChallenge, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   isAdmin: () => boolean;
+  isViewer: () => boolean;
 };
 
 const AuthCtx = createContext<AuthState | undefined>(undefined);
@@ -90,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       respondChallenge,
       logout,
       isAdmin: () => user?.role === "admin",
+      isViewer: () => user?.role === "viewer",
     }),
     [user, loading, login, respondChallenge, logout]
   );
