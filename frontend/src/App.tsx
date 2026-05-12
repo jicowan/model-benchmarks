@@ -3,6 +3,7 @@ import Layout from "./components/Layout";
 import { AuthProvider } from "./components/AuthProvider";
 import AuthGate from "./components/AuthGate";
 import AdminRoute from "./components/AdminRoute";
+import NonViewerRoute from "./components/NonViewerRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Catalog from "./pages/Catalog";
@@ -27,10 +28,38 @@ export default function App() {
           {/* Everything else requires an authenticated user. */}
           <Route element={<AuthGate><Layout /></AuthGate>}>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/run" element={<Run />} />
-            <Route path="/runs" element={<Runs />} />
-            <Route path="/models" element={<ModelCachePage />} />
-            <Route path="/estimate" element={<Estimate />} />
+            <Route
+              path="/run"
+              element={
+                <NonViewerRoute>
+                  <Run />
+                </NonViewerRoute>
+              }
+            />
+            <Route
+              path="/runs"
+              element={
+                <NonViewerRoute>
+                  <Runs />
+                </NonViewerRoute>
+              }
+            />
+            <Route
+              path="/models"
+              element={
+                <NonViewerRoute>
+                  <ModelCachePage />
+                </NonViewerRoute>
+              }
+            />
+            <Route
+              path="/estimate"
+              element={
+                <NonViewerRoute>
+                  <Estimate />
+                </NonViewerRoute>
+              }
+            />
             <Route path="/catalog" element={<Catalog />} />
             <Route
               path="/configuration"

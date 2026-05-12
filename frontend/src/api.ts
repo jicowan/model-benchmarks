@@ -645,7 +645,7 @@ export async function listUsers(opts: {
   return fetchJSON<ListUsersResponse>(`${BASE}/users${qs ? `?${qs}` : ""}`);
 }
 
-export async function createUser(email: string, role: "admin" | "user"): Promise<CognitoUser> {
+export async function createUser(email: string, role: "admin" | "user" | "viewer"): Promise<CognitoUser> {
   return fetchJSON<CognitoUser>(`${BASE}/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -653,7 +653,7 @@ export async function createUser(email: string, role: "admin" | "user"): Promise
   });
 }
 
-export async function updateUserRole(sub: string, role: "admin" | "user"): Promise<CognitoUser> {
+export async function updateUserRole(sub: string, role: "admin" | "user" | "viewer"): Promise<CognitoUser> {
   return fetchJSON<CognitoUser>(`${BASE}/users/${encodeURIComponent(sub)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

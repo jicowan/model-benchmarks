@@ -12,6 +12,11 @@ type NavItem = {
   // PRD-44: items marked adminOnly are hidden for non-admin users
   // (Configuration today; future Users entry lands here too).
   adminOnly?: boolean;
+  // PRD-48: items marked viewerVisible are shown to the "viewer" role.
+  // Viewers see only the intersection of viewerVisible items (Dashboard,
+  // Benchmarks, Compare is contextual). Non-viewers see the regular set
+  // filtered by adminOnly.
+  viewerVisible?: boolean;
 };
 
 const iconCls = "shrink-0";
@@ -20,6 +25,7 @@ const navItems: NavItem[] = [
     to: "/",
     label: "Dashboard",
     shortcut: "D",
+    viewerVisible: true,
     icon: (
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
         <rect x="3" y="3" width="8" height="10" />
@@ -33,6 +39,7 @@ const navItems: NavItem[] = [
     to: "/catalog",
     label: "Benchmarks",
     shortcut: "B",
+    viewerVisible: true,
     icon: (
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
         <path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z" />
@@ -116,14 +123,20 @@ export default function Layout() {
     return localStorage.getItem(COLLAPSED_KEY) === "1";
   });
   const { state: healthState, detail: healthDetail } = useStatus();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isViewer } = useAuth();
 
-  // PRD-44: filter admin-only entries for non-admin users. Memoized so
-  // the keyboard-shortcut effect below and the render loop see the
-  // same list.
+  // PRD-44 / PRD-48: filter by role. Viewers see only viewerVisible
+  // entries; non-viewers see everything except adminOnly (unless admin).
+  // Memoized so the keyboard-shortcut effect below and the render loop
+  // see the same list.
   const visibleNavItems = useMemo(
-    () => navItems.filter((n) => !n.adminOnly || isAdmin()),
-    [isAdmin]
+    () =>
+      navItems.filter((n) => {
+        if (isViewer()) return n.viewerVisible;
+        if (n.adminOnly) return isAdmin();
+        return true;
+      }),
+    [isAdmin, isViewer]
   );
 
   useEffect(() => {

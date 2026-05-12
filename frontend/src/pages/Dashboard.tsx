@@ -4,6 +4,7 @@ import { listRuns, listSuiteRuns, listCatalog, getDashboardStats } from "../api"
 import type { RunListItem, CatalogEntry, DashboardStats } from "../types";
 import type { SuiteRunListItem } from "../api";
 import { useStatus } from "../hooks/useStatus";
+import { useAuth } from "../components/AuthProvider";
 
 /* ----------------------------- PageHeader ----------------------------- */
 
@@ -213,6 +214,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const { state: healthState, detail: healthDetail } = useStatus();
+  const { isViewer } = useAuth();
   const hero = heroFor(healthState);
 
   // PRD-44: AdminRoute redirects non-admins here with ?flash=admins-only.
@@ -270,6 +272,23 @@ export default function Dashboard() {
         </div>
       )}
 
+      {flash === "viewer-only" && (
+        <div className="bg-warn/10 border-b border-warn/40 px-6 py-3 flex items-center justify-between font-mono text-[12px] tracking-mech">
+          <span className="text-ink-0">
+            <span className="text-warn uppercase tracking-widemech mr-3">View-only role</span>
+            Access restricted.
+          </span>
+          <button
+            type="button"
+            onClick={() => setFlash(null)}
+            className="uppercase tracking-widemech text-ink-2 hover:text-ink-0 transition-colors"
+            aria-label="Dismiss"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <div className="p-6 max-w-[1400px] mx-auto animate-enter">
         {/* Hero / system state */}
         <div className="mb-10 flex items-end justify-between border-b border-line pb-8">
@@ -306,17 +325,19 @@ export default function Dashboard() {
                 : `${stats.total_runs} runs recorded · ${stats.active_count} active · ${stats.cached_models} models in S3 cache`}
             </p>
           </div>
-          <div className="flex gap-2">
-            <Link to="/run" className="btn btn-primary">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
-                <path d="M5 12h14M12 5l7 7-7 7" />
-              </svg>
-              NEW BENCHMARK
-            </Link>
-            <Link to="/runs" className="btn">
-              BROWSE RUNS
-            </Link>
-          </div>
+          {!isViewer() && (
+            <div className="flex gap-2">
+              <Link to="/run" className="btn btn-primary">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+                NEW BENCHMARK
+              </Link>
+              <Link to="/runs" className="btn">
+                BROWSE RUNS
+              </Link>
+            </div>
+          )}
         </div>
 
         {/* Stat grid — driven by the server-side aggregate (PRD-35). */}
@@ -378,7 +399,7 @@ export default function Dashboard() {
           <SectionHeader
             index="A"
             label="14-day activity"
-            action={<Link to="/runs" className="btn btn-ghost">VIEW ALL →</Link>}
+            action={!isViewer() && <Link to="/runs" className="btn btn-ghost">VIEW ALL →</Link>}
           />
           <div className="panel p-5">
             {loading ? (
@@ -401,9 +422,11 @@ export default function Dashboard() {
               index="B"
               label="Recent runs"
               action={
-                <Link to="/runs" className="btn btn-ghost">
-                  VIEW ALL →
-                </Link>
+                !isViewer() && (
+                  <Link to="/runs" className="btn btn-ghost">
+                    VIEW ALL →
+                  </Link>
+                )
               }
             />
             <div className="panel overflow-hidden">
@@ -426,7 +449,13 @@ export default function Dashboard() {
                   ) : recentRuns.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="text-center py-8 caption">
-                        No runs yet. <Link to="/run" className="text-signal hover:underline">Start one →</Link>
+                        {isViewer() ? (
+                          "No runs yet."
+                        ) : (
+                          <>
+                            No runs yet. <Link to="/run" className="text-signal hover:underline">Start one →</Link>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ) : (

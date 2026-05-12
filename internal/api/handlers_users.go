@@ -36,6 +36,17 @@ const listUsersMaxLimit = 60
 // spend a round-trip.
 var emailRe = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
+// isValidRole gates what can be written to Cognito's custom:role
+// attribute from the Users API. PRD-48 adds "viewer" alongside the
+// PRD-44 admin/user pair.
+func isValidRole(role string) bool {
+	switch role {
+	case "admin", "user", "viewer":
+		return true
+	}
+	return false
+}
+
 // UserRow is the shape returned for list/create/update/disable/enable/
 // reset responses. Mirrors the subset of Cognito fields the UI needs.
 type UserRow struct {
@@ -174,8 +185,8 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid email")
 		return
 	}
-	if req.Role != "admin" && req.Role != "user" {
-		writeError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
+	if !isValidRole(req.Role) {
+		writeError(w, http.StatusBadRequest, "role must be 'admin', 'user', or 'viewer'")
 		return
 	}
 	out, err := s.cognitoIDP.AdminCreateUser(r.Context(), &cip.AdminCreateUserInput{
@@ -212,13 +223,15 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Role != "admin" && req.Role != "user" {
-		writeError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
+	if !isValidRole(req.Role) {
+		writeError(w, http.StatusBadRequest, "role must be 'admin', 'user', or 'viewer'")
 		return
 	}
 	p := auth.PrincipalFromContext(r.Context())
-	// Self-demote guard: an admin cannot downgrade themselves.
-	if p != nil && p.Sub == sub && p.Role == "admin" && req.Role == "user" {
+	// Self-demote guard: an admin cannot downgrade themselves to any
+	// non-admin role. PRD-48 extends this from user-only to viewer
+	// too, so an admin can't lock themselves into view-only access.
+	if p != nil && p.Sub == sub && p.Role == "admin" && req.Role != "admin" {
 		writeError(w, http.StatusBadRequest, "cannot demote yourself; have another admin perform this change")
 		return
 	}

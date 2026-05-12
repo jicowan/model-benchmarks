@@ -12,6 +12,10 @@ import {
 } from "../api";
 import { useAuth } from "../components/AuthProvider";
 
+// PRD-48: the three roles AccelBench recognizes. Mirrors the backend
+// isValidRole gate in internal/api/handlers_users.go.
+type UserRole = "admin" | "user" | "viewer";
+
 /* ----------------------------- PageHeader ----------------------------- */
 
 function PageHeader({ path }: { path: string[] }) {
@@ -277,9 +281,11 @@ function UserRow({
 
   // Current role on the user; empty attribute is treated as "user"
   // (matches the middleware default at internal/auth/middleware.go).
-  const currentRole: "admin" | "user" = user.role === "admin" ? "admin" : "user";
-  // Self-demote is the only role change blocked: an admin changing
-  // their own role to user would lock them out. Everything else is fine.
+  // PRD-48 adds "viewer" as a third possibility.
+  const currentRole: UserRole =
+    user.role === "admin" ? "admin" : user.role === "viewer" ? "viewer" : "user";
+  // Self-demote is blocked: an admin changing their own role to anything
+  // non-admin would lock them out. PRD-48 extends this to viewer too.
   const roleSelectDisabled = busy || (isSelf && currentRole === "admin");
 
   return (
@@ -302,7 +308,7 @@ function UserRow({
           value={currentRole}
           disabled={roleSelectDisabled}
           onChange={(e) => {
-            const next = e.target.value as "admin" | "user";
+            const next = e.target.value as UserRole;
             if (next === currentRole) return;
             flip(() => updateUserRole(user.sub, next));
           }}
@@ -311,6 +317,7 @@ function UserRow({
         >
           <option value="user">USER</option>
           <option value="admin">ADMIN</option>
+          <option value="viewer">VIEWER</option>
         </select>
       </td>
       <td>
@@ -333,7 +340,7 @@ function InviteModal({
   onInvited: () => void;
 }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "user">("user");
+  const [role, setRole] = useState<UserRole>("user");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -365,7 +372,7 @@ function InviteModal({
         />
         <label className="block caption mb-1">ROLE</label>
         <div className="flex gap-2 mb-4">
-          {(["user", "admin"] as const).map((r) => (
+          {(["user", "admin", "viewer"] as const).map((r) => (
             <button
               key={r}
               onClick={() => setRole(r)}
