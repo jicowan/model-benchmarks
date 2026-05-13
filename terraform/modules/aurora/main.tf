@@ -4,8 +4,14 @@ module "aurora" {
 
   name            = var.name
   engine          = "aurora-postgresql"
-  engine_version  = "16.4"
+  engine_version  = "16.11"
   master_username = "accelbench"
+
+  # Let RDS-managed minor version auto-upgrades happen in-place (terraform
+  # plans won't try to downgrade back to the pinned value), and allow
+  # major-version upgrades so future bumps land without a module swap.
+  allow_major_version_upgrade = true
+  auto_minor_version_upgrade  = true
 
   manage_master_user_password = true
 
