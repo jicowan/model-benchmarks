@@ -88,6 +88,11 @@ type manifestData struct {
 	MemoryRequest        string
 	ShmSize              string
 	PullThroughRegistry  string // ECR pull-through cache host (empty = direct Docker Hub)
+	// PRD-49: full vLLM image URI override. When non-empty, the template
+	// uses it verbatim and skips the PullThroughRegistry/FrameworkVersion
+	// path. Sourced from the same VLLM_IMAGE env var the orchestrator
+	// reads, so exports match what ran.
+	VLLMImageOverride    string
 }
 
 func generateManifest(d *database.RunExportDetails) (string, error) {
@@ -105,6 +110,7 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		MemoryRequest:        fmt.Sprintf("%dGi", max(d.MemoryGiB/2, 16)),
 		ShmSize:              "16Gi",
 		PullThroughRegistry:  os.Getenv("PULL_THROUGH_REGISTRY"),
+		VLLMImageOverride:    os.Getenv("VLLM_IMAGE"),
 	}
 	if d.MaxNumBatchedTokens != nil {
 		data.MaxNumBatchedTokens = *d.MaxNumBatchedTokens
@@ -220,7 +226,11 @@ spec:
       containers:
         - name: vllm
 {{- if eq .AcceleratorType "gpu" }}
+{{- if .VLLMImageOverride }}
+          image: {{ .VLLMImageOverride }}
+{{- else }}
           image: {{ if .PullThroughRegistry }}{{ .PullThroughRegistry }}/dockerhub/{{ end }}vllm/vllm-openai:{{ .FrameworkVersion }}
+{{- end }}
 {{- else }}
           image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
 {{- end }}

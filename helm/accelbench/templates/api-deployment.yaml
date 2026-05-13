@@ -47,6 +47,14 @@ spec:
             - name: INFERENCE_PERF_IMAGE
               value: "{{ .Values.image.loadgen.repository }}:{{ .Values.image.loadgen.tag | default "latest" }}"
             {{- end }}
+            # PRD-49: When image.vllm.repository is set, VLLM_IMAGE is
+            # used verbatim as the model container image and the
+            # Docker-Hub / pull-through template path is skipped. Empty
+            # falls back to vllm/vllm-openai:<tool_versions.framework_version>.
+            {{- if .Values.image.vllm.repository }}
+            - name: VLLM_IMAGE
+              value: "{{ .Values.image.vllm.repository }}:{{ .Values.image.vllm.tag | default "latest" }}"
+            {{- end }}
             - name: TOOLS_IMAGE
               value: "{{ .Values.image.tools.repository }}:{{ .Values.image.tools.tag }}"
             {{- if or .Values.huggingface.token .Values.huggingface.existingSecret }}

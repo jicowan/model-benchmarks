@@ -49,6 +49,11 @@ type ModelDeploymentParams struct {
 	ModelServiceAccount   string // K8s service account for S3 access
 	StreamerConcurrency   int    // runai_streamer concurrency (default 16)
 	PullThroughRegistry   string // ECR pull-through cache host (empty = direct Docker Hub)
+	// PRD-49: full vLLM image URI override. When non-empty, used verbatim
+	// as the model container image and the PullThroughRegistry +
+	// FrameworkVersion template path is skipped. Plumbed from the
+	// VLLM_IMAGE env var on the API pod; see internal/orchestrator/versions.go.
+	VLLMImageOverride     string
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.

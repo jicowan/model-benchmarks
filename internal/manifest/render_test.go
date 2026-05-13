@@ -429,6 +429,70 @@ func TestRenderModelDeployment_S3Runai(t *testing.T) {
 
 }
 
+// PRD-49: VLLMImageOverride should win over the PullThroughRegistry +
+// FrameworkVersion composition.
+func TestRenderModelDeployment_VLLMImageOverride(t *testing.T) {
+	override := "public.ecr.aws/deep-learning-containers/vllm:0.20.1-gpu-py312-cu130-ubuntu22.04-ec2-v1.1-2026-05-07-17-46-11-soci"
+	params := ModelDeploymentParams{
+		Name:                 "bench-override",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "vllm",
+		FrameworkVersion:     "v0.6.0", // should be ignored
+		TensorParallelDegree: 1,
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     1,
+		InstanceTypeName:     "g5.xlarge",
+		InstanceFamily:       "g5",
+		CPURequest:           "4",
+		MemoryRequest:        "16Gi",
+		PullThroughRegistry:  "820537372947.dkr.ecr.us-east-2.amazonaws.com", // should also be ignored
+		VLLMImageOverride:    override,
+	}
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+	if !strings.Contains(out, "image: "+override) {
+		t.Errorf("override image missing from rendered YAML:\n%s", out)
+	}
+	if strings.Contains(out, "vllm/vllm-openai:v0.6.0") {
+		t.Error("legacy vllm/vllm-openai image should not appear when override is set")
+	}
+	if strings.Contains(out, "/dockerhub/") {
+		t.Error("pull-through /dockerhub/ prefix should not appear when override is set")
+	}
+}
+
+// Neuron path ignores VLLMImageOverride — GPU-only knob.
+func TestRenderModelDeployment_OverrideIgnoredOnNeuron(t *testing.T) {
+	params := ModelDeploymentParams{
+		Name:                 "bench-neuron",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "vllm-neuron",
+		FrameworkVersion:     "v0.6.0",
+		TensorParallelDegree: 2,
+		AcceleratorType:      "neuron",
+		AcceleratorCount:     2,
+		InstanceTypeName:     "inf2.xlarge",
+		InstanceFamily:       "inf2",
+		CPURequest:           "4",
+		MemoryRequest:        "16Gi",
+		VLLMImageOverride:    "public.ecr.aws/should-not-appear/vllm:x",
+	}
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+	if strings.Contains(out, "public.ecr.aws/should-not-appear/vllm:x") {
+		t.Error("override leaked into Neuron manifest — must only apply to GPU path")
+	}
+	if !strings.Contains(out, "public.ecr.aws/neuron/pytorch-inference-vllm-neuronx") {
+		t.Error("Neuron image missing")
+	}
+}
+
 func TestRenderModelDeployment_S3NoBitsandbytes(t *testing.T) {
 	params := ModelDeploymentParams{
 		Name:                 "bench-s3-quant",

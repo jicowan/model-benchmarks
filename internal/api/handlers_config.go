@@ -442,6 +442,11 @@ type toolVersionsResponse struct {
 	// The UI surfaces a warning banner when set.
 	EnvOverrideActive bool   `json:"env_override_active"`
 	EnvOverrideImage  string `json:"env_override_image,omitempty"`
+	// PRD-49: VLLM_IMAGE env var status. When set, the orchestrator
+	// uses the override verbatim and framework_version is only written
+	// into benchmark_runs for audit — it doesn't pick the image.
+	VLLMEnvOverrideActive bool   `json:"vllm_env_override_active"`
+	VLLMEnvOverrideImage  string `json:"vllm_env_override_image,omitempty"`
 }
 
 func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
@@ -456,12 +461,15 @@ func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
+	vllmEnvImage := os.Getenv("VLLM_IMAGE")
 	s.writeCachedJSON(w, cacheKey, http.StatusOK, toolVersionsResponse{
-		FrameworkVersion:     tv.FrameworkVersion,
-		InferencePerfVersion: tv.InferencePerfVersion,
-		UpdatedAt:            tv.UpdatedAt,
-		EnvOverrideActive:    envImage != "",
-		EnvOverrideImage:     envImage,
+		FrameworkVersion:      tv.FrameworkVersion,
+		InferencePerfVersion:  tv.InferencePerfVersion,
+		UpdatedAt:             tv.UpdatedAt,
+		EnvOverrideActive:     envImage != "",
+		EnvOverrideImage:      envImage,
+		VLLMEnvOverrideActive: vllmEnvImage != "",
+		VLLMEnvOverrideImage:  vllmEnvImage,
 	})
 }
 
@@ -502,11 +510,14 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 
 	fresh, _ := s.repo.GetToolVersions(r.Context())
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
+	vllmEnvImage := os.Getenv("VLLM_IMAGE")
 	writeJSON(w, http.StatusOK, toolVersionsResponse{
-		FrameworkVersion:     fresh.FrameworkVersion,
-		InferencePerfVersion: fresh.InferencePerfVersion,
-		UpdatedAt:            fresh.UpdatedAt,
-		EnvOverrideActive:    envImage != "",
-		EnvOverrideImage:     envImage,
+		FrameworkVersion:      fresh.FrameworkVersion,
+		InferencePerfVersion:  fresh.InferencePerfVersion,
+		UpdatedAt:             fresh.UpdatedAt,
+		EnvOverrideActive:     envImage != "",
+		EnvOverrideImage:      envImage,
+		VLLMEnvOverrideActive: vllmEnvImage != "",
+		VLLMEnvOverrideImage:  vllmEnvImage,
 	})
 }

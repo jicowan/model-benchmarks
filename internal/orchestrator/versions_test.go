@@ -48,3 +48,18 @@ func TestResolveInferencePerfImage_EnvOverrideWins(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// PRD-49: VLLM_IMAGE env override. Empty → manifest composes the legacy
+// Docker-Hub template; non-empty → renderer uses the URI verbatim.
+func TestResolveVLLMImageOverride(t *testing.T) {
+	t.Setenv("VLLM_IMAGE", "")
+	if got := ResolveVLLMImageOverride(); got != "" {
+		t.Errorf("unset: got %q, want empty", got)
+	}
+
+	t.Setenv("VLLM_IMAGE", "public.ecr.aws/vllm/vllm-openai:v0.9.0")
+	want := "public.ecr.aws/vllm/vllm-openai:v0.9.0"
+	if got := ResolveVLLMImageOverride(); got != want {
+		t.Errorf("set: got %q, want %q", got, want)
+	}
+}

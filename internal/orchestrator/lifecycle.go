@@ -383,6 +383,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		ModelServiceAccount:  modelServiceAccount,
 		StreamerConcurrency:  16,
 		PullThroughRegistry:  os.Getenv("PULL_THROUGH_REGISTRY"),
+		VLLMImageOverride:    ResolveVLLMImageOverride(),
 	})
 	if err != nil {
 		return err
