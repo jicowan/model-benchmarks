@@ -31,3 +31,13 @@ func (o *Orchestrator) resolveInferencePerfImage(ctx context.Context) (string, e
 	}
 	return fmt.Sprintf("quay.io/inference-perf/inference-perf:%s", tv.InferencePerfVersion), nil
 }
+
+// ResolveVLLMImageOverride returns the value of the VLLM_IMAGE env var
+// (empty when unset). Non-empty means the manifest renderer should use
+// it verbatim as the model container image and skip the Docker-Hub /
+// pull-through template path. Public so both the orchestrator (live
+// deploys) and the manifest-export handlers (PRD-41) resolve the
+// override the same way. See PRD-49.
+func ResolveVLLMImageOverride() string {
+	return os.Getenv("VLLM_IMAGE")
+}

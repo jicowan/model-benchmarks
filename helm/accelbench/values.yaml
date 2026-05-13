@@ -25,6 +25,18 @@ image:
     # perf:<tool_versions.inference_perf_version>.
     repository: ""  # e.g. <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-loadgen
     tag: "latest"
+  vllm:
+    # PRD-49: Optional full override for the vLLM model container image.
+    # When repository is set, Helm passes VLLM_IMAGE=<repository>:<tag>
+    # to the API pod, which the orchestrator uses verbatim — bypassing
+    # the Docker-Hub / ECR pull-through cache template path. Leave empty
+    # to compose the URI from tool_versions.framework_version.
+    #
+    # Typical value: the AWS-published public-ECR mirror, e.g.
+    #   repository: public.ecr.aws/vllm/vllm-openai
+    #   tag: "v0.9.0"
+    repository: ""
+    tag: "latest"
   migration:
     repository: ""  # Required: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-migration
     tag: "latest"

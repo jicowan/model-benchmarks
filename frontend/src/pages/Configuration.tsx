@@ -1172,6 +1172,18 @@ function ToolVersionsCard() {
               </p>
             </div>
           )}
+          {tv?.vllm_env_override_active && (
+            <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
+              <div className="caption text-warn mb-1">VLLM_IMAGE ENV OVERRIDE ACTIVE</div>
+              <div className="font-mono text-[11.5px] text-ink-0 break-all">
+                {tv.vllm_env_override_image}
+              </div>
+              <p className="caption mt-1">
+                The API pod has the <code>VLLM_IMAGE</code> env var set — new runs deploy this image verbatim.
+                Edits to Framework Version above will be saved but ignored at runtime until the env var is removed.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </CollapsibleSection>

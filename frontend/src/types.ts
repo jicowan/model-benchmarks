@@ -629,6 +629,10 @@ export interface ToolVersions {
   updated_at: string;
   env_override_active: boolean;
   env_override_image?: string;
+  // PRD-49: VLLM_IMAGE env var status. When active, framework_version
+  // is still saved but the orchestrator ignores it at runtime.
+  vllm_env_override_active: boolean;
+  vllm_env_override_image?: string;
 }
 
 export interface CatalogModelEntry {
