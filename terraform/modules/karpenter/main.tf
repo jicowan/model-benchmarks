@@ -118,9 +118,13 @@ resource "kubectl_manifest" "general_purpose_node_pool" {
         cpu: "1000"
       disruption:
         consolidationPolicy: WhenEmptyOrUnderutilized
-        consolidateAfter: 5m
+        # Match the gpu/neuron pools so loadgen nodes reap fast after a
+        # run finishes instead of sitting idle for the default 5m.
+        consolidateAfter: 1m
+        # Override Karpenter's default 10% budget so multiple empty
+        # loadgen nodes can drain in parallel.
         budgets:
-          - nodes: "10%"
+          - nodes: "100%"
   YAML
 
   depends_on = [kubectl_manifest.default_node_class]
@@ -236,6 +240,11 @@ resource "kubectl_manifest" "gpu_node_pool" {
         # GPU nodes are expensive ($0.80-$30+/hr); deprovision aggressively
         # once the benchmark's model Deployment + loadgen Job are torn down.
         consolidateAfter: 1m
+        # Override Karpenter's default 10% budget so multiple empty GPU
+        # nodes (e.g. the aftermath of several failed runs) can drain in
+        # parallel instead of being serialized one at a time.
+        budgets:
+          - nodes: "100%"
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
@@ -276,6 +285,10 @@ resource "kubectl_manifest" "neuron_node_pool" {
         # Same reasoning as the gpu nodepool — Neuron instances (inf2/trn)
         # are also costly, so deprovision within a minute of becoming empty.
         consolidateAfter: 1m
+        # Override Karpenter's default 10% budget so multiple empty nodes
+        # can drain in parallel instead of being serialized one at a time.
+        budgets:
+          - nodes: "100%"
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
