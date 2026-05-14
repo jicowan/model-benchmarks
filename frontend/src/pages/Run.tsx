@@ -75,8 +75,8 @@ export default function Run() {
       overhead_gib: 0, // 0 = auto-calculated
       api_type: "",
       model_s3_uri: searchParams.get("model_s3_uri") || "",
-      // PRD-50: Run:ai streamer knobs. "" = auto (on for S3, off otherwise).
-      streamer_mode: searchParams.get("streamer_mode") || "",
+      // PRD-50: Run:ai streamer knobs. Streamer is used iff the model
+      // is loaded from S3 — no user-facing on/off toggle anymore.
       streamer_concurrency: Number(searchParams.get("streamer_concurrency")) || 0,
       streamer_memory_limit_gib: Number(searchParams.get("streamer_memory_limit_gib")) || 0,
     };
@@ -203,7 +203,6 @@ export default function Run() {
             overheadGiB: form.overhead_gib || undefined,
             hfToken: form.hf_token || undefined,
             // PRD-50: streamer knobs influence the host-memory view.
-            streamer: form.streamer_mode || undefined,
             streamerMemoryLimitGiB: form.streamer_memory_limit_gib || undefined,
           }),
           getRecommendation(
@@ -214,7 +213,7 @@ export default function Run() {
             form.overhead_gib || undefined,
             form.max_model_len || undefined,
             form.max_num_batched_tokens || undefined,
-            form.streamer_mode || undefined,
+            undefined,
             form.streamer_memory_limit_gib || undefined,
           ).catch(() => null),
         ]);
@@ -248,7 +247,6 @@ export default function Run() {
     form.concurrency,
     form.overhead_gib,
     form.hf_token,
-    form.streamer_mode,
     form.streamer_memory_limit_gib,
     // PRD-51: mnbt change should refresh the recommendation so the
     // "mnbt < ISL" warning appears/disappears in real time.
@@ -453,7 +451,6 @@ export default function Run() {
           hf_token: form.hf_token || undefined,
           allow_host_mem_override: allowHostMemOverride || undefined,
           // PRD-50: streamer knobs.
-          streamer_mode: form.streamer_mode || undefined,
           streamer_concurrency: form.streamer_concurrency || undefined,
           streamer_memory_limit_gib: form.streamer_memory_limit_gib || undefined,
         });
@@ -472,7 +469,6 @@ export default function Run() {
           run_type: "on_demand",
           allow_host_mem_override: allowHostMemOverride || undefined,
           // PRD-50: streamer knobs.
-          streamer_mode: form.streamer_mode || undefined,
           streamer_concurrency: form.streamer_concurrency || undefined,
           streamer_memory_limit_gib: form.streamer_memory_limit_gib || undefined,
         });
@@ -1094,57 +1090,44 @@ export default function Run() {
           </div>
         </div>
 
-        {/* PRD-50: Run:ai streamer controls. Only relevant for S3-backed
-            models; the controls stay visible for HF loads but the API
-            treats them as no-ops. */}
-        <div className="eyebrow text-ink-2 mt-2">Weight loading (Run:ai streamer)</div>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
-              Streamer
-              <InfoTip text="'auto' enables the Run:ai streamer when weights come from S3 (today's default). 'off' forces vLLM's default loader even for S3 models — use if host RAM is too tight for the streamer's buffer." />
-            </label>
-            <select
-              value={form.streamer_mode}
-              onChange={(e) => set("streamer_mode", e.target.value)}
-              className="input w-full"
-            >
-              <option value="">auto</option>
-              <option value="off">off</option>
-            </select>
-          </div>
-          <div>
-            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
-              Memory Limit (GiB)
-              <InfoTip text="Caps the streamer's shared CPU buffer during weight load. THE main knob for constraining host RAM — the upstream default is 40 GiB which exceeds small-instance RAM. 0 = auto-sized to min(weight_size, instance_memory / 2)." />
-            </label>
-            <input
-              type="number"
-              min={0}
-              value={form.streamer_memory_limit_gib}
-              onChange={(e) => set("streamer_memory_limit_gib", Number(e.target.value))}
-              disabled={form.streamer_mode === "off"}
-              placeholder="0 = auto-size"
-              className="input w-full"
-            />
-          </div>
-          <div>
-            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
-              Concurrency
-              <InfoTip text="Number of threads filling the shared buffer. Higher = faster weight load. Does NOT affect memory usage — all threads share one buffer. Range 1-32, default 16." />
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={32}
-              value={form.streamer_concurrency}
-              onChange={(e) => set("streamer_concurrency", Number(e.target.value))}
-              disabled={form.streamer_mode === "off"}
-              placeholder="0 = default (16)"
-              className="input w-full"
-            />
-          </div>
-        </div>
+        {/* PRD-50: Run:ai streamer controls. Only shown when weights come
+            from S3 — the streamer doesn't apply to HuggingFace downloads. */}
+        {form.model_s3_uri && (
+          <>
+            <div className="eyebrow text-ink-2 mt-2">Weight loading (Run:ai streamer)</div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+                  Memory Limit (GiB)
+                  <InfoTip text="Caps the streamer's shared CPU buffer during weight load. THE main knob for constraining host RAM — the upstream default is 40 GiB which exceeds small-instance RAM. 0 = auto-sized to min(weight_size, instance_memory / 2)." />
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={form.streamer_memory_limit_gib}
+                  onChange={(e) => set("streamer_memory_limit_gib", Number(e.target.value))}
+                  placeholder="0 = auto-size"
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+                  Concurrency
+                  <InfoTip text="Number of threads filling the shared buffer. Higher = faster weight load. Does NOT affect memory usage — all threads share one buffer. Range 1-32, default 16." />
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={32}
+                  value={form.streamer_concurrency}
+                  onChange={(e) => set("streamer_concurrency", Number(e.target.value))}
+                  placeholder="0 = default (16)"
+                  className="input w-full"
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         {error && (
           <p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">

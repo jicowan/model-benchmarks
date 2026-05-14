@@ -353,14 +353,13 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		}
 	}
 
-	// PRD-50: streamer_mode=off forces the default loader even for S3
-	// models, so vLLM pulls weights through its own loader without the
-	// Run:ai streamer's shared CPU buffer. Useful when host RAM is too
-	// tight for the streamer's buffer to fit alongside vLLM.
-	if cfg.Request.StreamerMode == "off" {
-		useRunai = false
-		log.Printf("[%s] streamer_mode=off; skipping Run:ai streamer even for S3-backed model", cfg.RunID[:8])
-	}
+	// PRD-50 follow-up: the streamer is always used for S3-backed
+	// models. vLLM's default loader against an S3 URI fails in
+	// maybe_pull_model_tokenizer_for_runai before weights even load
+	// (runai-model-streamer-s3's boto3 client doesn't resolve EKS
+	// Pod Identity credentials cleanly). The user-facing streamer_mode
+	// toggle was removed; memory_limit + concurrency remain as knobs
+	// that tune the streamer itself.
 
 	// PRD-50: concurrency knob. 0 = default (16, matching the upstream
 	// RUNAI_STREAMER_CONCURRENCY default on filesystem / was our

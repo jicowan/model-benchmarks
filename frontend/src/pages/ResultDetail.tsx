@@ -221,12 +221,10 @@ export default function ResultDetail() {
             { label: "Output Seq", value: run.output_sequence_length },
             {
               label: "Load Format",
-              // PRD-50: reflect the resolved streamer decision + knobs,
-              // not just the presence of an S3 URI. streamer_mode="off"
-              // on an S3 run used vLLM's default loader.
-              value: run.streamer_mode === "off"
-                ? "vllm default (streamer off)"
-                : run.model_s3_uri
+              // PRD-50: streamer is used iff the model is S3-backed.
+              // The off toggle was removed since vLLM's default loader
+              // doesn't work against S3 URIs on EKS Pod Identity.
+              value: run.model_s3_uri
                 ? `runai_streamer${run.streamer_memory_limit_gib ? ` (limit=${run.streamer_memory_limit_gib}Gi` : " (limit=auto"}${run.streamer_concurrency ? `, concurrency=${run.streamer_concurrency}` : ", concurrency=16"})`
                 : "Huggingface",
             },

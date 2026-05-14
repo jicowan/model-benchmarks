@@ -278,12 +278,14 @@ export async function getRecommendation(
   // "mnbt < ISL" warning. Without this the recommender's warning guard
   // (MaxNumBatchedTokensOverride > 0) never fires.
   maxNumBatchedTokens?: number,
-  // PRD-50: streamer knobs influence the host-memory feasibility check
-  // and the (PRD-51) "streamer_memory_limit approaches instance RAM"
-  // warning.
-  streamer?: string,
+  // PRD-50: streamer memory limit influences the host-memory
+  // feasibility check and the (PRD-51) "streamer_memory_limit
+  // approaches instance RAM" warning. The streamer-off toggle was
+  // removed — the streamer is always used for S3-backed models.
+  _unusedLegacyStreamerArg?: unknown,
   streamerMemoryLimitGiB?: number
 ): Promise<RecommendResponse> {
+  void _unusedLegacyStreamerArg;
   const params = new URLSearchParams({ model, instance_type: instanceType });
   if (tp !== undefined && tp > 0) params.set("tp", String(tp));
   if (overheadGiB !== undefined && overheadGiB > 0) params.set("overhead_gib", String(overheadGiB));
@@ -291,7 +293,6 @@ export async function getRecommendation(
   if (maxNumBatchedTokens !== undefined && maxNumBatchedTokens > 0) {
     params.set("max_num_batched_tokens", String(maxNumBatchedTokens));
   }
-  if (streamer) params.set("streamer", streamer);
   if (streamerMemoryLimitGiB !== undefined && streamerMemoryLimitGiB > 0) {
     params.set("streamer_memory_limit_gib", String(streamerMemoryLimitGiB));
   }
@@ -346,8 +347,8 @@ export interface MemoryBreakdownParams {
   concurrency?: number;
   overheadGiB?: number;
   hfToken?: string;
-  // PRD-50: streamer knobs. streamer = "" | "auto" | "off".
-  streamer?: string;
+  // PRD-50: streamer memory limit. The auto/off toggle was removed;
+  // the streamer is implied by the model being S3-cached.
   streamerMemoryLimitGiB?: number;
 }
 
@@ -365,7 +366,6 @@ export async function getMemoryBreakdown(
   if (params.outputSeqLen) urlParams.set("output_seq_len", String(params.outputSeqLen));
   if (params.concurrency) urlParams.set("concurrency", String(params.concurrency));
   if (params.overheadGiB) urlParams.set("overhead_gib", String(params.overheadGiB));
-  if (params.streamer) urlParams.set("streamer", params.streamer);
   if (params.streamerMemoryLimitGiB) urlParams.set("streamer_memory_limit_gib", String(params.streamerMemoryLimitGiB));
 
   const headers: Record<string, string> = {};

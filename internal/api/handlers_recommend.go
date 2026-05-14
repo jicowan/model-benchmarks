@@ -55,11 +55,9 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	quant = q.Get("quantization")
 	kvCacheDtype := q.Get("kv_cache_dtype")
 
-	// PRD-50: streamer knobs. streamer="auto" | "off" (default auto when
-	// not provided). streamer_memory_limit_gib caps the streamer buffer;
-	// 0 means auto-size. streamer_concurrency is informational (does not
-	// affect the breakdown) so we ignore it here.
-	streamerMode := q.Get("streamer")
+	// PRD-50 follow-up: streamer is implied by S3-cached model; the
+	// user-facing mode toggle was removed. streamer_memory_limit_gib
+	// still applies as a tuning knob.
 	var streamerMemLimitGiB int
 	fmt.Sscanf(q.Get("streamer_memory_limit_gib"), "%d", &streamerMemLimitGiB)
 
@@ -145,19 +143,11 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 		perDeviceGiB,
 	)
 
-	// PRD-50: host-memory view. Streamer is active when mode != "off"
-	// AND the model is (or can be) loaded from S3. We don't have the
-	// per-run S3 URI here at breakdown time; use the model cache as a
-	// proxy — if the model is S3-cached, the streamer would kick in on
-	// a real run unless the user sets streamer=off.
-	streamerActive := streamerMode != "off"
-	if streamerActive {
-		cached, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main")
-		if cached == nil || cached.Status != "cached" {
-			// Model isn't S3-cached, so a real run would use the HF
-			// loader regardless of streamer_mode. No streamer buffer.
-			streamerActive = false
-		}
+	// Streamer is used iff the model is S3-cached. The mode toggle
+	// was removed in the PRD-50 follow-up.
+	streamerActive := false
+	if cached, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main"); cached != nil && cached.Status == "cached" {
+		streamerActive = true
 	}
 	hostBreakdown := recommend.CalculateHostMemoryBreakdown(
 		streamerActive,

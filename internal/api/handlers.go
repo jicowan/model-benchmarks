@@ -378,16 +378,17 @@ type createRunError struct {
 
 func (e *createRunError) Error() string { return e.msg }
 
-// validateStreamerKnobs enforces PRD-50's contract on the three Run:ai
-// streamer knobs. All three are optional — empty/zero means "use default".
-// The upper bound on memory limit is loose on purpose: a silly value
-// degrades to "no cap" (equivalent to streamer's -1 mode), not a crash.
+// validateStreamerKnobs enforces the contract on the Run:ai streamer
+// knobs. Both are optional — zero means "use default". The upper
+// bound on memory limit is loose on purpose: a silly value degrades
+// to "no cap" (equivalent to streamer's -1 mode), not a crash.
+//
+// streamer_mode was removed in the PRD-50 follow-up because vLLM's
+// default loader against S3 URIs fails on EKS Pod Identity; the
+// streamer is always used for S3-backed models. `mode` is accepted
+// for back-compat but ignored.
 func validateStreamerKnobs(mode string, concurrency, memLimitGiB int) error {
-	switch mode {
-	case "", "auto", "off":
-	default:
-		return fmt.Errorf("streamer_mode must be \"auto\", \"off\", or empty (got %q)", mode)
-	}
+	_ = mode // back-compat shim; no longer validated
 	if concurrency < 0 || concurrency > 32 {
 		return fmt.Errorf("streamer_concurrency must be 0-32 (got %d)", concurrency)
 	}
@@ -886,10 +887,6 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	// size instead of ~130%).
 	if mc, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main"); mc != nil && mc.Status == "cached" {
 		opts.UseS3Streamer = true
-	}
-	// PRD-50 knob override — user can force the streamer off.
-	if r.URL.Query().Get("streamer") == "off" {
-		opts.UseS3Streamer = false
 	}
 	// PRD-51: streamer memory-limit flows into the non-streamer
 	// calibration term so the recommender sizes host-RAM peak with

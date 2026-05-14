@@ -154,10 +154,8 @@ export default function SuiteResults() {
           details={[
             {
               label: "Load Format",
-              // PRD-50: reflect the resolved streamer decision + knobs.
-              value: suiteRun.streamer_mode === "off"
-                ? "vllm default (streamer off)"
-                : suiteRun.model_s3_uri
+              // PRD-50: streamer is used iff model is S3-backed.
+              value: suiteRun.model_s3_uri
                 ? `runai_streamer${suiteRun.streamer_memory_limit_gib ? ` (limit=${suiteRun.streamer_memory_limit_gib}Gi` : " (limit=auto"}${suiteRun.streamer_concurrency ? `, concurrency=${suiteRun.streamer_concurrency}` : ", concurrency=16"})`
                 : "Huggingface",
             },
