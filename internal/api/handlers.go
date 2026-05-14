@@ -882,6 +882,16 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	if mc, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main"); mc != nil && mc.Status == "cached" {
 		opts.UseS3Streamer = true
 	}
+	// PRD-50 knob override — user can force the streamer off.
+	if r.URL.Query().Get("streamer") == "off" {
+		opts.UseS3Streamer = false
+	}
+	// PRD-51: streamer memory-limit flows into the non-streamer
+	// calibration term so the recommender sizes host-RAM peak with
+	// the user's cap in mind.
+	if v := r.URL.Query().Get("streamer_memory_limit_gib"); v != "" {
+		fmt.Sscanf(v, "%d", &opts.StreamerMemoryLimitGiB)
+	}
 
 	// PRD-47 PR #5: pass observed per-family host-memory ratios into
 	// the recommender so the host-memory check uses empirical data

@@ -181,8 +181,8 @@ func TestHostAllocatableFrac_TieredByHostSize(t *testing.T) {
 func TestPeakHostMemBytes_CalibrationOverridesDefault(t *testing.T) {
 	const weightBytes = 10.0 * gibBytes
 
-	defaultHF := peakHostMemBytes(weightBytes, false, "", nil)
-	defaultS3 := peakHostMemBytes(weightBytes, true, "", nil)
+	defaultHF := peakHostMemBytes(weightBytes, false, "", nil, 0)
+	defaultS3 := peakHostMemBytes(weightBytes, true, "", nil, 0)
 
 	calib := map[string]float64{
 		"qwen3|s3": 2.8,  // observed worst case for shard-heavy Qwen3 TP=4 runs
@@ -190,7 +190,7 @@ func TestPeakHostMemBytes_CalibrationOverridesDefault(t *testing.T) {
 	}
 
 	// Matching key → use the calibration multiplier.
-	qwen3S3 := peakHostMemBytes(weightBytes, true, "qwen3", calib)
+	qwen3S3 := peakHostMemBytes(weightBytes, true, "qwen3", calib, 0)
 	wantQwen3 := 10.0*2.8*gibBytes + hostMemBufferBytes
 	if qwen3S3 != wantQwen3 {
 		t.Errorf("qwen3+s3: got %.2f GiB, want %.2f GiB (2.8×)", qwen3S3/gibBytes, wantQwen3/gibBytes)
@@ -200,7 +200,7 @@ func TestPeakHostMemBytes_CalibrationOverridesDefault(t *testing.T) {
 			qwen3S3/gibBytes, defaultS3/gibBytes)
 	}
 
-	llamaHF := peakHostMemBytes(weightBytes, false, "llama", calib)
+	llamaHF := peakHostMemBytes(weightBytes, false, "llama", calib, 0)
 	wantLlama := 10.0*1.02*gibBytes + hostMemBufferBytes
 	if llamaHF != wantLlama {
 		t.Errorf("llama+hf: got %.2f GiB, want %.2f GiB (1.02×)", llamaHF/gibBytes, wantLlama/gibBytes)
@@ -211,32 +211,32 @@ func TestPeakHostMemBytes_CalibrationOverridesDefault(t *testing.T) {
 	}
 
 	// Non-matching family → default unchanged.
-	mistralHF := peakHostMemBytes(weightBytes, false, "mistral", calib)
+	mistralHF := peakHostMemBytes(weightBytes, false, "mistral", calib, 0)
 	if mistralHF != defaultHF {
 		t.Errorf("mistral (uncalibrated): got %.2f GiB, want default %.2f GiB",
 			mistralHF/gibBytes, defaultHF/gibBytes)
 	}
 
 	// Loader mismatch → default unchanged.
-	qwen3HF := peakHostMemBytes(weightBytes, false, "qwen3", calib)
+	qwen3HF := peakHostMemBytes(weightBytes, false, "qwen3", calib, 0)
 	if qwen3HF != defaultHF {
 		t.Errorf("qwen3+hf (only s3 calibrated): got %.2f GiB, want default %.2f GiB",
 			qwen3HF/gibBytes, defaultHF/gibBytes)
 	}
 
 	// Empty family or nil map → default unchanged.
-	if peakHostMemBytes(weightBytes, true, "", calib) != defaultS3 {
+	if peakHostMemBytes(weightBytes, true, "", calib, 0) != defaultS3 {
 		t.Error("empty family should use default")
 	}
-	if peakHostMemBytes(weightBytes, true, "qwen3", nil) != defaultS3 {
+	if peakHostMemBytes(weightBytes, true, "qwen3", nil, 0) != defaultS3 {
 		t.Error("nil calibration map should use default")
 	}
 }
 
 func TestPeakHostMemBytes_Multipliers(t *testing.T) {
 	const weightBytes = 10.0 * gibBytes
-	hf := peakHostMemBytes(weightBytes, false, "", nil)
-	s3 := peakHostMemBytes(weightBytes, true, "", nil)
+	hf := peakHostMemBytes(weightBytes, false, "", nil, 0)
+	s3 := peakHostMemBytes(weightBytes, true, "", nil, 0)
 
 	// HF path: 10 × 1.08 + 2 = ~12.8 GiB (matches measured Phi-4 peak within ~5%).
 	expectHF := 10.0*hfLoaderHostMultiplier*gibBytes + hostMemBufferBytes

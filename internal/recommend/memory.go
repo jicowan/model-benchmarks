@@ -3,6 +3,19 @@
 package recommend
 
 // MemoryBreakdown provides a detailed breakdown of GPU memory usage.
+//
+// The breakdown comes in two layers:
+//
+//  1. The "used" / "available" / "headroom" trio describes a
+//     worst-case projection — "every max_num_seqs slot fills with an
+//     ISL+OSL-token sequence." This is the chart the UI renders.
+//  2. The PRD-51 fields (KVPoolGiB, MaxConcurrencyAtPool, Feasibility)
+//     describe what vLLM will *actually* do. vLLM allocates the KV
+//     pool once at load, then schedules fewer concurrent sequences
+//     when the pool is tight — no OOM. The classification below
+//     distinguishes "fits" from "clamps" (soft — run succeeds at
+//     lower effective concurrency) and "infeasible" (hard — weights
+//     don't fit, vLLM crashes on load).
 type MemoryBreakdown struct {
 	ModelWeightsGiB         float64 `json:"model_weights_gib"`
 	KVCacheGiB              float64 `json:"kv_cache_gib"`
@@ -12,6 +25,21 @@ type MemoryBreakdown struct {
 	TotalUsedGiB            float64 `json:"total_used_gib"`
 	TotalAvailableGiB       float64 `json:"total_available_gib"`
 	HeadroomGiB             float64 `json:"headroom_gib"`
+
+	// PRD-51: scheduling realism. KVPoolGiB is the KV cache allocator's
+	// steady footprint once vLLM starts — computed independently of
+	// the worst-case KVCacheGiB above. MaxConcurrencyAtPool is how
+	// many ISL+OSL sequences that pool can hold simultaneously.
+	KVPoolGiB            float64 `json:"kv_pool_gib"`
+	MaxConcurrencyAtPool int     `json:"max_concurrency_at_pool"`
+
+	// Feasibility classifies the submission. Only "infeasible" should
+	// block submission; "clamps" is a soft signal that vLLM will run
+	// at lower effective concurrency than requested.
+	//   "fits":       MaxConcurrencyAtPool >= RequestedConcurrency
+	//   "clamps":     MaxConcurrencyAtPool <  RequestedConcurrency
+	//   "infeasible": weights + overhead + small-KV-floor > TotalAvailable
+	Feasibility string `json:"feasibility"`
 }
 
 // HostMemoryBreakdown provides a breakdown of host RAM usage during weight
@@ -170,6 +198,40 @@ func CalculateMemoryBreakdown(
 	// memory map show phantom headroom users couldn't use.
 	totalAvailable := perDeviceGiB * float64(tpDegree) * gibBytes * gpuMemoryUtilization
 
+	// PRD-51: scheduling-realistic terms. vLLM's KV allocator sizes its
+	// pool to whatever is left over after weights + overhead, up to
+	// gpu_memory_utilization × VRAM. Block tables are tiny relative to
+	// the pool, but we subtract them for accuracy.
+	kvPool := totalAvailable - modelWeights - quantMetadata - blockTable - overheadBytes
+	if kvPool < 0 {
+		kvPool = 0
+	}
+
+	// MaxConcurrencyAtPool is how many concurrent sequences of
+	// ISL+OSL tokens the pool can hold. Zero when kvPool ≤ 0 or when
+	// avgSeqLen is 0 (defensive).
+	perSeqBytes := kvPerTokenBytes * avgSeqLen
+	maxConcAtPool := 0
+	if perSeqBytes > 0 && kvPool > 0 {
+		maxConcAtPool = int(kvPool / perSeqBytes)
+	}
+
+	// Feasibility classification.
+	//   infeasible: weights + overhead alone already exceed
+	//               totalAvailable; no room for any KV cache → vLLM
+	//               crashes on load.
+	//   clamps:     pool can't hold `concurrency` sequences; vLLM
+	//               will schedule fewer at a time. Run succeeds at
+	//               reduced effective concurrency.
+	//   fits:       pool accommodates the requested concurrency.
+	feasibility := "fits"
+	minLoadBytes := modelWeights + quantMetadata + blockTable + overheadBytes
+	if minLoadBytes >= totalAvailable {
+		feasibility = "infeasible"
+	} else if maxConcAtPool < concurrency {
+		feasibility = "clamps"
+	}
+
 	return MemoryBreakdown{
 		ModelWeightsGiB:         modelWeights / gibBytes,
 		KVCacheGiB:              kvCacheBytes / gibBytes,
@@ -179,5 +241,8 @@ func CalculateMemoryBreakdown(
 		TotalUsedGiB:            totalUsed / gibBytes,
 		TotalAvailableGiB:       totalAvailable / gibBytes,
 		HeadroomGiB:             (totalAvailable - totalUsed) / gibBytes,
+		KVPoolGiB:               kvPool / gibBytes,
+		MaxConcurrencyAtPool:    maxConcAtPool,
+		Feasibility:             feasibility,
 	}
 }

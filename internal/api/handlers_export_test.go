@@ -61,8 +61,6 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		`"--max-model-len"`,
 		`"8192"`,
 		`"--max-num-batched-tokens"`,
-		`"--max-num-seqs"`,
-		`"32"`,
 		`"--kv-cache-dtype"`,
 		`"fp8"`,
 		`"--load-format"`,
@@ -75,6 +73,12 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		}
 	}
 
+	// PRD-51: --max-num-seqs is no longer emitted; vLLM picks its
+	// upstream default of 256.
+	if strings.Contains(out, `"--max-num-seqs"`) {
+		t.Errorf("exported manifest should not emit --max-num-seqs (PRD-51 decoupled it from concurrency):\n%s", out)
+	}
+
 	// Headline comment block should surface the full run config so a
 	// reader can reproduce the run from the YAML alone.
 	wantComments := []string{
@@ -84,7 +88,6 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		"# Tensor Parallel: 1",
 		"# Max Model Length: 8192",
 		"# Max Num Batched Tokens: 8192",
-		"# Max Num Seqs: 32",
 		"# KV Cache Dtype: fp8",
 	}
 	for _, w := range wantComments {

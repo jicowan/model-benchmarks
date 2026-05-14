@@ -401,8 +401,14 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		InstanceFamily:       cfg.InstanceType.Family,
 		MaxModelLen:          cfg.Request.MaxModelLen,
 		MaxNumBatchedTokens:  cfg.Request.MaxNumBatchedTokens,
-		MaxNumSeqs:           cfg.Request.Concurrency,
-		KVCacheDtype:         cfg.Request.KVCacheDtype,
+		// PRD-51: don't emit --max-num-seqs. Wiring it to the form's
+		// concurrency field was wrong for open-loop scenarios where
+		// steady-state in-flight count is `rate × latency`, not a
+		// closed-loop worker count. Letting vLLM use its upstream
+		// default of 256 works for both open- and closed-loop loads;
+		// KV cache stays the binding constraint via PRD-47's math.
+		MaxNumSeqs:   0,
+		KVCacheDtype: cfg.Request.KVCacheDtype,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
 		ModelS3URI:           modelS3URI,
