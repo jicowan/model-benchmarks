@@ -23,12 +23,17 @@ from huggingface_hub import HfApi, hf_hub_url
 from huggingface_hub.utils import build_hf_headers
 import requests
 
-_ALLOWED_HF_HOSTS = ("huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs.hf.co", "hf.co")
+# Allow any subdomain of huggingface.co / hf.co. HF uses several CDN tiers
+# (cdn-lfs.*, cas-bridge.xethub.hf.co, etc.) and adds new ones over time,
+# so we match the apex suffix rather than enumerating every subdomain.
+_ALLOWED_HF_SUFFIXES = ("huggingface.co", "hf.co")
 
 
 def _assert_hf_host(url: str) -> None:
     p = urlparse(url)
-    if p.scheme != "https" or p.hostname not in _ALLOWED_HF_HOSTS:
+    host = (p.hostname or "").lower()
+    allowed = any(host == s or host.endswith("." + s) for s in _ALLOWED_HF_SUFFIXES)
+    if p.scheme != "https" or not allowed:
         raise ValueError(f"refusing to fetch non-HuggingFace URL: {url}")
 
 
