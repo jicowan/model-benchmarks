@@ -84,7 +84,7 @@ Instance selection in the Run form pulls live pricing and filters by accelerator
 - [Helm](https://helm.sh/) >= 3.0
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) configured for your cluster
 - [Docker](https://www.docker.com/) for building images (BuildKit required — cache mounts are used)
-- A Docker Hub account with an access token (needed for the ECR pull-through cache that mirrors the vLLM image; settable after install via the Configuration page)
+- **Docker Hub account + access token** — required by default because Terraform sets up an ECR pull-through cache that mirrors the vLLM image. Skippable via `manage_pull_through_cache=false` if you'd rather point AccelBench at a public-ECR vLLM mirror (e.g. the AWS DLC image) via `image.vllm.repository`. See [`docs/deployment.md`](docs/deployment.md#swapping-the-loadgen-and-vllm-images).
 
 ## Deployment
 
@@ -96,7 +96,12 @@ terraform init
 terraform apply
 ```
 
-`terraform.tfvars` is **optional for a barebones install**. Default apply creates the EKS cluster, Aurora, ECR repos, and the AWS Load Balancer Controller — but no public URL. You reach the UI via `kubectl port-forward` (see step 6). Set Docker Hub credentials here (or via the Configuration page after install) and, if you want a public HTTPS URL, one of three ingress modes documented in `terraform/README.md` (PRD-43a). `cp terraform.tfvars.example terraform.tfvars` to see annotated examples.
+Default apply creates the EKS cluster, Aurora, ECR repos, the AWS Load Balancer Controller, and (by default) a pull-through cache for Docker Hub — but no public URL. You reach the UI via `kubectl port-forward` (see step 6). `cp terraform.tfvars.example terraform.tfvars` to see annotated examples.
+
+- **Installing into an existing EKS cluster?** Set `manage_cluster = false` and point at your cluster's `cluster_name`, `vpc_id`, and `private_subnet_ids`. Skip cluster addons your platform team already runs. See [`docs/brownfield.md`](docs/brownfield.md).
+- **Don't want the pull-through cache?** Set `manage_pull_through_cache = false` and use `image.vllm.repository` in Helm values to point at a public-ECR vLLM mirror. Skips the Docker Hub dependency entirely.
+- **Want a public HTTPS URL?** Pick one of the three ingress modes (`acm-route53` / `acm-existing` / `none`) documented in `terraform/README.md` (PRD-43a).
+- **No auth, port-forward only?** Set `auth_enabled = false`. See [`docs/deployment.md`](docs/deployment.md).
 
 The Terraform config creates:
 
@@ -186,6 +191,8 @@ kubectl port-forward -n accelbench svc/accelbench-web 8080:80
 **No-auth / port-forward-only deployments:** see [`docs/deployment.md`](docs/deployment.md) for the `auth_enabled=false` path — skips Cognito + ACM + public ingress, suitable for labs and bring-up clusters. Requires `helm install --set cognito.authDisabled=true` and access via `kubectl port-forward` only.
 
 **Alternate vLLM / loadgen images:** `docs/deployment.md` also covers how to point AccelBench at different container images — e.g. the AWS-published vLLM DLC image, or the included inference-perf fork that adds sentencepiece for Mistral / older-Llama / T5 tokenizers.
+
+**Installing into an existing EKS cluster:** see [`docs/brownfield.md`](docs/brownfield.md) — skips the VPC + EKS + selected cluster-level addons your platform team already owns.
 
 The migration Job applies every SQL file in `db/migrations/` on startup. Migrations are idempotent (`CREATE TABLE IF NOT EXISTS`, `ON CONFLICT DO NOTHING`), so re-running them is safe.
 

@@ -20,6 +20,12 @@ spec:
     spec:
       serviceAccountName: accelbench-cache-job
       restartPolicy: Never
+      # PRD-53: tolerate our accelbench.io/dedicated taint.
+      tolerations:
+        - key: accelbench.io/dedicated
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

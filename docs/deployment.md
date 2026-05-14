@@ -13,6 +13,10 @@ The default deployment uses Cognito auth and pulls vLLM from Docker
 Hub — both paths below are opt-in changes to `values.yaml` and (in
 the auth case) a Terraform variable.
 
+> **Installing into an existing EKS cluster?** See [`brownfield.md`](brownfield.md)
+> for the `manage_cluster=false` path — skips VPC / EKS / selected
+> cluster addons your platform team already owns.
+
 ## Disabling in-app authentication
 
 AccelBench's default deployment requires a Cognito user pool and an

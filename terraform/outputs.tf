@@ -1,16 +1,16 @@
 output "vpc_id" {
-  description = "The ID of the VPC"
-  value       = module.vpc.vpc_id
+  description = "The ID of the VPC AccelBench's data plane lives in (the VPC we created in greenfield, or the operator-provided one in brownfield)."
+  value       = local.vpc_id
 }
 
 output "eks_cluster_name" {
-  description = "The name of the EKS cluster"
-  value       = module.eks.cluster_name
+  description = "The name of the EKS cluster AccelBench is installed into."
+  value       = local.cluster_name
 }
 
 output "eks_cluster_endpoint" {
-  description = "The endpoint for the EKS cluster API server"
-  value       = module.eks.cluster_endpoint
+  description = "The endpoint for the EKS cluster API server."
+  value       = local.cluster_endpoint
 }
 
 output "aurora_cluster_endpoint" {
@@ -55,7 +55,7 @@ output "results_s3_bucket" {
 
 output "update_kubeconfig_command" {
   description = "AWS CLI command to update kubeconfig for the EKS cluster"
-  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name}"
+  value       = "aws eks update-kubeconfig --region ${var.region} --name ${local.cluster_name}"
 }
 
 output "models_s3_bucket" {

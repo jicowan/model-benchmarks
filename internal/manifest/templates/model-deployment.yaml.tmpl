@@ -33,6 +33,11 @@ spec:
           operator: Exists
           effect: NoSchedule
 {{- end }}
+        # PRD-53: tolerate our accelbench.io/dedicated taint.
+        - key: accelbench.io/dedicated
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .InstanceTypeName }}
       containers:

@@ -79,6 +79,13 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		t.Errorf("exported manifest should not emit --max-num-seqs (PRD-51 decoupled it from concurrency):\n%s", out)
 	}
 
+	// PRD-53: the export must be portable — users re-applying the YAML
+	// outside AccelBench shouldn't need the accelbench.io/dedicated
+	// taint on their cluster.
+	if strings.Contains(out, "accelbench.io/dedicated") {
+		t.Errorf("exported manifest should not include the accelbench.io/dedicated toleration (PRD-53 keeps exports portable):\n%s", out)
+	}
+
 	// Headline comment block should surface the full run config so a
 	// reader can reproduce the run from the YAML alone.
 	wantComments := []string{
