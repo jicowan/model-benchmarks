@@ -201,6 +201,74 @@ func (s *Server) handleCreateModelCache(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": id, "status": "caching"})
 }
 
+// stopCacheJob deletes the Job with Foreground propagation and returns only
+// once the Job and its pods are gone. Foreground makes the apiserver hold
+// the Job object until the GC has marked all dependents (pods) for deletion
+// and they've terminated. That's the behavior users expect when clicking
+// "cancel" or "delete" on a running cache job: the pod stops writing to S3
+// before the handler returns, so the subsequent S3 prefix delete doesn't
+// race the still-uploading pod.
+func (s *Server) stopCacheJob(ctx context.Context, jobName string) error {
+	propagation := metav1.DeletePropagationForeground
+	err := s.client.BatchV1().Jobs(cacheNamespace).Delete(ctx, jobName, metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+	})
+	if err != nil {
+		// Already gone is fine — the caller's intent is satisfied.
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return err
+	}
+	// Poll until the Job is gone. Foreground deletion can still take up to
+	// terminationGracePeriodSeconds (30s) while the pod receives SIGTERM
+	// and exits.
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := s.client.BatchV1().Jobs(cacheNamespace).Get(ctx, jobName, metav1.GetOptions{})
+		if err != nil && strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("cache job %s did not terminate within 90s", jobName)
+}
+
+func (s *Server) handleCancelModelCache(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+
+	mc, err := s.repo.GetModelCache(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if mc == nil {
+		writeError(w, http.StatusNotFound, "cache entry not found")
+		return
+	}
+	if mc.Status != "caching" && mc.Status != "pending" {
+		writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel: status is %q", mc.Status))
+		return
+	}
+
+	if mc.JobName != nil {
+		if err := s.stopCacheJob(ctx, *mc.JobName); err != nil {
+			log.Printf("[cache %s] stop job: %v", id[:8], err)
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stop job: %v", err))
+			return
+		}
+	}
+
+	errMsg := "cancelled by user"
+	if err := s.repo.UpdateModelCacheStatus(ctx, id, "cancelled", &errMsg); err != nil {
+		log.Printf("[cache %s] mark cancelled: %v", id[:8], err)
+	}
+
+	s.cache.Invalidate("model-cache-stats")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
 func (s *Server) handleDeleteModelCache(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
@@ -215,14 +283,19 @@ func (s *Server) handleDeleteModelCache(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if mc.Status == "caching" && mc.JobName != nil {
-		propagation := metav1.DeletePropagationBackground
-		_ = s.client.BatchV1().Jobs(cacheNamespace).Delete(ctx, *mc.JobName, metav1.DeleteOptions{
-			PropagationPolicy: &propagation,
-		})
-	}
-
+	// Mark deleting first so watchCacheJob observes the intent and won't
+	// flip the row to "failed" or "cached" while we're tearing it down.
 	_ = s.repo.UpdateModelCacheStatus(ctx, id, "deleting", nil)
+
+	// Stop the job synchronously — pod must be gone before we clear S3,
+	// otherwise the still-running uploads race the prefix delete.
+	if (mc.Status == "caching" || mc.Status == "pending") && mc.JobName != nil {
+		if err := s.stopCacheJob(ctx, *mc.JobName); err != nil {
+			log.Printf("[cache %s] stop job: %v", id[:8], err)
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stop job: %v", err))
+			return
+		}
+	}
 
 	go s.deleteS3Prefix(mc.S3URI)
 
@@ -230,6 +303,51 @@ func (s *Server) handleDeleteModelCache(w http.ResponseWriter, r *http.Request) 
 
 	s.cache.Invalidate("model-cache-stats")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleBulkDeleteModelCache(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	if len(req.IDs) > 100 {
+		writeError(w, http.StatusBadRequest, "max 100 ids per request")
+		return
+	}
+
+	ctx := r.Context()
+	results := make([]map[string]string, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		mc, err := s.repo.GetModelCache(ctx, id)
+		if err != nil || mc == nil {
+			results = append(results, map[string]string{"id": id, "status": "error", "error": "not found"})
+			continue
+		}
+
+		_ = s.repo.UpdateModelCacheStatus(ctx, id, "deleting", nil)
+
+		if (mc.Status == "caching" || mc.Status == "pending") && mc.JobName != nil {
+			if err := s.stopCacheJob(ctx, *mc.JobName); err != nil {
+				log.Printf("[cache %s] stop job: %v", id[:8], err)
+				results = append(results, map[string]string{"id": id, "status": "error", "error": err.Error()})
+				continue
+			}
+		}
+
+		go s.deleteS3Prefix(mc.S3URI)
+		_ = s.repo.DeleteModelCache(context.Background(), id)
+		results = append(results, map[string]string{"id": id, "status": "deleted"})
+	}
+
+	s.cache.Invalidate("model-cache-stats")
+	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
 }
 
 func (s *Server) handleRegisterCustomModel(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +392,13 @@ func (s *Server) watchCacheJob(cacheID, jobName string) {
 	for time.Now().Before(deadline) {
 		job, err := s.client.BatchV1().Jobs(cacheNamespace).Get(ctx, jobName, metav1.GetOptions{})
 		if err != nil {
+			// Job gone? That's expected after cancel/delete — stop
+			// watching instead of looping until the 2h TTL. Only the
+			// row owner decides the terminal status.
+			if strings.Contains(err.Error(), "not found") {
+				log.Printf("[cache %s] job %s gone, stopping watch", cacheID[:8], jobName)
+				return
+			}
 			log.Printf("[cache %s] failed to get job: %v", cacheID[:8], err)
 			time.Sleep(cacheJobPoll)
 			continue

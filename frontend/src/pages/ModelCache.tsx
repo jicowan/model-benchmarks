@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   useReactTable,
@@ -6,9 +6,18 @@ import {
   getSortedRowModel,
   flexRender,
   type ColumnDef,
+  type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { listModelCache, createModelCache, deleteModelCache, registerCustomModel, getModelCacheStats } from "../api";
+import {
+  bulkDeleteModelCache,
+  cancelModelCache,
+  createModelCache,
+  deleteModelCache,
+  getModelCacheStats,
+  listModelCache,
+  registerCustomModel,
+} from "../api";
 import type { ModelCache as ModelCacheEntry, ModelCacheStats } from "../types";
 import ModelCombobox from "../components/ModelCombobox";
 import Pagination from "../components/Pagination";
@@ -80,6 +89,91 @@ function PageHeader({ path, right }: { path: string[]; right?: React.ReactNode }
   );
 }
 
+/* ----------------------------- RowMenu ----------------------------- */
+
+function RowMenu({
+  item,
+  onCancel,
+  onDelete,
+}: {
+  item: ModelCacheEntry;
+  onCancel: (id: string, name: string) => void;
+  onDelete: (id: string, name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+
+  const canCancel = item.status === "caching" || item.status === "pending";
+
+  return (
+    <div className="relative flex justify-end" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label={`Actions for ${item.display_name}`}
+        aria-expanded={open}
+        className="w-6 h-6 flex items-center justify-center font-mono text-[14px] leading-none text-ink-2 hover:text-ink-0 hover:bg-surface-2 rounded"
+      >
+        ⋮
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-7 z-30 min-w-[160px] border border-line bg-surface-0 shadow-lg text-[11px] font-mono tracking-mech"
+        >
+          {item.hf_id && (
+            <Link
+              to={`/run?model=${encodeURIComponent(item.hf_id)}`}
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-signal hover:bg-surface-1"
+            >
+              RUN BENCHMARK →
+            </Link>
+          )}
+          {canCancel && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onCancel(item.id, item.display_name);
+              }}
+              className="block w-full text-left px-3 py-2 text-ink-1 hover:bg-surface-1"
+            >
+              CANCEL
+            </button>
+          )}
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDelete(item.id, item.display_name);
+            }}
+            className="block w-full text-left px-3 py-2 text-danger hover:bg-surface-1"
+          >
+            DELETE
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ----------------------------- Models ----------------------------- */
 
 type FormMode = "none" | "cache" | "register";
@@ -89,8 +183,10 @@ export default function Models() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   // PRD-35: server-side aggregate for the stat cards. The list endpoint is
   // paginated, so filtering `items` locally undercounts past page 1.
   const [stats, setStats] = useState<ModelCacheStats | null>(null);
@@ -209,6 +305,38 @@ export default function Models() {
     }
   }
 
+  async function handleCancel(id: string, name: string) {
+    if (!confirm(`Cancel caching of "${name}"? The in-progress download will be stopped.`)) return;
+    try {
+      await cancelModelCache(id);
+      fetchItems();
+      fetchStats();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to cancel");
+    }
+  }
+
+  async function handleBulkDelete() {
+    const ids = Object.keys(rowSelection).filter((id) => rowSelection[id]);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} selected model${ids.length === 1 ? "" : "s"}? This will remove the S3 data.`)) return;
+    setBulkDeleting(true);
+    try {
+      const res = await bulkDeleteModelCache(ids);
+      const failed = res.results.filter((r) => r.status !== "deleted");
+      if (failed.length > 0) {
+        setError(`Partial failure: ${failed.length} of ${ids.length} could not be deleted. ${failed[0].error ?? ""}`);
+      }
+      setRowSelection({});
+      fetchItems();
+      fetchStats();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to delete");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
   // Stat values come from the aggregate endpoint (PRD-35) so they reflect
   // the full registry even when the list below is paginated. The `caching`
   // count on the current page is still used by the auto-refresh loop, since
@@ -217,6 +345,32 @@ export default function Models() {
 
   const columns = useMemo<ColumnDef<ModelCacheEntry>[]>(
     () => [
+      {
+        id: "select",
+        enableSorting: false,
+        size: 36,
+        header: ({ table }) => (
+          <input
+            type="checkbox"
+            className="cursor-pointer"
+            checked={table.getIsAllPageRowsSelected()}
+            ref={(el) => {
+              if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected();
+            }}
+            onChange={table.getToggleAllPageRowsSelectedHandler()}
+            aria-label="Select all rows on this page"
+          />
+        ),
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            className="cursor-pointer"
+            checked={row.getIsSelected()}
+            onChange={row.getToggleSelectedHandler()}
+            aria-label={`Select ${row.original.display_name}`}
+          />
+        ),
+      },
       {
         accessorKey: "status",
         header: "STATUS",
@@ -290,31 +444,17 @@ export default function Models() {
         id: "actions",
         header: "",
         enableSorting: false,
-        size: 96,
-        cell: ({ row }) => {
-          const item = row.original;
-          return (
-            <div className="flex gap-2 justify-end">
-              {item.hf_id && (
-                <Link
-                  to={`/run?model=${encodeURIComponent(item.hf_id)}`}
-                  className="text-[11px] font-mono tracking-mech text-signal hover:underline"
-                >
-                  RUN →
-                </Link>
-              )}
-              <button
-                onClick={() => handleDelete(item.id, item.display_name)}
-                className="text-[11px] font-mono tracking-mech text-ink-2 hover:text-danger"
-              >
-                DEL
-              </button>
-            </div>
-          );
-        },
+        size: 40,
+        cell: ({ row }) => (
+          <RowMenu
+            item={row.original}
+            onCancel={handleCancel}
+            onDelete={handleDelete}
+          />
+        ),
       },
     ],
-    // handleDelete is defined in closure and only uses stable setters + fetchItems.
+    // handleDelete / handleCancel are defined in closure and only use stable setters + fetchItems.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -323,11 +463,16 @@ export default function Models() {
     data: items,
     columns,
     manualSorting: true, // rows are ordered by the API
-    state: { sorting },
+    state: { sorting, rowSelection },
     onSortingChange: setSorting,
+    onRowSelectionChange: setRowSelection,
+    enableRowSelection: true,
+    getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+
+  const selectedCount = Object.values(rowSelection).filter(Boolean).length;
 
   return (
     <>
@@ -510,6 +655,18 @@ export default function Models() {
                 {loading ? "loading…" : `${total} entries`}
               </span>
             </div>
+            {selectedCount > 0 && (
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[11px] text-ink-2">{selectedCount} selected</span>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                  className="text-[11px] font-mono tracking-mech text-danger hover:underline disabled:opacity-50"
+                >
+                  {bulkDeleting ? "DELETING…" : "DELETE SELECTED"}
+                </button>
+              </div>
+            )}
           </div>
           <table className="data-table">
             <thead>
@@ -540,7 +697,7 @@ export default function Models() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 caption">
+                  <td colSpan={8} className="text-center py-12 caption">
                     <span className="inline-flex items-center gap-2">
                       <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
                       LOADING…
@@ -549,7 +706,7 @@ export default function Models() {
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-16 caption">
+                  <td colSpan={8} className="text-center py-16 caption">
                     <div className="mb-3">NO MODELS REGISTERED</div>
                     <button onClick={() => setFormMode("cache")} className="btn btn-primary">
                       CACHE FIRST MODEL
