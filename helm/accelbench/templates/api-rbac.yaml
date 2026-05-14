@@ -1,4 +1,7 @@
 {{- if .Values.rbac.create }}
+# ClusterRole — only the resources that are genuinely cluster-scoped.
+# Namespaced workload permissions moved to the Role below so a compromised
+# API pod can't create workloads in kube-system or tenant namespaces.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -6,29 +9,6 @@ metadata:
   labels:
     {{- include "accelbench.labels" . | nindent 4 }}
 rules:
-  # Manage benchmark workload namespaces
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "create", "delete"]
-  # Manage model deployments and services
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete"]
-  # Manage configmaps for inference-perf configuration
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "create", "delete"]
-  # Manage loadgen jobs
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["get", "list", "create", "delete"]
-  # Read pod status and logs for metric collection
-  - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list", "watch"]
   # PRD-47: scrape kubelet /stats/summary via the apiserver proxy to
   # capture peak container workingSetBytes during model load. Fuels
   # per-family host-memory calibration in the recommender.
@@ -54,6 +34,49 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: {{ include "accelbench.fullname" . }}-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "accelbench.api.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+---
+# Role — all benchmark workloads live in the accelbench namespace, so the
+# orchestrator's workload CRUD is confined there via this Role. Drop the
+# namespaces verbs entirely: the namespace is pre-created by Helm.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "accelbench.fullname" . }}-orchestrator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "accelbench.fullname" . }}-orchestrator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: {{ include "accelbench.fullname" . }}-orchestrator
 subjects:
   - kind: ServiceAccount
