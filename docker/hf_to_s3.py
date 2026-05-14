@@ -15,7 +15,7 @@ Usage:
 import argparse
 import os
 import sys
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import boto3
 from boto3.s3.transfer import TransferConfig
@@ -33,13 +33,19 @@ def _assert_hf_host(url: str) -> None:
 
 
 def _stream_from_hf(url: str, headers):
-    """GET with manual redirect handling; every hop must stay on huggingface.co."""
+    """GET with manual redirect handling; every hop must stay on huggingface.co.
+
+    HF's CDN returns relative Location headers (e.g. /api/resolve-cache/...);
+    resolve them against the current URL before the host check. A relative
+    redirect cannot change host by definition, so it's safe.
+    """
     for _ in range(5):
         _assert_hf_host(url)
         r = requests.get(url, headers=headers, stream=True, timeout=300, allow_redirects=False)
         if r.is_redirect or r.is_permanent_redirect:
-            url = r.headers.get("Location", "")
+            location = r.headers.get("Location", "")
             r.close()
+            url = urljoin(url, location)
             continue
         return r
     raise RuntimeError("too many redirects")
