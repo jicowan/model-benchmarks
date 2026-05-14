@@ -5,6 +5,12 @@ locals {
     Project   = var.project_name
     ManagedBy = "terraform"
   })
+
+  # PRD-52: when auth is disabled, force port-forward-only mode. No
+  # ACM cert, no DNS, no ALB provisioning — prevents accidentally
+  # exposing an auth-less control plane. If the user supplied
+  # ingress_mode explicitly, Terraform silently overrides it.
+  effective_ingress_mode = var.auth_enabled ? var.ingress_mode : ""
 }
 
 provider "aws" {

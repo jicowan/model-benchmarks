@@ -50,11 +50,17 @@ See `variables.tf` for descriptions. Commonly set:
 | `app_host` | `""` | Public hostname, e.g. `accelbench.example.com` |
 | `hosted_zone_name` | `""` | Route 53 zone name, required for `acm-route53` |
 | `existing_certificate_arn` | `""` | Pre-existing ACM cert ARN, required for `acm-existing` |
+| `auth_enabled` | `true` | Set false to skip Cognito + ACM + public ingress entirely. See [`docs/deployment.md`](../docs/deployment.md) for the no-auth deployment walkthrough. |
 
 ## Public HTTPS ingress (PRD-43a)
 
 Ingress is **off by default**. To stand up a public URL, choose one of three
 modes based on where your domain lives.
+
+> **PRD-52 note:** `auth_enabled=false` forces `ingress_mode=""` internally
+> regardless of what you set — public ingress + disabled auth would expose
+> the GPU-spending control plane with zero access control. For no-auth
+> deployments, use `kubectl port-forward`.
 
 ### Mode 1 — `acm-route53` (fully automated)
 

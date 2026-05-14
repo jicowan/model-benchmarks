@@ -2,14 +2,22 @@
 // the form, matching the main app's design tokens. No Cognito Hosted UI.
 
 import { useState, FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "../components/AuthProvider";
 import type { LoginChallenge } from "../api";
 import MatrixRain from "../components/MatrixRain";
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login, respondChallenge } = useAuth();
+  const { login, respondChallenge, isAuthDisabled, user } = useAuth();
+
+  // PRD-52: when the backend is running with AUTH_DISABLED=1, there's
+  // no login to perform — the synthetic admin principal is attached to
+  // every request. Redirect to the Dashboard instead of rendering a
+  // form that can't do anything.
+  if (user && isAuthDisabled()) {
+    return <Navigate to="/" replace />;
+  }
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

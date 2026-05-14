@@ -9,6 +9,9 @@
 # server-to-server admin APIs.
 
 resource "aws_cognito_user_pool" "accelbench" {
+  # PRD-52: skip all Cognito resources when auth is disabled.
+  count = var.auth_enabled ? 1 : 0
+
   name = "${var.project_name}-users"
 
   username_attributes      = ["email"]
@@ -60,8 +63,9 @@ resource "aws_cognito_user_pool" "accelbench" {
 }
 
 resource "aws_cognito_user_pool_client" "accelbench_api" {
+  count        = var.auth_enabled ? 1 : 0
   name         = "${var.project_name}-api"
-  user_pool_id = aws_cognito_user_pool.accelbench.id
+  user_pool_id = aws_cognito_user_pool.accelbench[0].id
 
   generate_secret = false
 
@@ -86,8 +90,9 @@ resource "aws_cognito_user_pool_client" "accelbench_api" {
 # IAM: let the accelbench-api pod (already bound to aws_iam_role.api_pod
 # via EKS Pod Identity) call the two Cognito actions we need.
 resource "aws_iam_role_policy" "api_cognito" {
-  name = "CognitoAuth"
-  role = aws_iam_role.api_pod.id
+  count = var.auth_enabled ? 1 : 0
+  name  = "CognitoAuth"
+  role  = aws_iam_role.api_pod.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -108,7 +113,7 @@ resource "aws_iam_role_policy" "api_cognito" {
         "cognito-idp:AdminResetUserPassword",
         "cognito-idp:AdminDeleteUser",
       ]
-      Resource = aws_cognito_user_pool.accelbench.arn
+      Resource = aws_cognito_user_pool.accelbench[0].arn
     }]
   })
 }
@@ -122,8 +127,8 @@ resource "aws_iam_role_policy" "api_cognito" {
 # email_verified and a couple of password-state sub-attributes on its
 # own; ignoring them keeps `terraform plan` quiet after a login.
 resource "aws_cognito_user" "bootstrap_admin" {
-  count        = var.admin_email == "" ? 0 : 1
-  user_pool_id = aws_cognito_user_pool.accelbench.id
+  count        = var.auth_enabled && var.admin_email != "" ? 1 : 0
+  user_pool_id = aws_cognito_user_pool.accelbench[0].id
   username     = var.admin_email
 
   attributes = {

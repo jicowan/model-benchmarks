@@ -168,8 +168,18 @@ models:
   s3Bucket: ""
 
 # -- Cognito auth (PRD-43). Populate userPoolId + clientId from
-# Terraform outputs. Set authDisabled=true to bypass auth entirely
-# (local dev / CI only — never in production).
+# Terraform outputs.
+#
+# PRD-52: set authDisabled=true to bypass auth entirely — every
+# request is handled as a synthetic admin principal (dev@local).
+# Use only when access control is handled upstream (VPN, Kubernetes
+# RBAC, port-forward from a trusted client). NEVER combine with an
+# internet-reachable ingress.
+#
+# When authDisabled=true, the Terraform deployment should also be
+# run with `-var auth_enabled=false` to skip provisioning Cognito +
+# ACM (and force ClusterIP ingress, which prevents accidentally
+# exposing the auth-less control plane).
 cognito:
   userPoolId: ""
   clientId: ""

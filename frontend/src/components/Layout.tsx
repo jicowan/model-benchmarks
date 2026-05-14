@@ -123,20 +123,21 @@ export default function Layout() {
     return localStorage.getItem(COLLAPSED_KEY) === "1";
   });
   const { state: healthState, detail: healthDetail } = useStatus();
-  const { isAdmin, isViewer } = useAuth();
+  const { isAdmin, isViewer, isAuthDisabled } = useAuth();
 
-  // PRD-44 / PRD-48: filter by role. Viewers see only viewerVisible
-  // entries; non-viewers see everything except adminOnly (unless admin).
-  // Memoized so the keyboard-shortcut effect below and the render loop
-  // see the same list.
+  // PRD-44 / PRD-48 / PRD-52: filter by role. Viewers see only
+  // viewerVisible entries; non-viewers see everything except adminOnly
+  // (unless admin). When AUTH_DISABLED is active, the Users page is
+  // unusable (Cognito admin APIs return 503), so hide it.
   const visibleNavItems = useMemo(
     () =>
       navItems.filter((n) => {
+        if (n.to === "/users" && isAuthDisabled()) return false;
         if (isViewer()) return n.viewerVisible;
         if (n.adminOnly) return isAdmin();
         return true;
       }),
-    [isAdmin, isViewer]
+    [isAdmin, isViewer, isAuthDisabled]
   );
 
   useEffect(() => {
@@ -268,9 +269,25 @@ export default function Layout() {
 // PRD-43: user identity + logout. Fixed to the viewport top-right with
 // the same h-14 height as every page's sticky PageHeader (z-20) so the
 // badge sits on the header's center line. z-30 keeps it above the bar.
+// PRD-52: when AUTH_DISABLED is active, swap the email+logout for a
+// "AUTH DISABLED" warning chip so operators can tell the deployment
+// mode at a glance.
 function UserBadge() {
-  const { user, logout } = useAuth();
+  const { user, logout, isAuthDisabled } = useAuth();
   if (!user) return null;
+  if (isAuthDisabled()) {
+    return (
+      <div className="fixed top-0 right-4 z-30 h-14 flex items-center no-print">
+        <span
+          className="inline-flex items-center gap-1.5 font-mono text-[10.5px] tracking-widemech uppercase px-2 py-1 border border-warn/50 text-warn bg-warn/5"
+          title="Backend is running with AUTH_DISABLED=1. Every request is handled as a synthetic admin."
+        >
+          <span className="w-1.5 h-1.5 bg-warn" />
+          Auth Disabled
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="fixed top-0 right-4 z-30 h-14 flex items-center gap-3 font-mono text-[11px] tracking-mech text-ink-2 no-print">
       <span className="hidden sm:inline">{user.email}</span>

@@ -82,6 +82,27 @@ variable "manage_accelbench_namespace" {
   default     = true
 }
 
+variable "auth_enabled" {
+  description = <<-EOT
+    When true (default), provisions Cognito + ACM/public-ingress resources
+    for in-app user authentication. Helm chart must also be deployed with
+    default cognito.authDisabled=false.
+
+    Set to false for lab / bring-up deployments where access control is
+    handled upstream (VPN, Kubernetes RBAC, port-forward). Implications:
+      - Cognito user pool + app client are NOT created.
+      - ACM cert + public DNS records are NOT created (ingress_mode is
+        forced to empty regardless of the user-supplied value).
+      - The Helm chart must be installed with cognito.authDisabled=true
+        so the api pod starts in AUTH_DISABLED=1 mode.
+      - The backend's startup log prints a loud "AUTH DISABLED" banner.
+
+    Never combine auth_enabled=false with a publicly-reachable ingress.
+  EOT
+  type        = bool
+  default     = true
+}
+
 # ---------- Public ingress (PRD-43a) ----------
 # Everything below is opt-in. Default config creates no ALB, no cert, no DNS
 # records — the app is reachable via kubectl port-forward only.

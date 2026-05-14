@@ -183,6 +183,10 @@ kubectl port-forward -n accelbench svc/accelbench-web 8080:80
 
 **Public HTTPS URL (optional):** add the ingress variables to `terraform.tfvars` (see `terraform/README.md`), run `terraform apply`, then re-run `helm upgrade` with the ingress flags shown there. After a second `terraform apply` the app is reachable at your configured hostname.
 
+**No-auth / port-forward-only deployments:** see [`docs/deployment.md`](docs/deployment.md) for the `auth_enabled=false` path — skips Cognito + ACM + public ingress, suitable for labs and bring-up clusters. Requires `helm install --set cognito.authDisabled=true` and access via `kubectl port-forward` only.
+
+**Alternate vLLM / loadgen images:** `docs/deployment.md` also covers how to point AccelBench at different container images — e.g. the AWS-published vLLM DLC image, or the included inference-perf fork that adds sentencepiece for Mistral / older-Llama / T5 tokenizers.
+
 The migration Job applies every SQL file in `db/migrations/` on startup. Migrations are idempotent (`CREATE TABLE IF NOT EXISTS`, `ON CONFLICT DO NOTHING`), so re-running them is safe.
 
 ### 6. Platform configuration (UI)
