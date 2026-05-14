@@ -813,10 +813,14 @@ export interface SuiteDetailResponse extends TestSuiteRun {
 // PRD-43: authenticated user. Populated from GET /api/v1/auth/me.
 // `sub` was added in PRD-45 so the Users page can gate self-mutation
 // row actions; omitted when the backend doesn't populate it.
+// PRD-52: `auth_disabled` is true when the backend was started with
+// AUTH_DISABLED=1 (or Cognito env vars missing). Frontend uses it to
+// hide the login page, user badge, and Users nav entry.
 export type AuthUser = {
   sub?: string;
   email: string;
   role: string;
+  auth_disabled?: boolean;
 };
 
 // PRD-45: user-management types.

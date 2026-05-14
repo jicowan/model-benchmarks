@@ -20,6 +20,9 @@ type AuthState = {
   logout: () => Promise<void>;
   isAdmin: () => boolean;
   isViewer: () => boolean;
+  // PRD-52: true when the backend is running with AUTH_DISABLED=1.
+  // Components use this to hide login UI, user badge, and Users nav.
+  isAuthDisabled: () => boolean;
 };
 
 const AuthCtx = createContext<AuthState | undefined>(undefined);
@@ -92,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       isAdmin: () => user?.role === "admin",
       isViewer: () => user?.role === "viewer",
+      isAuthDisabled: () => user?.auth_disabled === true,
     }),
     [user, loading, login, respondChallenge, logout]
   );

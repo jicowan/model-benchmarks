@@ -82,22 +82,25 @@ output "app_host" {
 
 output "app_url" {
   description = "Public app URL. Empty unless ingress is configured."
-  value       = var.app_host == "" ? "" : (var.ingress_mode == "none" ? "http://${var.app_host}" : "https://${var.app_host}")
+  value       = var.app_host == "" ? "" : (local.effective_ingress_mode == "none" ? "http://${var.app_host}" : "https://${var.app_host}")
 }
 
-# ---------- Cognito auth (PRD-43) ----------
+# ---------- Cognito auth (PRD-43 / PRD-52) ----------
+# Empty strings when auth_enabled=false — the Cognito resources are
+# skipped in that mode and Helm's cognito.authDisabled=true makes the
+# api pod ignore these values anyway.
 
 output "cognito_user_pool_id" {
-  description = "Cognito User Pool ID. Set on the accelbench-api pod as COGNITO_USER_POOL_ID."
-  value       = aws_cognito_user_pool.accelbench.id
+  description = "Cognito User Pool ID. Set on the accelbench-api pod as COGNITO_USER_POOL_ID. Empty when auth_enabled=false."
+  value       = try(aws_cognito_user_pool.accelbench[0].id, "")
 }
 
 output "cognito_client_id" {
-  description = "Cognito App Client ID. Set on the accelbench-api pod as COGNITO_CLIENT_ID."
-  value       = aws_cognito_user_pool_client.accelbench_api.id
+  description = "Cognito App Client ID. Set on the accelbench-api pod as COGNITO_CLIENT_ID. Empty when auth_enabled=false."
+  value       = try(aws_cognito_user_pool_client.accelbench_api[0].id, "")
 }
 
 output "cognito_user_pool_arn" {
-  description = "Cognito User Pool ARN (for cross-account references or debugging)."
-  value       = aws_cognito_user_pool.accelbench.arn
+  description = "Cognito User Pool ARN. Empty when auth_enabled=false."
+  value       = try(aws_cognito_user_pool.accelbench[0].arn, "")
 }

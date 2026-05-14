@@ -10,7 +10,9 @@
 # skipped.
 
 locals {
-  manage_cert = var.ingress_mode == "acm-route53"
+  # PRD-52: effective_ingress_mode is "" when auth_enabled=false so
+  # Cognito-less deployments never provision ACM + DNS.
+  manage_cert = local.effective_ingress_mode == "acm-route53"
 }
 
 data "aws_route53_zone" "app" {

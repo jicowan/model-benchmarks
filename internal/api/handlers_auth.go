@@ -55,6 +55,11 @@ type authMeResponse struct {
 	Sub   string `json:"sub,omitempty"`
 	Email string `json:"email"`
 	Role  string `json:"role"`
+	// PRD-52: true when the backend was started with AUTH_DISABLED=1
+	// (or Cognito env vars missing). The frontend reads this to hide
+	// the login page, user badge, and Users nav entry. Omitted from
+	// the JSON when false so existing clients see no change.
+	AuthDisabled bool `json:"auth_disabled,omitempty"`
 }
 
 // loginChallengeResponse is returned by /auth/login when Cognito requires
@@ -250,7 +255,12 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, authMeResponse{Sub: sub, Email: email, Role: role})
+	writeJSON(w, http.StatusOK, authMeResponse{
+		Sub:          sub,
+		Email:        email,
+		Role:         role,
+		AuthDisabled: s.authConfig.Disabled, // PRD-52
+	})
 }
 
 // ---------- Helpers ----------

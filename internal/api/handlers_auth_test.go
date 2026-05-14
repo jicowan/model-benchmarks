@@ -523,4 +523,51 @@ func TestAuthMe_Disabled_ReturnsSyntheticPrincipal(t *testing.T) {
 	if resp.Email != "dev@local" || resp.Role != "admin" {
 		t.Errorf("synthetic principal = %+v", resp)
 	}
+	// PRD-52: frontend keys on this flag to hide login UI + user badge.
+	if !resp.AuthDisabled {
+		t.Error("auth_disabled = false, want true")
+	}
+}
+
+// PRD-52: when auth is enabled, auth_disabled stays false so the JSON
+// omits it (omitempty). Uses the principal-stamping pattern from
+// handlers_prd44_test.go to bypass JWT verification and exercise the
+// handler directly — the goal is the auth_disabled field, not the
+// middleware.
+func TestAuthMe_Enabled_OmitsAuthDisabled(t *testing.T) {
+	repo := seedRepo()
+	client := fake.NewSimpleClientset()
+	srv := NewServer(repo, client, "test-pod")
+	// Disabled=true in the test config still lets a principal passed
+	// through the context reach the handler — the handler reads
+	// s.authConfig.Disabled, which is what we're flipping here to
+	// verify both branches of the response.
+	srv.SetAuth(auth.Config{Disabled: false, UserPoolID: "test", ClientID: "test"}, nil, nil)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/me", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), &auth.Principal{
+		Sub: "u-1", Email: "admin@example.com", Role: "admin",
+	}))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	// With Disabled=false and a non-nil verifier, middleware rejects
+	// the request before our stamped principal matters. Short-circuit:
+	// call the handler directly.
+	if w.Code != http.StatusOK {
+		// fall back: hit the handler bypass — the middleware isn't
+		// under test here.
+		w = httptest.NewRecorder()
+		srv.handleAuthMe(w, req)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp authMeResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.AuthDisabled {
+		t.Error("auth_disabled = true, want false for enabled-auth server")
+	}
 }

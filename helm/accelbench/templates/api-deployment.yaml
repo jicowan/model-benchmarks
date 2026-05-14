@@ -81,13 +81,19 @@ spec:
             - name: PULL_THROUGH_REGISTRY
               value: "{{ .Values.registry.pullThroughURI }}"
             {{- end }}
-            # PRD-43: Cognito auth. Populate from Terraform outputs.
+            # PRD-43 / PRD-52: Cognito auth. When cognito.authDisabled=true,
+            # emit AUTH_DISABLED=1 and skip the Cognito env vars so the
+            # backend's startup path picks the synthetic-principal mode
+            # without getting confused by empty IDs.
+            {{- if .Values.cognito.authDisabled }}
+            - name: AUTH_DISABLED
+              value: "1"
+            {{- else }}
             - name: COGNITO_USER_POOL_ID
               value: "{{ .Values.cognito.userPoolId }}"
             - name: COGNITO_CLIENT_ID
               value: "{{ .Values.cognito.clientId }}"
-            - name: AUTH_DISABLED
-              value: "{{ if .Values.cognito.authDisabled }}1{{ end }}"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

@@ -112,7 +112,13 @@ func main() {
 		authCfg.Disabled = true
 	}
 	if authCfg.Disabled {
-		log.Printf("AUTH DISABLED — DO NOT USE IN PRODUCTION")
+		// PRD-52: loud banner so operators can't miss disabled-auth in
+		// kubectl logs. Every request handled as synthetic admin.
+		log.Printf("╔══════════════════════════════════════════════════════════╗")
+		log.Printf("║ AUTH_DISABLED=1 — every request handled as admin         ║")
+		log.Printf("║ This is INSECURE on any publicly-reachable ingress.      ║")
+		log.Printf("║ Access control must be handled upstream (VPN / RBAC).    ║")
+		log.Printf("╚══════════════════════════════════════════════════════════╝")
 		srv.SetAuth(authCfg, nil, nil)
 	} else {
 		var idp api.CognitoIDP
