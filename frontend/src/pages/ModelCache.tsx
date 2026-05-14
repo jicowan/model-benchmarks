@@ -6,11 +6,9 @@ import {
   getSortedRowModel,
   flexRender,
   type ColumnDef,
-  type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
 import {
-  bulkDeleteModelCache,
   cancelModelCache,
   createModelCache,
   deleteModelCache,
@@ -89,91 +87,6 @@ function PageHeader({ path, right }: { path: string[]; right?: React.ReactNode }
   );
 }
 
-/* ----------------------------- RowMenu ----------------------------- */
-
-function RowMenu({
-  item,
-  onCancel,
-  onDelete,
-}: {
-  item: ModelCacheEntry;
-  onCancel: (id: string, name: string) => void;
-  onDelete: (id: string, name: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onEsc(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    document.addEventListener("keydown", onEsc);
-    return () => {
-      document.removeEventListener("mousedown", onClickOutside);
-      document.removeEventListener("keydown", onEsc);
-    };
-  }, [open]);
-
-  const canCancel = item.status === "caching" || item.status === "pending";
-
-  return (
-    <div className="relative flex justify-end" ref={ref}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        aria-label={`Actions for ${item.display_name}`}
-        aria-expanded={open}
-        className="w-6 h-6 flex items-center justify-center font-mono text-[14px] leading-none text-ink-2 hover:text-ink-0 hover:bg-surface-2 rounded"
-      >
-        ⋮
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 top-7 z-30 min-w-[160px] border border-line bg-surface-0 shadow-lg text-[11px] font-mono tracking-mech"
-        >
-          {item.hf_id && (
-            <Link
-              to={`/run?model=${encodeURIComponent(item.hf_id)}`}
-              role="menuitem"
-              onClick={() => setOpen(false)}
-              className="block px-3 py-2 text-signal hover:bg-surface-1"
-            >
-              RUN BENCHMARK →
-            </Link>
-          )}
-          {canCancel && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                onCancel(item.id, item.display_name);
-              }}
-              className="block w-full text-left px-3 py-2 text-ink-1 hover:bg-surface-1"
-            >
-              CANCEL
-            </button>
-          )}
-          <button
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onDelete(item.id, item.display_name);
-            }}
-            className="block w-full text-left px-3 py-2 text-danger hover:bg-surface-1"
-          >
-            DELETE
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ----------------------------- Models ----------------------------- */
 
 type FormMode = "none" | "cache" | "register";
@@ -183,10 +96,10 @@ export default function Models() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [bulkDeleting, setBulkDeleting] = useState(false);
   // PRD-35: server-side aggregate for the stat cards. The list endpoint is
   // paginated, so filtering `items` locally undercounts past page 1.
   const [stats, setStats] = useState<ModelCacheStats | null>(null);
@@ -294,48 +207,48 @@ export default function Models() {
     }
   }
 
-  async function handleDelete(id: string, name: string) {
-    if (!confirm(`Delete cached model "${name}"? This will remove the S3 data.`)) return;
-    try {
-      await deleteModelCache(id);
-      fetchItems();
-      fetchStats();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
-    }
-  }
-
-  async function handleCancel(id: string, name: string) {
-    if (!confirm(`Cancel caching of "${name}"? The in-progress download will be stopped.`)) return;
-    try {
-      await cancelModelCache(id);
-      fetchItems();
-      fetchStats();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to cancel");
-    }
-  }
-
-  async function handleBulkDelete() {
-    const ids = Object.keys(rowSelection).filter((id) => rowSelection[id]);
-    if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} selected model${ids.length === 1 ? "" : "s"}? This will remove the S3 data.`)) return;
-    setBulkDeleting(true);
-    try {
-      const res = await bulkDeleteModelCache(ids);
-      const failed = res.results.filter((r) => r.status !== "deleted");
-      if (failed.length > 0) {
-        setError(`Partial failure: ${failed.length} of ${ids.length} could not be deleted. ${failed[0].error ?? ""}`);
+  const bulkCancel = async (ids: string[]) => {
+    const activeIds = ids.filter((id) => {
+      const item = items.find((i) => i.id === id);
+      return item && (item.status === "caching" || item.status === "pending");
+    });
+    if (activeIds.length === 0) return;
+    setCancelling((prev) => {
+      const next = new Set(prev);
+      activeIds.forEach((id) => next.add(id));
+      return next;
+    });
+    const errors: string[] = [];
+    for (const id of activeIds) {
+      try {
+        await cancelModelCache(id);
+      } catch (e) {
+        errors.push(`${id.slice(0, 8)}: ${e instanceof Error ? e.message : "failed"}`);
+        setCancelling((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       }
-      setRowSelection({});
-      fetchItems();
-      fetchStats();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
-    } finally {
-      setBulkDeleting(false);
     }
-  }
+    if (errors.length > 0) setError(errors.join(" · "));
+    fetchItems();
+    fetchStats();
+  };
+
+  const bulkDelete = async (ids: string[]) => {
+    const errors: string[] = [];
+    for (const id of ids) {
+      try {
+        await deleteModelCache(id);
+      } catch (e) {
+        errors.push(`${id.slice(0, 8)}: ${e instanceof Error ? e.message : "failed"}`);
+      }
+    }
+    if (errors.length > 0) setError(errors.join(" · "));
+    fetchItems();
+    fetchStats();
+  };
 
   // Stat values come from the aggregate endpoint (PRD-35) so they reflect
   // the full registry even when the list below is paginated. The `caching`
@@ -347,29 +260,51 @@ export default function Models() {
     () => [
       {
         id: "select",
+        header: () => {
+          const onPage = items;
+          const allSelected = onPage.length > 0 && onPage.every((i) => selected.has(i.id));
+          const anySelected = onPage.some((i) => selected.has(i.id));
+          return (
+            <input
+              type="checkbox"
+              aria-label="select all on this page"
+              checked={allSelected}
+              ref={(el) => {
+                if (!el) return;
+                el.indeterminate = anySelected && !allSelected;
+              }}
+              onChange={(e) => {
+                setSelected((prev) => {
+                  const copy = new Set(prev);
+                  if (e.target.checked) onPage.forEach((i) => copy.add(i.id));
+                  else onPage.forEach((i) => copy.delete(i.id));
+                  return copy;
+                });
+              }}
+            />
+          );
+        },
         enableSorting: false,
-        size: 36,
-        header: ({ table }) => (
-          <input
-            type="checkbox"
-            className="cursor-pointer"
-            checked={table.getIsAllPageRowsSelected()}
-            ref={(el) => {
-              if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected();
-            }}
-            onChange={table.getToggleAllPageRowsSelectedHandler()}
-            aria-label="Select all rows on this page"
-          />
-        ),
-        cell: ({ row }) => (
-          <input
-            type="checkbox"
-            className="cursor-pointer"
-            checked={row.getIsSelected()}
-            onChange={row.getToggleSelectedHandler()}
-            aria-label={`Select ${row.original.display_name}`}
-          />
-        ),
+        size: 32,
+        cell: ({ row }) => {
+          const item = row.original;
+          const checked = selected.has(item.id);
+          return (
+            <input
+              type="checkbox"
+              aria-label={`select ${item.display_name}`}
+              checked={checked}
+              onChange={(e) => {
+                setSelected((prev) => {
+                  const copy = new Set(prev);
+                  if (e.target.checked) copy.add(item.id);
+                  else copy.delete(item.id);
+                  return copy;
+                });
+              }}
+            />
+          );
+        },
       },
       {
         accessorKey: "status",
@@ -377,11 +312,15 @@ export default function Models() {
         size: 140,
         cell: ({ row }) => {
           const item = row.original;
+          const isCancelling = cancelling.has(item.id);
+          const label = isCancelling && (item.status === "caching" || item.status === "pending")
+            ? "cancelling"
+            : item.status;
           return (
             <>
               <div className="flex items-center">
                 <span className={`status-dot ${statusDotClass(item.status)}`} />
-                <span className="uppercase tracking-mech text-[11px]">{item.status}</span>
+                <span className="uppercase tracking-mech text-[11px]">{label}</span>
               </div>
               {item.status === "failed" && item.error_message && (
                 <p className="text-[10.5px] text-danger mt-1 max-w-xs truncate" title={item.error_message}>
@@ -444,35 +383,38 @@ export default function Models() {
         id: "actions",
         header: "",
         enableSorting: false,
-        size: 40,
-        cell: ({ row }) => (
-          <RowMenu
-            item={row.original}
-            onCancel={handleCancel}
-            onDelete={handleDelete}
-          />
-        ),
+        size: 72,
+        cell: ({ row }) => {
+          const item = row.original;
+          if (!item.hf_id) return null;
+          return (
+            <div className="flex justify-end">
+              <Link
+                to={`/run?model=${encodeURIComponent(item.hf_id)}`}
+                className="text-[11px] font-mono tracking-mech text-signal hover:underline"
+              >
+                RUN →
+              </Link>
+            </div>
+          );
+        },
       },
     ],
-    // handleDelete / handleCancel are defined in closure and only use stable setters + fetchItems.
+    // Rebuild columns when items, selected, or cancelling change so the
+    // header checkbox and per-row status text reflect current state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [items, selected, cancelling],
   );
 
   const table = useReactTable({
     data: items,
     columns,
     manualSorting: true, // rows are ordered by the API
-    state: { sorting, rowSelection },
+    state: { sorting },
     onSortingChange: setSorting,
-    onRowSelectionChange: setRowSelection,
-    enableRowSelection: true,
-    getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
-
-  const selectedCount = Object.values(rowSelection).filter(Boolean).length;
 
   return (
     <>
@@ -655,18 +597,17 @@ export default function Models() {
                 {loading ? "loading…" : `${total} entries`}
               </span>
             </div>
-            {selectedCount > 0 && (
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-[11px] text-ink-2">{selectedCount} selected</span>
-                <button
-                  onClick={handleBulkDelete}
-                  disabled={bulkDeleting}
-                  className="text-[11px] font-mono tracking-mech text-danger hover:underline disabled:opacity-50"
-                >
-                  {bulkDeleting ? "DELETING…" : "DELETE SELECTED"}
-                </button>
-              </div>
-            )}
+            <BulkActions
+              selected={selected}
+              items={items}
+              onCancel={async (ids) => {
+                await bulkCancel(ids);
+              }}
+              onDelete={async (ids) => {
+                await bulkDelete(ids);
+                setSelected(new Set());
+              }}
+            />
           </div>
           <table className="data-table">
             <thead>
@@ -746,6 +687,182 @@ export default function Models() {
         )}
       </div>
     </>
+  );
+}
+
+function BulkActions({
+  selected,
+  items,
+  onCancel,
+  onDelete,
+}: {
+  selected: Set<string>;
+  items: ModelCacheEntry[];
+  onCancel: (ids: string[]) => Promise<void>;
+  onDelete: (ids: string[]) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const selectedIds = Array.from(selected);
+  const selectedItems = items.filter((i) => selected.has(i.id));
+  const count = selectedIds.length;
+  const cancellableCount = selectedItems.filter(
+    (i) => i.status === "caching" || i.status === "pending"
+  ).length;
+  const disabled = busy || count === 0;
+
+  const runCancel = async () => {
+    setOpen(false);
+    if (cancellableCount === 0) return;
+    setBusy(true);
+    try {
+      await onCancel(selectedIds);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runDelete = async () => {
+    setBusy(true);
+    try {
+      await onDelete(selectedIds);
+      setConfirmDelete(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={[
+          "inline-flex items-stretch h-8 font-mono text-[12px] tracking-mech",
+          "border bg-surface-1 text-ink-0 transition-colors",
+          "hover:bg-surface-2 hover:border-line-strong",
+          "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface-1 disabled:hover:border-line",
+          "focus:outline-none focus:ring-1 focus:ring-signal/60",
+          open ? "border-signal/60 ring-1 ring-signal/40" : "border-line",
+        ].join(" ")}
+      >
+        <span className="flex items-center gap-1 px-3">
+          ACTIONS
+          {count > 0 && <span className="text-ink-2">({count})</span>}
+        </span>
+        <span className="flex items-center px-2 border-l border-line">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="square"
+            className={`transition-transform ${open ? "rotate-180" : ""}`}
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 z-30 min-w-[220px] bg-surface-1 border border-line shadow-lg font-mono text-[12px] tracking-mech"
+        >
+          <button
+            type="button"
+            onClick={runCancel}
+            disabled={cancellableCount === 0}
+            className="block w-full text-left px-3 py-2 text-ink-0 hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            title={
+              cancellableCount === 0
+                ? "None of the selected rows are caching or pending"
+                : undefined
+            }
+          >
+            Cancel selected
+            {cancellableCount !== count && cancellableCount > 0 && (
+              <span className="text-ink-2 ml-1">({cancellableCount} active)</span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setConfirmDelete(true);
+            }}
+            className="block w-full text-left px-3 py-2 text-danger hover:bg-surface-2 border-t border-line"
+          >
+            Delete selected…
+          </button>
+        </div>
+      )}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-surface-0/80 z-40 flex items-center justify-center p-6">
+          <div className="bg-surface-1 border border-line w-full max-w-md p-6">
+            <h3 className="font-sans text-[16px] tracking-mech mb-3">
+              Delete {count} model{count === 1 ? "" : "s"}?
+            </h3>
+            <p className="caption mb-4">
+              This cannot be undone. Active caches will be cancelled first, then S3 objects removed.
+            </p>
+            <ul className="mb-4 max-h-40 overflow-y-auto font-mono text-[12px] text-ink-1">
+              {selectedItems.map((i) => (
+                <li key={i.id} className="truncate">
+                  {i.display_name}
+                </li>
+              ))}
+              {count > selectedItems.length && (
+                <li className="caption text-ink-2">
+                  …and {count - selectedItems.length} more on other pages
+                </li>
+              )}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="btn"
+                type="button"
+                disabled={busy}
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={runDelete}
+                disabled={busy}
+                className="btn btn-primary disabled:opacity-40"
+                type="button"
+              >
+                {busy ? "DELETING…" : "DELETE"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

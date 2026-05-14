@@ -305,51 +305,6 @@ func (s *Server) handleDeleteModelCache(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-func (s *Server) handleBulkDeleteModelCache(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if len(req.IDs) == 0 {
-		writeError(w, http.StatusBadRequest, "ids is required")
-		return
-	}
-	if len(req.IDs) > 100 {
-		writeError(w, http.StatusBadRequest, "max 100 ids per request")
-		return
-	}
-
-	ctx := r.Context()
-	results := make([]map[string]string, 0, len(req.IDs))
-	for _, id := range req.IDs {
-		mc, err := s.repo.GetModelCache(ctx, id)
-		if err != nil || mc == nil {
-			results = append(results, map[string]string{"id": id, "status": "error", "error": "not found"})
-			continue
-		}
-
-		_ = s.repo.UpdateModelCacheStatus(ctx, id, "deleting", nil)
-
-		if (mc.Status == "caching" || mc.Status == "pending") && mc.JobName != nil {
-			if err := s.stopCacheJob(ctx, *mc.JobName); err != nil {
-				log.Printf("[cache %s] stop job: %v", id[:8], err)
-				results = append(results, map[string]string{"id": id, "status": "error", "error": err.Error()})
-				continue
-			}
-		}
-
-		go s.deleteS3Prefix(mc.S3URI)
-		_ = s.repo.DeleteModelCache(context.Background(), id)
-		results = append(results, map[string]string{"id": id, "status": "deleted"})
-	}
-
-	s.cache.Invalidate("model-cache-stats")
-	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
-}
-
 func (s *Server) handleRegisterCustomModel(w http.ResponseWriter, r *http.Request) {
 	var req database.RegisterCustomModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

@@ -261,7 +261,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	p.Handle("POST /api/v1/model-cache", admin(http.HandlerFunc(s.handleCreateModelCache)))
 	p.Handle("DELETE /api/v1/model-cache/{id}", admin(http.HandlerFunc(s.handleDeleteModelCache)))
 	p.Handle("POST /api/v1/model-cache/{id}/cancel", admin(http.HandlerFunc(s.handleCancelModelCache)))
-	p.Handle("POST /api/v1/model-cache/bulk-delete", admin(http.HandlerFunc(s.handleBulkDeleteModelCache)))
 	p.Handle("POST /api/v1/model-cache/register", admin(http.HandlerFunc(s.handleRegisterCustomModel)))
 
 	// PRD-44: the entire /api/v1/config/* surface and all Configuration-
