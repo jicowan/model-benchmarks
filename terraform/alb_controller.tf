@@ -80,7 +80,7 @@ resource "kubernetes_service_account" "alb_controller" {
 
 resource "aws_eks_pod_identity_association" "alb_controller" {
   count           = local.alb_controller_enabled ? 1 : 0
-  cluster_name    = module.eks.cluster_name
+  cluster_name    = local.cluster_name
   namespace       = "kube-system"
   service_account = "aws-load-balancer-controller"
   role_arn        = aws_iam_role.alb_controller[0].arn
@@ -98,7 +98,7 @@ resource "helm_release" "alb_controller" {
 
   set {
     name  = "clusterName"
-    value = module.eks.cluster_name
+    value = local.cluster_name
   }
   set {
     name  = "region"
@@ -106,7 +106,7 @@ resource "helm_release" "alb_controller" {
   }
   set {
     name  = "vpcId"
-    value = module.vpc.vpc_id
+    value = local.vpc_id
   }
   set {
     name  = "serviceAccount.create"

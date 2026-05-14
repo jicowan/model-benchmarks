@@ -1,3 +1,34 @@
+# PRD-53: state migrations for resources that became counted.
+# helm_release.karpenter_crd + helm_release.karpenter are gated on
+# install_controller; time_sleep.wait_for_karpenter follows them;
+# kubectl_manifest.nvidia_device_plugin gates on
+# install_nvidia_device_plugin; aws_iam_role_policy.karpenter_node_ecr_pullthrough
+# gates on manage_pull_through_cache.
+moved {
+  from = helm_release.karpenter_crd
+  to   = helm_release.karpenter_crd[0]
+}
+
+moved {
+  from = helm_release.karpenter
+  to   = helm_release.karpenter[0]
+}
+
+moved {
+  from = time_sleep.wait_for_karpenter
+  to   = time_sleep.wait_for_karpenter[0]
+}
+
+moved {
+  from = kubectl_manifest.nvidia_device_plugin
+  to   = kubectl_manifest.nvidia_device_plugin[0]
+}
+
+moved {
+  from = aws_iam_role_policy.karpenter_node_ecr_pullthrough
+  to   = aws_iam_role_policy.karpenter_node_ecr_pullthrough[0]
+}
+
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
   version = "~> 20.31"
@@ -17,6 +48,7 @@ module "karpenter" {
 }
 
 resource "helm_release" "karpenter_crd" {
+  count      = var.install_controller ? 1 : 0
   namespace  = "kube-system"
   name       = "karpenter-crd"
   repository = "oci://public.ecr.aws/karpenter"
@@ -27,6 +59,7 @@ resource "helm_release" "karpenter_crd" {
 }
 
 resource "helm_release" "karpenter" {
+  count            = var.install_controller ? 1 : 0
   namespace        = "kube-system"
   name             = "karpenter"
   repository       = "oci://public.ecr.aws/karpenter"
@@ -52,8 +85,11 @@ resource "helm_release" "karpenter" {
   depends_on = [module.karpenter, helm_release.karpenter_crd]
 }
 
-# Wait for Karpenter to be ready before creating node classes
+# PRD-53: only wait on the controller install when we're doing it. In
+# brownfield mode the operator-owned Karpenter is already running, so
+# no wait is needed — NodePool apply races against nothing.
 resource "time_sleep" "wait_for_karpenter" {
+  count           = var.install_controller ? 1 : 0
   depends_on      = [helm_release.karpenter]
   create_duration = "30s"
 }
@@ -94,6 +130,11 @@ resource "kubectl_manifest" "general_purpose_node_pool" {
     metadata:
       name: general-purpose
     spec:
+      # PRD-53: weight=100 so Karpenter prefers this NodePool over
+      # operator-owned NodePools with tied requirements on brownfield
+      # clusters. Operator NodePools typically omit weight (defaults
+      # to 0).
+      weight: 100
       template:
         spec:
           requirements:
@@ -109,6 +150,14 @@ resource "kubectl_manifest" "general_purpose_node_pool" {
             - key: accelbench/node-type
               operator: In
               values: ["system"]
+          # PRD-53: dedicated taint so AccelBench pods only land on our
+          # nodes and operator pods never do. Our loadgen + cache-job
+          # pods (see internal/manifest/templates/) apply a matching
+          # toleration.
+          taints:
+            - key: accelbench.io/dedicated
+              value: "true"
+              effect: NoSchedule
           expireAfter: 720h
           nodeClassRef:
             group: karpenter.k8s.aws
@@ -211,6 +260,8 @@ resource "kubectl_manifest" "gpu_node_pool" {
     metadata:
       name: gpu
     spec:
+      # PRD-53: weight=100 preferred over operator NodePools.
+      weight: 100
       template:
         spec:
           requirements:
@@ -228,6 +279,10 @@ resource "kubectl_manifest" "gpu_node_pool" {
               values: ["reserved", "on-demand"]
           taints:
             - key: nvidia.com/gpu
+              effect: NoSchedule
+            # PRD-53: dedicated taint.
+            - key: accelbench.io/dedicated
+              value: "true"
               effect: NoSchedule
           nodeClassRef:
             group: karpenter.k8s.aws
@@ -257,6 +312,8 @@ resource "kubectl_manifest" "neuron_node_pool" {
     metadata:
       name: neuron
     spec:
+      # PRD-53: weight=100 preferred over operator NodePools.
+      weight: 100
       template:
         spec:
           requirements:
@@ -273,6 +330,10 @@ resource "kubectl_manifest" "neuron_node_pool" {
               values: ["reserved", "on-demand"]
           taints:
             - key: aws.amazon.com/neuron
+              effect: NoSchedule
+            # PRD-53: dedicated taint.
+            - key: accelbench.io/dedicated
+              value: "true"
               effect: NoSchedule
           nodeClassRef:
             group: karpenter.k8s.aws
@@ -295,7 +356,9 @@ resource "kubectl_manifest" "neuron_node_pool" {
 }
 
 # ---------- NVIDIA Device Plugin ----------
+# PRD-53: skipped in brownfield mode when the cluster already has it.
 resource "kubectl_manifest" "nvidia_device_plugin" {
+  count              = var.install_nvidia_device_plugin ? 1 : 0
   server_side_apply  = true
   force_conflicts    = true
   wait               = false
@@ -571,8 +634,9 @@ resource "kubectl_manifest" "dcgm_exporter" {
 #   ecr:CreateRepository         - auto-create the cached repo (e.g., dockerhub/vllm/vllm-openai)
 #   ecr:BatchImportUpstreamImage - fetch the image from the upstream registry into ECR
 resource "aws_iam_role_policy" "karpenter_node_ecr_pullthrough" {
-  name = "ECRPullThroughCache"
-  role = module.karpenter.node_iam_role_name
+  count = var.manage_pull_through_cache ? 1 : 0
+  name  = "ECRPullThroughCache"
+  role  = module.karpenter.node_iam_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"

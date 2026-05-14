@@ -19,6 +19,14 @@ spec:
     spec:
       serviceAccountName: accelbench-loadgen
       restartPolicy: Never
+      # PRD-53: our Karpenter NodePools carry an accelbench.io/dedicated
+      # taint so AccelBench pods only land on our nodes and operator
+      # pods never land here. Matching toleration required.
+      tolerations:
+        - key: accelbench.io/dedicated
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

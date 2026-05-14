@@ -9,20 +9,34 @@ remote state.
 
 ## Prerequisites
 
-Before the first `terraform apply`, two values **must** be set in `terraform.tfvars`:
+Before the first `terraform apply`:
 
-- `dockerhub_username` and `dockerhub_access_token` — the ECR pull-through cache
-  that backs every vLLM image pull requires Docker Hub credentials. Create a
-  read-only access token at
+- **Docker Hub credentials** (`dockerhub_username` + `dockerhub_access_token`
+  in `terraform.tfvars`) are required **when** `manage_pull_through_cache = true`
+  (the default). The ECR pull-through cache needs them to hydrate vLLM
+  images. Create a read-only access token at
   [hub.docker.com/settings/security](https://hub.docker.com/settings/security).
-  Skipping these will fail the apply with
+  Missing them fails the apply with
   `SecretNotFoundException: The ARN of the secret specified in the pull through cache rule was not found`.
-- `region` — defaults to `us-east-2`. If you want the cluster in a different
+  **Skip this** if you set `manage_pull_through_cache = false` and plan to
+  use `image.vllm.repository` in Helm values to pull from a public-ECR
+  vLLM mirror — see [`docs/deployment.md`](../docs/deployment.md).
+- **`region`** — defaults to `us-east-2`. If you want the cluster in a different
   region, set it in `terraform.tfvars` *and* ensure your AWS CLI can reach EKS
   there (the Terraform-invoked `aws eks get-token` calls pass `--region` from
   this variable, so no `AWS_REGION` env var is required).
 
-## Quick start
+## Two install modes
+
+**Greenfield** (default): Terraform provisions a full VPC + EKS cluster + all
+addons. Good for a dedicated AccelBench environment.
+
+**Brownfield** (`manage_cluster = false`): Terraform installs into an
+existing EKS cluster, skipping VPC + EKS + any cluster-level addons the
+operator's cluster already runs. See [`docs/brownfield.md`](../docs/brownfield.md)
+for the full walkthrough.
+
+## Quick start (greenfield)
 
 ```bash
 cd terraform
@@ -51,6 +65,10 @@ See `variables.tf` for descriptions. Commonly set:
 | `hosted_zone_name` | `""` | Route 53 zone name, required for `acm-route53` |
 | `existing_certificate_arn` | `""` | Pre-existing ACM cert ARN, required for `acm-existing` |
 | `auth_enabled` | `true` | Set false to skip Cognito + ACM + public ingress entirely. See [`docs/deployment.md`](../docs/deployment.md) for the no-auth deployment walkthrough. |
+| `manage_cluster` | `true` | Set false to install AccelBench into an existing EKS cluster. Requires `cluster_name`, `vpc_id`, `private_subnet_ids`. See [`docs/brownfield.md`](../docs/brownfield.md). |
+| `install_karpenter_controller` | `true` | Set false when reusing an existing Karpenter install (>= v1.9). |
+| `install_nvidia_device_plugin` | `true` | Set false when the cluster already runs the NVIDIA device plugin DaemonSet. |
+| `manage_pull_through_cache` | `true` | Set false to skip the Docker Hub pull-through cache. Pair with `image.vllm.repository` in Helm values pointing at a public-ECR mirror. |
 
 ## Public HTTPS ingress (PRD-43a)
 
