@@ -83,6 +83,13 @@ type Recommendation struct {
 
 	// Alternatives is non-nil when the model doesn't fit at native precision.
 	Alternatives *Alternatives `json:"alternatives,omitempty"`
+
+	// PRD-51: non-blocking guidance about footgun combinations. The UI
+	// renders these as an informational block alongside the
+	// recommendation. Unlike Explanation.Reason (which blocks the
+	// submission when infeasible), warnings are advisory — the user
+	// can still submit.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Explanation provides human-readable reasoning for each recommendation.
@@ -293,16 +300,28 @@ func hostAllocatableFrac(memoryGiB int) float64 {
 // PRD-47: when modelType is non-empty AND the calibration map has a
 // matching entry, use the observed p95 ratio instead of the hand-tuned
 // default. Unseen types keep the conservative default.
+//
+// PRD-51: streamerBufferBytes is the predicted streamer CPU-buffer
+// size for the candidate run — `min(weight, memory_limit)` when the
+// streamer will be active, zero otherwise. The calibration ratio is
+// now NON-streamer per-weight overhead (PRD-51 subtracts the streamer
+// term in the SQL before the p95), so we add the streamer term back
+// here ONLY when a calibrated ratio was actually applied. Without
+// calibration, the hand-tuned s3StreamerHostMultiplier (1.15) still
+// bundles the streamer contribution, so adding streamerBufferBytes
+// on top would double-count.
 func peakHostMemBytes(
 	modelWeightBytes float64,
 	useS3Streamer bool,
 	modelType string,
 	calibration map[string]float64,
+	streamerBufferBytes float64,
 ) float64 {
 	mult := hfLoaderHostMultiplier
 	if useS3Streamer {
 		mult = s3StreamerHostMultiplier
 	}
+	usedCalibration := false
 	if modelType != "" && len(calibration) > 0 {
 		loader := "hf"
 		if useS3Streamer {
@@ -310,9 +329,16 @@ func peakHostMemBytes(
 		}
 		if observed, ok := calibration[modelType+"|"+loader]; ok && observed > 0 {
 			mult = observed
+			usedCalibration = true
 		}
 	}
-	return modelWeightBytes*mult + hostMemBufferBytes
+	// Only add the explicit streamer term on top when we used the
+	// PRD-51 non-streamer calibration ratio. The hand-tuned defaults
+	// still bundle the streamer; adding it again would double-count.
+	if !usedCalibration {
+		streamerBufferBytes = 0
+	}
+	return modelWeightBytes*mult + hostMemBufferBytes + streamerBufferBytes
 }
 
 // checkHostMemory returns (ok, reason, suggestedInstance). ok=true when
@@ -333,13 +359,14 @@ func checkHostMemory(
 	useS3Streamer bool,
 	modelType string,
 	calibration map[string]float64,
+	streamerBufferBytes float64,
 ) (bool, string, string) {
 	// inst.MemoryGiB == 0 means the instance catalog doesn't carry host-mem
 	// info. Skip the check rather than reject conservatively.
 	if inst.MemoryGiB == 0 {
 		return true, "", ""
 	}
-	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer, modelType, calibration)
+	peak := peakHostMemBytes(modelWeightBytes, useS3Streamer, modelType, calibration, streamerBufferBytes)
 	allocatable := float64(inst.MemoryGiB) * gibBytes * hostAllocatableFrac(inst.MemoryGiB)
 	if peak <= allocatable {
 		return true, "", ""
@@ -588,8 +615,18 @@ type RecommendOptions struct {
 	// bucket. Loader is "hf" or "s3". When a matching key is present and
 	// the ratio is positive, the recommender uses that instead of the
 	// hard-coded defaults for the host-memory feasibility check.
-	// Unseen buckets keep the defaults. PRD-47.
+	// Unseen buckets keep the defaults. PRD-47. After PRD-51 the stored
+	// ratios are NON-streamer overhead only — the recommender adds the
+	// streamer term back via StreamerMemoryLimitGiB below.
 	HostMemCalibration map[string]float64
+
+	// StreamerMemoryLimitGiB is the cap the user set on
+	// RUNAI_STREAMER_MEMORY_LIMIT (PRD-50). 0 means "auto-size to
+	// min(weight, instance_memory / 2)", matching the orchestrator's
+	// default. Ignored when UseS3Streamer is false. PRD-51 uses this to
+	// size the streamer buffer term added back to the calibrated
+	// non-streamer ratio.
+	StreamerMemoryLimitGiB int
 }
 
 // DefaultOverheadGiB calculates the default runtime overhead for a model based on its dimensions.
@@ -691,7 +728,25 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	if cfg.PreQuantized && cfg.ActualMemoryBytes > 0 {
 		hostCheckBytes = modelMemEffective
 	}
-	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer, opts.ModelType, opts.HostMemCalibration); !ok {
+	// PRD-51: streamer CPU buffer term. Zero when the streamer won't
+	// run (HF load) or when the user disabled it (PRD-50 streamer_mode=off;
+	// expressed here as opts.UseS3Streamer=false — the handler gates on
+	// the same signals). When active, the buffer is min(weight, limit);
+	// auto-size default is min(weight, instance_memory / 2).
+	streamerBufferBytes := 0.0
+	if opts.UseS3Streamer {
+		limitBytes := float64(opts.StreamerMemoryLimitGiB) * gibBytes
+		if opts.StreamerMemoryLimitGiB == 0 {
+			// Auto-size: half the node RAM. Mirrors orchestrator.
+			limitBytes = float64(inst.MemoryGiB) * gibBytes / 2
+		}
+		if hostCheckBytes < limitBytes {
+			streamerBufferBytes = hostCheckBytes
+		} else {
+			streamerBufferBytes = limitBytes
+		}
+	}
+	if ok, reason, suggested := checkHostMemory(hostCheckBytes, inst, allInstances, opts.UseS3Streamer, opts.ModelType, opts.HostMemCalibration, streamerBufferBytes); !ok {
 		rec := &Recommendation{
 			ModelInfo: ModelInfo{
 				ParameterCount:        cfg.ParameterCount,
@@ -1045,20 +1100,25 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			remainingBytes/gibBytes, maxModelLen)
 	}
 
-	// PRD-46: --max-num-batched-tokens sizes vLLM's per-iteration
-	// prefill budget. Default to max(2048, ISL) capped at max_model_len
-	// so a single input fits in one iteration on long-ISL runs, while
-	// preserving vLLM's 2048 default on short-ISL runs. Override wins
-	// when set.
-	mnbt := 2048
-	if rec.InputSequenceLength > mnbt {
-		mnbt = rec.InputSequenceLength
-	}
-	if rec.MaxModelLen > 0 && mnbt > rec.MaxModelLen {
-		mnbt = rec.MaxModelLen
-	}
+	// PRD-51: --max-num-batched-tokens defaults to vLLM's own
+	// device-tuned value (2048 on A10G/L4/L40S/A100, 8192 on
+	// H100/H200/MI300x). We only emit the flag when:
+	//   - user explicitly overrides, OR
+	//   - ISL exceeds vLLM's largest device default (8192), so a
+	//     single prompt can't fit in one prefill iteration with the
+	//     built-in default.
+	// Otherwise we emit nothing and let vLLM pick. PRD-46's
+	// `max(2048, ISL)` formula silently capped prefill at ISL on
+	// ISL=2048 runs, starving batching and producing 55% success
+	// rates in the Mistral-7B chatbot benchmark (2026-05-13).
+	mnbt := 0
 	if opts.MaxNumBatchedTokensOverride > 0 {
 		mnbt = opts.MaxNumBatchedTokensOverride
+	} else if rec.InputSequenceLength > 8192 {
+		mnbt = rec.InputSequenceLength
+		if rec.MaxModelLen > 0 && mnbt > rec.MaxModelLen {
+			mnbt = rec.MaxModelLen
+		}
 	}
 	rec.MaxNumBatchedTokens = mnbt
 
@@ -1068,5 +1128,46 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	// quality impact under throughput benchmarks.
 	rec.KVCacheDtype = kvCacheDtype
 
+	// PRD-51: non-blocking warnings for common footguns.
+	rec.Warnings = collectWarnings(rec, cfg, inst, opts)
+
 	return rec
+}
+
+// collectWarnings returns advisory messages about knob combinations
+// that will silently degrade a run. These don't block submission —
+// they let the user see the risk and decide.
+func collectWarnings(rec *Recommendation, cfg ModelConfig, inst InstanceSpec, opts RecommendOptions) []string {
+	var out []string
+
+	// (a) mnbt override below ISL with concurrency > 1 — starves batching.
+	if opts.MaxNumBatchedTokensOverride > 0 &&
+		opts.MaxNumBatchedTokensOverride < rec.InputSequenceLength &&
+		rec.Concurrency > 1 {
+		out = append(out, fmt.Sprintf(
+			"max_num_batched_tokens (%d) is below input-sequence-length (%d). "+
+				"Only one prompt can prefill per step; concurrent requests will queue. "+
+				"Leave unset for vLLM's tuned default.",
+			opts.MaxNumBatchedTokensOverride, rec.InputSequenceLength))
+	}
+
+	// (b) streamer_memory_limit approaches instance RAM.
+	if opts.UseS3Streamer && opts.StreamerMemoryLimitGiB > 0 && inst.MemoryGiB > 0 {
+		threshold := float64(inst.MemoryGiB) * 0.9
+		if float64(opts.StreamerMemoryLimitGiB) > threshold {
+			out = append(out, fmt.Sprintf(
+				"Streamer memory limit (%d GiB) approaches instance RAM (%d GiB). "+
+					"Load-phase OOM is likely. Lower the limit or pick a bigger instance.",
+				opts.StreamerMemoryLimitGiB, inst.MemoryGiB))
+		}
+	}
+
+	// (c) streamer disabled for an S3 model — vLLM's default loader
+	// against S3 isn't universally supported.
+	// This signal isn't available here directly (opts.UseS3Streamer is
+	// already the resolved value), so the warning is emitted by the
+	// API handler where the raw streamer_mode / cache-status pair is
+	// visible. Placeholder left here as a reminder.
+
+	return out
 }

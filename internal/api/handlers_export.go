@@ -112,8 +112,16 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		FrameworkVersion:     d.FrameworkVersion,
 		TensorParallelDegree: d.TensorParallelDegree,
 		MaxModelLen:          d.MaxModelLen,
-		MaxNumSeqs:           d.Concurrency,
-		AcceleratorType:      d.AcceleratorType,
+		// PRD-51: PRD-46's --max-num-seqs=concurrency wiring starved
+		// open-loop scenarios (steady-state in-flight is rate×latency,
+		// not worker count). The live orchestrator now omits the flag
+		// and lets vLLM pick 256. Exports mirror the new behavior so
+		// a re-apply matches what a fresh run would deploy. Pre-PRD-51
+		// historical exports will differ from what originally ran, but
+		// that's the point — re-applying should use the corrected
+		// scheduler config.
+		MaxNumSeqs:      0,
+		AcceleratorType: d.AcceleratorType,
 		AcceleratorCount:     d.AcceleratorCount,
 		CPURequest:           fmt.Sprintf("%d", max(d.VCPUs/2, 4)),
 		MemoryRequest:        fmt.Sprintf("%dGi", max(d.MemoryGiB/2, 16)),
@@ -177,9 +185,6 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 # Max Model Length: {{ .MaxModelLen }}
 {{- if gt .MaxNumBatchedTokens 0 }}
 # Max Num Batched Tokens: {{ .MaxNumBatchedTokens }}
-{{- end }}
-{{- if gt .MaxNumSeqs 0 }}
-# Max Num Seqs: {{ .MaxNumSeqs }}
 {{- end }}
 {{- if .KVCacheDtype }}
 # KV Cache Dtype: {{ .KVCacheDtype }}

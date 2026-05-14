@@ -133,6 +133,21 @@ export default function RecommendationCards({ recommendation }: Props) {
           tooltip={`Input: ${recommendation.input_sequence_length} tokens. Output: ${recommendation.output_sequence_length} tokens.`}
         />
       </div>
+
+      {/* PRD-51: advisory warnings. Non-blocking — user can still submit. */}
+      {recommendation.warnings && recommendation.warnings.length > 0 && (
+        <div className="mt-4 border border-warn/40 bg-warn/5 p-3">
+          <div className="eyebrow text-warn mb-2">CHECK BEFORE SUBMIT</div>
+          <ul className="font-mono text-[11.5px] text-ink-0 space-y-1.5">
+            {recommendation.warnings.map((w, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-warn">⚠</span>
+                <span>{w}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

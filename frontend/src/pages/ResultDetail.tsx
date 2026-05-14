@@ -238,10 +238,9 @@ export default function ResultDetail() {
               label: "Max Num Batched Tokens",
               value: run.max_num_batched_tokens ?? null,
             },
-            {
-              label: "Max Num Seqs",
-              value: run.concurrency ?? null,
-            },
+            // PRD-51: max_num_seqs is no longer wired from concurrency.
+            // The orchestrator lets vLLM use its upstream default (256).
+            // "Concurrency" above still shows what loadgen submits.
             {
               label: "KV Cache Dtype",
               value: run.kv_cache_dtype ?? null,

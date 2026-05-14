@@ -277,6 +277,10 @@ export interface RecommendResponse {
   instance_info: RecommendInstanceInfo;
   alternatives?: RecommendAlternatives;
   valid_tp_options?: number[];
+  // PRD-51: advisory messages about knob combinations that silently
+  // degrade a run (e.g. mnbt override below ISL). Non-blocking —
+  // rendered as an informational block alongside the recommendation.
+  warnings?: string[];
 }
 
 export interface InstanceType {
@@ -402,6 +406,13 @@ export interface MemoryBreakdown {
   total_used_gib: number;
   total_available_gib: number;
   headroom_gib: number;
+  // PRD-51: scheduling-realistic view. Lets the UI distinguish hard
+  // failure ("infeasible" — vLLM crashes on load) from soft clamping
+  // ("clamps" — vLLM runs at lower effective concurrency than
+  // requested). Only "infeasible" should block submission.
+  kv_pool_gib?: number;
+  max_concurrency_at_pool?: number;
+  feasibility?: "fits" | "clamps" | "infeasible";
 }
 
 export interface MemoryBreakdownResponse extends MemoryBreakdown {

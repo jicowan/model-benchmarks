@@ -85,8 +85,25 @@ export default function MemoryBreakdown({ breakdown, loading }: Props) {
         </span>
       </div>
 
-      {/* Warning */}
-      {breakdown.warning_message && (
+      {/* PRD-51: scheduling-realistic banner. "clamps" = soft (runs at
+          lower effective concurrency); "infeasible" = hard (vLLM
+          crashes on load — still rendered as a warn banner so PRD-47's
+          existing block path handles submission). "fits" = no banner. */}
+      {breakdown.feasibility === "clamps" && breakdown.max_concurrency_at_pool !== undefined && (
+        <div className="mt-3 p-2 bg-warn/5 border border-warn/40 font-mono text-[11.5px] text-warn">
+          KV pool holds ~{breakdown.max_concurrency_at_pool} concurrent sequences; vLLM will schedule at most that many at a time. Requests beyond that queue.
+        </div>
+      )}
+      {breakdown.feasibility === "infeasible" && (
+        <div className="mt-3 p-2 bg-danger/5 border border-danger/40 font-mono text-[11.5px] text-danger">
+          Weights + runtime overhead exceed available GPU memory. vLLM will crash on load.
+        </div>
+      )}
+
+      {/* Legacy warning — PRD-51 superseded the "headroom &lt; 1 GiB"
+          heuristic with the Feasibility field above. Kept for backwards
+          compatibility with older API responses that lack `feasibility`. */}
+      {!breakdown.feasibility && breakdown.warning_message && (
         <div className="mt-3 p-2 bg-warn/5 border border-warn/40 font-mono text-[11.5px] text-warn">
           {breakdown.warning_message}
         </div>

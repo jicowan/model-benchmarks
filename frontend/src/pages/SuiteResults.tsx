@@ -169,10 +169,8 @@ export default function SuiteResults() {
               label: "Max Num Batched Tokens",
               value: suiteRun.max_num_batched_tokens ?? null,
             },
-            {
-              label: "Max Num Seqs",
-              value: suiteRun.max_num_seqs ?? null,
-            },
+            // PRD-51: max_num_seqs is no longer wired from concurrency.
+            // The orchestrator lets vLLM use its upstream default (256).
             {
               label: "KV Cache Dtype",
               value: suiteRun.kv_cache_dtype ?? null,
