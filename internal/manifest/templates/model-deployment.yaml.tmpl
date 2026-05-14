@@ -67,13 +67,18 @@ spec:
 {{- end }}
 {{- if eq .AcceleratorType "gpu" }}
           args:
-{{- if .ModelS3URI }}
+{{- if .UseRunaiStreamer }}
             - "--model"
             - "{{ .ModelS3URI }}"
             - "--load-format"
             - "runai_streamer"
             - "--model-loader-extra-config"
             - '{"concurrency":{{ if gt .StreamerConcurrency 0 }}{{ .StreamerConcurrency }}{{ else }}16{{ end }}}'
+{{- else if .ModelS3URI }}
+            # PRD-50: streamer_mode=off with an S3 model. vLLM's default
+            # loader pulls weights from S3 via boto3 directly.
+            - "--model"
+            - "{{ .ModelS3URI }}"
 {{- else }}
             - "--model"
             - "{{ .ModelHfID }}"
