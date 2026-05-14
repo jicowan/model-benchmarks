@@ -394,6 +394,9 @@ resource "kubectl_manifest" "nvidia_device_plugin" {
             - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
+            - key: accelbench.io/dedicated
+              operator: Exists
+              effect: NoSchedule
             - key: CriticalAddonsOnly
               operator: Exists
           containers:
@@ -517,6 +520,9 @@ resource "kubectl_manifest" "neuron_device_plugin" {
             - key: aws.amazon.com/neuron
               operator: Exists
               effect: NoSchedule
+            - key: accelbench.io/dedicated
+              operator: Exists
+              effect: NoSchedule
             - key: CriticalAddonsOnly
               operator: Exists
           containers:
@@ -588,6 +594,9 @@ resource "kubectl_manifest" "dcgm_exporter" {
                         values: ["g", "p"]
           tolerations:
             - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+            - key: accelbench.io/dedicated
               operator: Exists
               effect: NoSchedule
             - key: CriticalAddonsOnly
