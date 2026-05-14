@@ -14,6 +14,83 @@ type MemoryBreakdown struct {
 	HeadroomGiB             float64 `json:"headroom_gib"`
 }
 
+// HostMemoryBreakdown provides a breakdown of host RAM usage during weight
+// load. Separate from MemoryBreakdown (which is GPU VRAM) because the
+// streamer's CPU buffer is transient and lives in node RAM, not GPU memory.
+// PRD-50 introduces the struct; PRD-51 will add feasibility classification
+// and per-family calibration of the overhead term.
+type HostMemoryBreakdown struct {
+	// InstanceMemoryGiB is total node RAM advertised by the instance type.
+	InstanceMemoryGiB float64 `json:"instance_memory_gib"`
+	// StreamerBufferGiB is the transient CPU buffer the Run:ai streamer
+	// allocates during weight load. Exact formula: min(weight_size,
+	// memory_limit). Zero when streamer is disabled or model is not S3.
+	// Concurrency does not affect this — threads share one buffer.
+	StreamerBufferGiB float64 `json:"streamer_buffer_gib"`
+	// FrameworkOverheadGiB is a rough estimate of steady-state host
+	// memory (framework, kernel, shm). PRD-50 uses a flat placeholder;
+	// PRD-51 replaces this with per-family calibration from
+	// host_memory_peak_gib observations.
+	FrameworkOverheadGiB float64 `json:"framework_overhead_gib"`
+	// LoadPeakGiB is the modeled peak during weight load:
+	// StreamerBufferGiB + FrameworkOverheadGiB.
+	LoadPeakGiB float64 `json:"load_peak_gib"`
+	// HeadroomGiB = InstanceMemoryGiB − LoadPeakGiB. Can be negative
+	// when the modeled peak exceeds instance RAM.
+	HeadroomGiB float64 `json:"headroom_gib"`
+}
+
+// CalculateHostMemoryBreakdown models the host-RAM peak during weight load
+// under the Run:ai streamer. streamerActive gates the streamer buffer term;
+// when false (HuggingFace download or streamer_mode=off), only the
+// framework overhead applies.
+//
+// memoryLimitGiB is the cap passed to the streamer (0 = auto-sized at
+// min(weight, instance_memory/2)). weightSizeGiB is the full safetensors
+// size.
+func CalculateHostMemoryBreakdown(
+	streamerActive bool,
+	weightSizeGiB float64,
+	memoryLimitGiB int,
+	instanceMemoryGiB int,
+) HostMemoryBreakdown {
+	// PRD-50 placeholder. PRD-51 replaces this with a per-family ratio
+	// derived from host_memory_peak_gib observations (PRD-47 calibration
+	// recomputed with streamer contribution subtracted out).
+	const frameworkOverheadGiBPlaceholder = 2.0
+
+	var streamer float64
+	if streamerActive {
+		effectiveLimit := float64(memoryLimitGiB)
+		if memoryLimitGiB <= 0 {
+			// Auto-size: min(weight, instance_memory / 2). The same math
+			// the orchestrator applies when StreamerMemoryLimitGiB is 0.
+			half := float64(instanceMemoryGiB) / 2
+			if weightSizeGiB < half {
+				effectiveLimit = weightSizeGiB
+			} else {
+				effectiveLimit = half
+			}
+		}
+		// Formula: min(weight, effective_limit). Concurrency does NOT
+		// multiply memory — threads share the same buffer.
+		if weightSizeGiB < effectiveLimit {
+			streamer = weightSizeGiB
+		} else {
+			streamer = effectiveLimit
+		}
+	}
+
+	peak := streamer + frameworkOverheadGiBPlaceholder
+	return HostMemoryBreakdown{
+		InstanceMemoryGiB:    float64(instanceMemoryGiB),
+		StreamerBufferGiB:    streamer,
+		FrameworkOverheadGiB: frameworkOverheadGiBPlaceholder,
+		LoadPeakGiB:          peak,
+		HeadroomGiB:          float64(instanceMemoryGiB) - peak,
+	}
+}
+
 // quantizationGroupSize is the standard group size for GPTQ/AWQ quantization.
 // Group quantization stores scale (and optionally zero-point) values shared
 // across groups of consecutive weights.

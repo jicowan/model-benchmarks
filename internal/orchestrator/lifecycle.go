@@ -353,6 +353,33 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		}
 	}
 
+	// PRD-50: streamer_mode=off forces the default loader even for S3
+	// models, so vLLM pulls weights through its own loader without the
+	// Run:ai streamer's shared CPU buffer. Useful when host RAM is too
+	// tight for the streamer's buffer to fit alongside vLLM.
+	if cfg.Request.StreamerMode == "off" {
+		useRunai = false
+		log.Printf("[%s] streamer_mode=off; skipping Run:ai streamer even for S3-backed model", cfg.RunID[:8])
+	}
+
+	// PRD-50: concurrency knob. 0 = default (16, matching the upstream
+	// RUNAI_STREAMER_CONCURRENCY default on filesystem / was our
+	// hardcode before this PRD).
+	streamerConcurrency := cfg.Request.StreamerConcurrency
+	if streamerConcurrency == 0 {
+		streamerConcurrency = 16
+	}
+
+	// PRD-50: memory-limit knob. 0 = auto-size at half the node RAM.
+	// min(weight, instance_mem/2) isn't computed here — we let the
+	// streamer itself cap against the weight file size by passing the
+	// instance-based cap as RUNAI_STREAMER_MEMORY_LIMIT. Zero on the
+	// rendered env means "emit no env var; use the upstream default".
+	streamerMemLimitGiB := cfg.Request.StreamerMemoryLimitGiB
+	if streamerMemLimitGiB == 0 {
+		streamerMemLimitGiB = max(1, cfg.InstanceType.MemoryGiB/2)
+	}
+
 	var modelServiceAccount string
 	if useRunai {
 		modelServiceAccount = "accelbench-model"
@@ -379,11 +406,12 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
 		ModelS3URI:           modelS3URI,
-		UseRunaiStreamer:     useRunai,
-		ModelServiceAccount:  modelServiceAccount,
-		StreamerConcurrency:  16,
-		PullThroughRegistry:  os.Getenv("PULL_THROUGH_REGISTRY"),
-		VLLMImageOverride:    ResolveVLLMImageOverride(),
+		UseRunaiStreamer:        useRunai,
+		ModelServiceAccount:     modelServiceAccount,
+		StreamerConcurrency:     streamerConcurrency,
+		StreamerMemoryLimitGiB:  streamerMemLimitGiB,
+		PullThroughRegistry:     os.Getenv("PULL_THROUGH_REGISTRY"),
+		VLLMImageOverride:       ResolveVLLMImageOverride(),
 	})
 	if err != nil {
 		return err

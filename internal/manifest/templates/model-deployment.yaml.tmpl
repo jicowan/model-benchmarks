@@ -59,6 +59,12 @@ spec:
             - name: NCCL_P2P_LEVEL
               value: "NVL"
 {{- end }}
+{{- if and .UseRunaiStreamer (gt .StreamerMemoryLimitGiB 0) }}
+            # PRD-50: cap the Run:ai streamer's shared CPU buffer. The
+            # upstream default is 40 GB, which exceeds small-instance RAM.
+            - name: RUNAI_STREAMER_MEMORY_LIMIT
+              value: "{{ gibBytes .StreamerMemoryLimitGiB }}"
+{{- end }}
 {{- if eq .AcceleratorType "gpu" }}
           args:
 {{- if .ModelS3URI }}

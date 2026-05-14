@@ -378,6 +378,25 @@ type createRunError struct {
 
 func (e *createRunError) Error() string { return e.msg }
 
+// validateStreamerKnobs enforces PRD-50's contract on the three Run:ai
+// streamer knobs. All three are optional — empty/zero means "use default".
+// The upper bound on memory limit is loose on purpose: a silly value
+// degrades to "no cap" (equivalent to streamer's -1 mode), not a crash.
+func validateStreamerKnobs(mode string, concurrency, memLimitGiB int) error {
+	switch mode {
+	case "", "auto", "off":
+	default:
+		return fmt.Errorf("streamer_mode must be \"auto\", \"off\", or empty (got %q)", mode)
+	}
+	if concurrency < 0 || concurrency > 32 {
+		return fmt.Errorf("streamer_concurrency must be 0-32 (got %d)", concurrency)
+	}
+	if memLimitGiB < 0 {
+		return fmt.Errorf("streamer_memory_limit_gib must be >= 0 (got %d)", memLimitGiB)
+	}
+	return nil
+}
+
 // CreateRun is the internal entry point shared by handleCreateRun and the
 // catalog seeder. Returns the new run ID or a *createRunError on user error,
 // or another error on internal failure. The orchestrator is kicked off in
@@ -463,24 +482,49 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		v := req.KVCacheDtype
 		kvDtypePtr = &v
 	}
+
+	// PRD-50: streamer knob validation + persistence. Nil on the row
+	// means "use default" (auto / 16 / auto-sized).
+	if err := validateStreamerKnobs(req.StreamerMode, req.StreamerConcurrency, req.StreamerMemoryLimitGiB); err != nil {
+		return "", &createRunError{http.StatusBadRequest, err.Error()}
+	}
+	var streamerModePtr *string
+	if req.StreamerMode != "" {
+		v := req.StreamerMode
+		streamerModePtr = &v
+	}
+	var streamerConcurrencyPtr *int
+	if req.StreamerConcurrency > 0 {
+		n := req.StreamerConcurrency
+		streamerConcurrencyPtr = &n
+	}
+	var streamerMemLimitPtr *int
+	if req.StreamerMemoryLimitGiB > 0 {
+		n := req.StreamerMemoryLimitGiB
+		streamerMemLimitPtr = &n
+	}
+
 	run := &database.BenchmarkRun{
-		ModelID:              model.ID,
-		InstanceTypeID:       instType.ID,
-		Framework:            req.Framework,
-		FrameworkVersion:     req.FrameworkVersion,
-		TensorParallelDegree: req.TensorParallelDegree,
-		Quantization:         req.Quantization,
-		Concurrency:          req.Concurrency,
-		InputSequenceLength:  req.InputSequenceLength,
-		OutputSequenceLength: req.OutputSequenceLength,
-		DatasetName:          datasetName,
-		RunType:              runType,
-		ScenarioID:           scenarioPtr,
-		MaxModelLen:          req.MaxModelLen,
-		MaxNumBatchedTokens:  mnbtPtr,
-		KVCacheDtype:         kvDtypePtr,
-		ModelS3URI:           s3URIPtr,
-		Status:               "pending",
+		ModelID:                model.ID,
+		InstanceTypeID:         instType.ID,
+		Framework:              req.Framework,
+		FrameworkVersion:       req.FrameworkVersion,
+		TensorParallelDegree:   req.TensorParallelDegree,
+		Quantization:           req.Quantization,
+		Concurrency:            req.Concurrency,
+		InputSequenceLength:    req.InputSequenceLength,
+		OutputSequenceLength:   req.OutputSequenceLength,
+		DatasetName:            datasetName,
+		RunType:                runType,
+		ScenarioID:             scenarioPtr,
+		MaxModelLen:            req.MaxModelLen,
+		MaxNumBatchedTokens:    mnbtPtr,
+		KVCacheDtype:           kvDtypePtr,
+		StreamerMode:           streamerModePtr,
+		StreamerConcurrency:    streamerConcurrencyPtr,
+		StreamerMemoryLimitGiB: streamerMemLimitPtr,
+		ModelS3URI:             s3URIPtr,
+		Status:                 "pending",
 	}
 
 	runID, err := s.repo.CreateBenchmarkRun(ctx, run)
@@ -1221,16 +1265,41 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		v := req.KVCacheDtype
 		suiteKVDtypePtr = &v
 	}
+
+	// PRD-50: streamer knob validation + persistence.
+	if err := validateStreamerKnobs(req.StreamerMode, req.StreamerConcurrency, req.StreamerMemoryLimitGiB); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var suiteStreamerModePtr *string
+	if req.StreamerMode != "" {
+		v := req.StreamerMode
+		suiteStreamerModePtr = &v
+	}
+	var suiteStreamerConcurrencyPtr *int
+	if req.StreamerConcurrency > 0 {
+		n := req.StreamerConcurrency
+		suiteStreamerConcurrencyPtr = &n
+	}
+	var suiteStreamerMemLimitPtr *int
+	if req.StreamerMemoryLimitGiB > 0 {
+		n := req.StreamerMemoryLimitGiB
+		suiteStreamerMemLimitPtr = &n
+	}
+
 	suiteRun := &database.TestSuiteRun{
-		ModelID:              model.ID,
-		InstanceTypeID:       instType.ID,
-		SuiteID:              suiteID,
-		TensorParallelDegree: req.TensorParallelDegree,
-		Quantization:         req.Quantization,
-		MaxModelLen:          req.MaxModelLen,
-		MaxNumBatchedTokens:  suiteMnbtPtr,
-		KVCacheDtype:         suiteKVDtypePtr,
-		Status:               "pending",
+		ModelID:                model.ID,
+		InstanceTypeID:         instType.ID,
+		SuiteID:                suiteID,
+		TensorParallelDegree:   req.TensorParallelDegree,
+		Quantization:           req.Quantization,
+		MaxModelLen:            req.MaxModelLen,
+		MaxNumBatchedTokens:    suiteMnbtPtr,
+		KVCacheDtype:           suiteKVDtypePtr,
+		StreamerMode:           suiteStreamerModePtr,
+		StreamerConcurrency:    suiteStreamerConcurrencyPtr,
+		StreamerMemoryLimitGiB: suiteStreamerMemLimitPtr,
+		Status:                 "pending",
 	}
 	if req.Framework != "" {
 		fw := req.Framework

@@ -15,8 +15,11 @@ var templates *template.Template
 func init() {
 	var err error
 	templates, err = template.New("").Funcs(template.FuncMap{
-		"sub": func(a, b int) int { return a - b },
-		"div": func(a, b int) int { return a / b },
+		"sub":        func(a, b int) int { return a - b },
+		"div":        func(a, b int) int { return a / b },
+		// gibBytes converts a GiB count to bytes for env vars like
+		// RUNAI_STREAMER_MEMORY_LIMIT that expect a raw byte count.
+		"gibBytes":   func(gib int) int64 { return int64(gib) * 1024 * 1024 * 1024 },
 	}).ParseFS(templateFS, "templates/*.yaml.tmpl")
 	if err != nil {
 		panic(fmt.Sprintf("parse manifest templates: %v", err))
@@ -54,6 +57,10 @@ type ModelDeploymentParams struct {
 	// FrameworkVersion template path is skipped. Plumbed from the
 	// VLLM_IMAGE env var on the API pod; see internal/orchestrator/versions.go.
 	VLLMImageOverride     string
+	// PRD-50: RUNAI_STREAMER_MEMORY_LIMIT env var (in GiB). Caps the
+	// streamer's shared CPU buffer during weight load. 0 = emit no env
+	// var, inheriting the upstream 40 GB default.
+	StreamerMemoryLimitGiB int
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.

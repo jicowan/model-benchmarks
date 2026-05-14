@@ -330,6 +330,9 @@ export interface MemoryBreakdownParams {
   concurrency?: number;
   overheadGiB?: number;
   hfToken?: string;
+  // PRD-50: streamer knobs. streamer = "" | "auto" | "off".
+  streamer?: string;
+  streamerMemoryLimitGiB?: number;
 }
 
 export async function getMemoryBreakdown(
@@ -346,6 +349,8 @@ export async function getMemoryBreakdown(
   if (params.outputSeqLen) urlParams.set("output_seq_len", String(params.outputSeqLen));
   if (params.concurrency) urlParams.set("concurrency", String(params.concurrency));
   if (params.overheadGiB) urlParams.set("overhead_gib", String(params.overheadGiB));
+  if (params.streamer) urlParams.set("streamer", params.streamer);
+  if (params.streamerMemoryLimitGiB) urlParams.set("streamer_memory_limit_gib", String(params.streamerMemoryLimitGiB));
 
   const headers: Record<string, string> = {};
   if (params.hfToken) headers["X-HF-Token"] = params.hfToken;

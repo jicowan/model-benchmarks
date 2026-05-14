@@ -555,23 +555,36 @@ func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExp
 		return nil, nil
 	}
 
-	return &RunExportDetails{
-		RunID:                runID,
-		ModelHfID:            model.HfID,
-		InstanceTypeName:     inst.Name,
-		Framework:            run.Framework,
-		FrameworkVersion:     run.FrameworkVersion,
-		TensorParallelDegree: run.TensorParallelDegree,
-		Quantization:         run.Quantization,
-		MaxModelLen:          run.MaxModelLen,
-		MaxNumBatchedTokens:  run.MaxNumBatchedTokens,
-		KVCacheDtype:         run.KVCacheDtype,
-		AcceleratorType:      inst.AcceleratorType,
-		AcceleratorCount:     inst.AcceleratorCount,
-		AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,
-		VCPUs:                inst.VCPUs,
-		MemoryGiB:            inst.MemoryGiB,
-	}, nil
+	details := &RunExportDetails{
+		RunID:                  runID,
+		ModelHfID:              model.HfID,
+		ModelS3URI:             run.ModelS3URI,
+		InstanceTypeName:       inst.Name,
+		Framework:              run.Framework,
+		FrameworkVersion:       run.FrameworkVersion,
+		TensorParallelDegree:   run.TensorParallelDegree,
+		Quantization:           run.Quantization,
+		MaxModelLen:            run.MaxModelLen,
+		MaxNumBatchedTokens:    run.MaxNumBatchedTokens,
+		KVCacheDtype:           run.KVCacheDtype,
+		StreamerMode:           run.StreamerMode,
+		StreamerConcurrency:    run.StreamerConcurrency,
+		StreamerMemoryLimitGiB: run.StreamerMemoryLimitGiB,
+		Concurrency:            run.Concurrency,
+		AcceleratorType:        inst.AcceleratorType,
+		AcceleratorName:        inst.AcceleratorName,
+		AcceleratorCount:       inst.AcceleratorCount,
+		AcceleratorMemoryGiB:   inst.AcceleratorMemoryGiB,
+		VCPUs:                  inst.VCPUs,
+		MemoryGiB:              inst.MemoryGiB,
+	}
+	// Resolve the streamer-on decision, same as Repository.GetRunExportDetails.
+	mode := ""
+	if details.StreamerMode != nil {
+		mode = *details.StreamerMode
+	}
+	details.UseRunaiStreamer = mode != "off" && details.ModelS3URI != nil && *details.ModelS3URI != ""
+	return details, nil
 }
 
 func (m *MockRepo) UpsertPricing(_ context.Context, p *Pricing) error {

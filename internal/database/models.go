@@ -49,6 +49,13 @@ type BenchmarkRun struct {
 	// and UI treat null as "flag omitted, vLLM picked its default."
 	MaxNumBatchedTokens   *int       `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype          *string    `json:"kv_cache_dtype,omitempty"`
+	// PRD-50: Run:ai model streamer knobs. Null on historical rows.
+	// streamer_mode "off" disables the streamer even for S3 models.
+	// streamer_concurrency 0 means "use default (16)".
+	// streamer_memory_limit_gib 0 means "auto-size from instance RAM".
+	StreamerMode           *string `json:"streamer_mode,omitempty"`
+	StreamerConcurrency    *int    `json:"streamer_concurrency,omitempty"`
+	StreamerMemoryLimitGiB *int    `json:"streamer_memory_limit_gib,omitempty"`
 	ScenarioID            *string    `json:"scenario_id,omitempty"`    // scenario identifier (chatbot, batch, etc.)
 	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
 	ModelS3URI            *string    `json:"model_s3_uri,omitempty"`   // s3://bucket/path — set when weights loaded via Run:ai streamer
@@ -162,6 +169,10 @@ type RunRequest struct {
 	// the recommender's choice if available, else vLLM's default."
 	MaxNumBatchedTokens  int     `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype         string  `json:"kv_cache_dtype,omitempty"`
+	// PRD-50: Run:ai streamer knobs. Empty string / 0 means "use default".
+	StreamerMode           string `json:"streamer_mode,omitempty"`             // "" | "auto" | "off"
+	StreamerConcurrency    int    `json:"streamer_concurrency,omitempty"`      // 0 → 16
+	StreamerMemoryLimitGiB int    `json:"streamer_memory_limit_gib,omitempty"` // 0 → auto-sized
 	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
 	APIType              string  `json:"api_type,omitempty"`    // "chat_completion" (default) or "completion"
 	ModelS3URI           string  `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
@@ -187,6 +198,10 @@ type TestSuiteRun struct {
 	// PRD-46: vLLM scheduler knobs (see BenchmarkRun).
 	MaxNumBatchedTokens *int    `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype        *string `json:"kv_cache_dtype,omitempty"`
+	// PRD-50: Run:ai streamer knobs (see BenchmarkRun).
+	StreamerMode           *string `json:"streamer_mode,omitempty"`
+	StreamerConcurrency    *int    `json:"streamer_concurrency,omitempty"`
+	StreamerMemoryLimitGiB *int    `json:"streamer_memory_limit_gib,omitempty"`
 	Status               string     `json:"status"`
 	CurrentScenario      *string    `json:"current_scenario,omitempty"`
 	StartedAt            *time.Time `json:"started_at,omitempty"`
@@ -269,6 +284,10 @@ type SuiteRunRequest struct {
 	// PRD-46: vLLM scheduler knobs (see RunRequest).
 	MaxNumBatchedTokens  int      `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype         string   `json:"kv_cache_dtype,omitempty"`
+	// PRD-50: Run:ai streamer knobs (see RunRequest).
+	StreamerMode           string `json:"streamer_mode,omitempty"`
+	StreamerConcurrency    int    `json:"streamer_concurrency,omitempty"`
+	StreamerMemoryLimitGiB int    `json:"streamer_memory_limit_gib,omitempty"`
 	ModelS3URI           string   `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string   `json:"hf_token,omitempty"`
 	// PRD-47 PR #6: see RunRequest.

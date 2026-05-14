@@ -93,6 +93,15 @@ type manifestData struct {
 	// path. Sourced from the same VLLM_IMAGE env var the orchestrator
 	// reads, so exports match what ran.
 	VLLMImageOverride    string
+	// PRD-50: Run:ai streamer knobs. UseRunaiStreamer is the resolved
+	// decision (streamer_mode != "off" && model had an S3 URI). When
+	// false, the template emits the HuggingFace-style loader even if
+	// ModelS3URI is set — matching what streamer_mode=off produced at
+	// runtime.
+	UseRunaiStreamer       bool
+	StreamerConcurrency    int   // 0 → template default of 16
+	StreamerMemoryLimitGiB int   // 0 → emit no env var, inherit upstream 40 GB default
+	StreamerMemoryLimitBytes int64 // derived for the env-var value
 }
 
 func generateManifest(d *database.RunExportDetails) (string, error) {
@@ -111,6 +120,7 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		ShmSize:              "16Gi",
 		PullThroughRegistry:  os.Getenv("PULL_THROUGH_REGISTRY"),
 		VLLMImageOverride:    os.Getenv("VLLM_IMAGE"),
+		UseRunaiStreamer:     d.UseRunaiStreamer,
 	}
 	if d.MaxNumBatchedTokens != nil {
 		data.MaxNumBatchedTokens = *d.MaxNumBatchedTokens
@@ -125,6 +135,18 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 	// Handle quantization.
 	if d.Quantization != nil {
 		data.Quantization = *d.Quantization
+	}
+
+	// PRD-50: streamer knobs. Concurrency defaults to 16 when null.
+	// Memory limit is rendered as bytes in the env var.
+	if d.StreamerConcurrency != nil && *d.StreamerConcurrency > 0 {
+		data.StreamerConcurrency = *d.StreamerConcurrency
+	} else {
+		data.StreamerConcurrency = 16
+	}
+	if d.StreamerMemoryLimitGiB != nil && *d.StreamerMemoryLimitGiB > 0 {
+		data.StreamerMemoryLimitGiB = *d.StreamerMemoryLimitGiB
+		data.StreamerMemoryLimitBytes = int64(*d.StreamerMemoryLimitGiB) * 1024 * 1024 * 1024
 	}
 
 	var buf bytes.Buffer
@@ -144,7 +166,11 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 #
 # Model: {{ .ModelHfID }}
 {{- if .ModelS3URI }}
-# Weights: {{ .ModelS3URI }} (loaded via Run:ai Model Streamer)
+{{- if .UseRunaiStreamer }}
+# Weights: {{ .ModelS3URI }} (loaded via Run:ai Model Streamer, concurrency={{ .StreamerConcurrency }}{{ if gt .StreamerMemoryLimitGiB 0 }}, memory_limit={{ .StreamerMemoryLimitGiB }} GiB{{ end }})
+{{- else }}
+# Weights: {{ .ModelS3URI }} (streamer disabled on original run)
+{{- end }}
 {{- end }}
 # Instance: {{ .InstanceType }}
 # Tensor Parallel: {{ .TensorParallelDegree }}
@@ -256,15 +282,24 @@ spec:
             - name: NCCL_P2P_LEVEL
               value: "NVL"
 {{- end }}
+{{- if and .UseRunaiStreamer (gt .StreamerMemoryLimitBytes 0) }}
+            # PRD-50: cap the Run:ai streamer's shared CPU buffer.
+            - name: RUNAI_STREAMER_MEMORY_LIMIT
+              value: "{{ .StreamerMemoryLimitBytes }}"
+{{- end }}
 {{- if eq .AcceleratorType "gpu" }}
           args:
-{{- if .ModelS3URI }}
+{{- if .UseRunaiStreamer }}
             - "--model"
             - "{{ .ModelS3URI }}"
             - "--load-format"
             - "runai_streamer"
             - "--model-loader-extra-config"
-            - '{"concurrency":16}'
+            - '{"concurrency":{{ .StreamerConcurrency }}}'
+{{- else if .ModelS3URI }}
+            # Streamer disabled (streamer_mode=off on the original run).
+            - "--model"
+            - "{{ .ModelS3URI }}"
 {{- else }}
             - "--model"
             - "{{ .ModelHfID }}"
@@ -274,7 +309,7 @@ spec:
             - "--tensor-parallel-size"
             - "{{ .TensorParallelDegree }}"
             - "--trust-remote-code"
-{{- if not .ModelS3URI }}
+{{- if not .UseRunaiStreamer }}
 {{- if eq .Quantization "fp16" }}
             - "--dtype"
             - "float16"
@@ -527,22 +562,32 @@ func (s *Server) handleExportSuiteManifest(w http.ResponseWriter, r *http.Reques
 
 	// Reconstruct a RunExportDetails so we can reuse generateManifest.
 	details := &database.RunExportDetails{
-		RunID:                suite.ID,
-		ModelHfID:            model.HfID,
-		ModelS3URI:           suite.ModelS3URI,
-		InstanceTypeName:     instance.Name,
-		TensorParallelDegree: suite.TensorParallelDegree,
-		Quantization:         suite.Quantization,
-		AcceleratorType:      instance.AcceleratorType,
-		AcceleratorName:      instance.AcceleratorName,
-		AcceleratorCount:     instance.AcceleratorCount,
-		AcceleratorMemoryGiB: instance.AcceleratorMemoryGiB,
-		VCPUs:                instance.VCPUs,
-		MemoryGiB:            instance.MemoryGiB,
+		RunID:                  suite.ID,
+		ModelHfID:              model.HfID,
+		ModelS3URI:             suite.ModelS3URI,
+		InstanceTypeName:       instance.Name,
+		TensorParallelDegree:   suite.TensorParallelDegree,
+		Quantization:           suite.Quantization,
+		AcceleratorType:        instance.AcceleratorType,
+		AcceleratorName:        instance.AcceleratorName,
+		AcceleratorCount:       instance.AcceleratorCount,
+		AcceleratorMemoryGiB:   instance.AcceleratorMemoryGiB,
+		VCPUs:                  instance.VCPUs,
+		MemoryGiB:              instance.MemoryGiB,
+		StreamerMode:           suite.StreamerMode,
+		StreamerConcurrency:    suite.StreamerConcurrency,
+		StreamerMemoryLimitGiB: suite.StreamerMemoryLimitGiB,
 	}
 	details.MaxModelLen = suite.MaxModelLen
 	details.MaxNumBatchedTokens = suite.MaxNumBatchedTokens
 	details.KVCacheDtype = suite.KVCacheDtype
+	// Resolve streamer-on decision the same way GetRunExportDetails does
+	// for single-run exports.
+	mode := ""
+	if suite.StreamerMode != nil {
+		mode = *suite.StreamerMode
+	}
+	details.UseRunaiStreamer = mode != "off" && suite.ModelS3URI != nil && *suite.ModelS3URI != ""
 	// PRD-46: --max-num-seqs was sized at deploy time to the busiest
 	// scenario in the suite; reproduce that value in the export by
 	// walking the suite's scenarios and taking the max NumWorkers,
