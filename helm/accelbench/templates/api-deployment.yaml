@@ -51,9 +51,13 @@ spec:
             # used verbatim as the model container image and the
             # Docker-Hub / pull-through template path is skipped. Empty
             # falls back to vllm/vllm-openai:<tool_versions.framework_version>.
-            {{- if .Values.image.vllm.repository }}
+            # Guarded with `with` so --reuse-values against pre-PRD-49
+            # releases (no image.vllm block) doesn't nil-deref.
+            {{- with .Values.image.vllm }}
+            {{- if .repository }}
             - name: VLLM_IMAGE
-              value: "{{ .Values.image.vllm.repository }}:{{ .Values.image.vllm.tag | default "latest" }}"
+              value: "{{ .repository }}:{{ .tag | default "latest" }}"
+            {{- end }}
             {{- end }}
             - name: TOOLS_IMAGE
               value: "{{ .Values.image.tools.repository }}:{{ .Values.image.tools.tag }}"
