@@ -381,17 +381,6 @@ export default function Runs() {
       <div className="p-6 max-w-[1600px] mx-auto animate-enter">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex-1" />
-          <BulkActions
-            selected={selected}
-            jobs={jobs}
-            onCancel={async (ids) => {
-              await bulkCancel(ids);
-            }}
-            onDelete={async (ids) => {
-              await bulkDelete(ids);
-              setSelected(new Set());
-            }}
-          />
           <Link to="/run" className="btn btn-primary">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
               <path d="M12 5v14M5 12h14" />
@@ -466,6 +455,25 @@ export default function Runs() {
 
         {/* Table */}
         <div className="panel overflow-x-auto">
+          <div className="flex items-center justify-between px-4 h-11 border-b border-line">
+            <div className="flex items-baseline gap-3">
+              <span className="eyebrow">[ RUNS ]</span>
+              <span className="font-mono text-[12px] text-ink-1">
+                {loading ? "loading…" : `${total} entries`}
+              </span>
+            </div>
+            <BulkActions
+              selected={selected}
+              jobs={jobs}
+              onCancel={async (ids) => {
+                await bulkCancel(ids);
+              }}
+              onDelete={async (ids) => {
+                await bulkDelete(ids);
+                setSelected(new Set());
+              }}
+            />
+          </div>
           <table className="data-table">
             <thead>
               {table.getHeaderGroups().map((hg) => (
