@@ -255,6 +255,70 @@ schedule on your cluster's general-purpose nodes like any other
 platform workload. That's deliberate. Only the benchmark workloads
 themselves need isolation.
 
+### Your device plugins / daemonsets need the toleration too
+
+Because AccelBench's NodePools carry the `accelbench.io/dedicated`
+taint, **any DaemonSet that needs to run on AccelBench's GPU or
+Neuron nodes must tolerate it**. In greenfield mode we ship the
+three relevant daemonsets (nvidia-device-plugin, neuron-device-plugin,
+dcgm-exporter) with the toleration baked in. In brownfield mode
+**your cluster's existing daemonsets are the ones in play**, and
+most off-the-shelf installs only tolerate the accelerator-specific
+taint (e.g. `nvidia.com/gpu:NoSchedule`) — not ours.
+
+Symptom if this isn't addressed: Karpenter provisions the GPU node
+and the benchmark pod still sits `Pending` with `Insufficient
+nvidia.com/gpu`. The node is up, but the device plugin DaemonSet
+can't land on it, so `nvidia.com/gpu` is never advertised in the
+node's allocatable resources.
+
+Before your first benchmark, add the toleration to any daemonset
+that targets the GPU / Neuron instance categories. Examples:
+
+```bash
+# NVIDIA device plugin (most common install)
+kubectl patch ds -n kube-system nvidia-device-plugin-daemonset \
+  --type=json -p '[{"op":"add","path":"/spec/template/spec/tolerations/-","value":{"key":"accelbench.io/dedicated","operator":"Exists","effect":"NoSchedule"}}]'
+
+# Neuron device plugin (if you run inf2/trn1)
+kubectl patch ds -n kube-system neuron-device-plugin-daemonset \
+  --type=json -p '[{"op":"add","path":"/spec/template/spec/tolerations/-","value":{"key":"accelbench.io/dedicated","operator":"Exists","effect":"NoSchedule"}}]'
+
+# dcgm-exporter (NVIDIA GPU metrics for Prometheus)
+kubectl patch ds -n <ns> dcgm-exporter \
+  --type=json -p '[{"op":"add","path":"/spec/template/spec/tolerations/-","value":{"key":"accelbench.io/dedicated","operator":"Exists","effect":"NoSchedule"}}]'
+```
+
+If you install the NVIDIA GPU Operator via Helm, add the toleration
+via values:
+
+```yaml
+# values.yaml for gpu-operator
+devicePlugin:
+  tolerations:
+    - key: accelbench.io/dedicated
+      operator: Exists
+      effect: NoSchedule
+dcgmExporter:
+  tolerations:
+    - key: accelbench.io/dedicated
+      operator: Exists
+      effect: NoSchedule
+```
+
+**You don't need to add the toleration to DaemonSets that already
+tolerate everything (`operator: Exists` with no key).** The EKS-
+managed daemonsets (`aws-node`, `kube-proxy`, `eks-pod-identity-agent`,
+`ebs-csi-node`) tolerate `*` and land on our nodes automatically.
+Check yours with:
+
+```bash
+kubectl get ds -A -o json | jq -r '.items[] | select([(.spec.template.spec.tolerations // [])[] | select(.operator == "Exists" and (.key // "") == "")] | length == 0) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+That prints the daemonsets that *don't* tolerate everything — audit
+each one and decide whether it needs to run on AccelBench's nodes.
+
 ## How capacity reservations work in brownfield mode
 
 AccelBench's Capacity Reservations feature (attach an ODCR or
@@ -277,6 +341,17 @@ reservations to their existing NodePools through AccelBench's UI.
   `terraform apply` output for the NodePool resources. Or the
   orchestrator image is from before PRD-53 and doesn't emit the new
   toleration. Rebuild and push the API image.
+
+**Benchmark pod stuck `Pending` with "Insufficient nvidia.com/gpu"
+(node is Ready)**
+: The GPU node provisioned but the NVIDIA device plugin daemonset
+  can't land on it, so the `nvidia.com/gpu` resource is never
+  advertised. See ["Your device plugins / daemonsets need the
+  toleration too"](#your-device-plugins--daemonsets-need-the-toleration-too)
+  above — patch your device plugin daemonsets to tolerate
+  `accelbench.io/dedicated`. Confirm with `kubectl describe node
+  <gpu-node> | grep nvidia.com/gpu` — the allocatable block should
+  show `nvidia.com/gpu: 1` (or higher for multi-GPU instances).
 
 **Aurora + subnet conflict**
 : The subnets you provided in `private_subnet_ids` must be in the
