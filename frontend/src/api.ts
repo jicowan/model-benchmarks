@@ -477,7 +477,11 @@ export async function getModelCache(id: string): Promise<ModelCache> {
 }
 
 export async function deleteModelCache(id: string): Promise<void> {
-  await fetch(`${BASE}/model-cache/${id}`, { method: "DELETE" });
+  await fetchJSON<unknown>(`${BASE}/model-cache/${id}`, { method: "DELETE" });
+}
+
+export async function cancelModelCache(id: string): Promise<void> {
+  await fetchJSON<unknown>(`${BASE}/model-cache/${id}/cancel`, { method: "POST" });
 }
 
 export async function registerCustomModel(req: RegisterCustomModelRequest): Promise<ModelCache> {
