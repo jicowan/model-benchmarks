@@ -184,26 +184,44 @@ export default function Run() {
       clearTimeout(memoryBreakdownRef.current);
     }
 
-    // Debounce memory breakdown updates
+    // Debounce memory breakdown + recommendation refresh. PRD-51's
+    // warnings fire off the recommender, so we fetch both so warnings
+    // like "mnbt < ISL" appear as the user types.
     memoryBreakdownRef.current = window.setTimeout(async () => {
       setMemoryBreakdownLoading(true);
       try {
-        const breakdown = await getMemoryBreakdown({
-          model: form.model_hf_id,
-          instanceType: form.instance_type_name,
-          tp: form.tensor_parallel_degree,
-          quantization: form.quantization || undefined,
-          maxModelLen: form.max_model_len || undefined,
-          inputSeqLen: form.input_sequence_length,
-          outputSeqLen: form.output_sequence_length,
-          concurrency: form.concurrency,
-          overheadGiB: form.overhead_gib || undefined,
-          hfToken: form.hf_token || undefined,
-          // PRD-50: streamer knobs influence the host-memory view.
-          streamer: form.streamer_mode || undefined,
-          streamerMemoryLimitGiB: form.streamer_memory_limit_gib || undefined,
-        });
+        const [breakdown, rec] = await Promise.all([
+          getMemoryBreakdown({
+            model: form.model_hf_id,
+            instanceType: form.instance_type_name,
+            tp: form.tensor_parallel_degree,
+            quantization: form.quantization || undefined,
+            maxModelLen: form.max_model_len || undefined,
+            inputSeqLen: form.input_sequence_length,
+            outputSeqLen: form.output_sequence_length,
+            concurrency: form.concurrency,
+            overheadGiB: form.overhead_gib || undefined,
+            hfToken: form.hf_token || undefined,
+            // PRD-50: streamer knobs influence the host-memory view.
+            streamer: form.streamer_mode || undefined,
+            streamerMemoryLimitGiB: form.streamer_memory_limit_gib || undefined,
+          }),
+          getRecommendation(
+            form.model_hf_id,
+            form.instance_type_name,
+            form.hf_token || undefined,
+            form.tensor_parallel_degree,
+            form.overhead_gib || undefined,
+            form.max_model_len || undefined,
+            form.max_num_batched_tokens || undefined,
+            form.streamer_mode || undefined,
+            form.streamer_memory_limit_gib || undefined,
+          ).catch(() => null),
+        ]);
         setMemoryBreakdown(breakdown);
+        // Preserve the recommendation we already have if the refresh
+        // failed — warnings stale is better than the whole card missing.
+        if (rec) setRecommendation(rec);
       } catch (err) {
         console.error("Memory breakdown failed:", err);
       } finally {
@@ -217,7 +235,11 @@ export default function Run() {
       }
     };
   }, [
-    recommendation,
+    // Include the initial `recommendation` reference so the effect
+    // doesn't fire before the first getRecommendation resolves. After
+    // that the refresh inside replaces it; we rely on the other field
+    // deps to trigger subsequent refreshes, not `recommendation` itself.
+    Boolean(recommendation),
     form.model_hf_id,
     form.instance_type_name,
     form.tensor_parallel_degree,
@@ -228,6 +250,9 @@ export default function Run() {
     form.hf_token,
     form.streamer_mode,
     form.streamer_memory_limit_gib,
+    // PRD-51: mnbt change should refresh the recommendation so the
+    // "mnbt < ISL" warning appears/disappears in real time.
+    form.max_num_batched_tokens,
   ]);
 
   const handleTokenBlur = useCallback(async () => {

@@ -870,6 +870,11 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	if maxMLStr := r.URL.Query().Get("max_model_len"); maxMLStr != "" {
 		fmt.Sscanf(maxMLStr, "%d", &opts.MaxModelLenOverride)
 	}
+	// PRD-51: accept mnbt override so the recommender can detect the
+	// "mnbt < ISL" footgun and emit a warning on the recommendation.
+	if v := r.URL.Query().Get("max_num_batched_tokens"); v != "" {
+		fmt.Sscanf(v, "%d", &opts.MaxNumBatchedTokensOverride)
+	}
 	// Make the transformers-compat warning reflect the configured vLLM tag.
 	if tv, err := s.repo.GetToolVersions(r.Context()); err == nil && tv != nil {
 		opts.VLLMVersion = tv.FrameworkVersion
