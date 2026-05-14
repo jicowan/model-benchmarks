@@ -39,6 +39,10 @@ func TestGenerateManifest_EmitsAllVLLMFlags(t *testing.T) {
 		AcceleratorMemoryGiB: 48,
 		VCPUs:                4,
 		MemoryGiB:            32,
+		// PRD-50: GetRunExportDetails resolves UseRunaiStreamer from
+		// streamer_mode + model_s3_uri. Tests that hand-build the struct
+		// set it explicitly.
+		UseRunaiStreamer: true,
 	}
 
 	out, err := generateManifest(d)
@@ -127,5 +131,84 @@ func TestGenerateManifest_HFLoaderPath(t *testing.T) {
 		if !strings.Contains(out, w) {
 			t.Errorf("HF-loader export missing %q", w)
 		}
+	}
+}
+
+// PRD-50: export reproduces the user's streamer knobs — concurrency and
+// memory limit must appear verbatim. Previously these were hardcoded.
+func TestGenerateManifest_StreamerKnobs(t *testing.T) {
+	s3 := "s3://bucket/models/foo"
+	conc := 8
+	memLimit := 12
+	d := &database.RunExportDetails{
+		RunID:                  "test-run-streamer",
+		ModelHfID:              "mistralai/Mistral-7B-Instruct-v0.3",
+		ModelS3URI:             &s3,
+		InstanceTypeName:       "g5.4xlarge",
+		Framework:              "vllm",
+		FrameworkVersion:       "v0.20.1",
+		TensorParallelDegree:   1,
+		MaxModelLen:            8192,
+		AcceleratorType:        "gpu",
+		AcceleratorName:        "A10G",
+		AcceleratorCount:       1,
+		AcceleratorMemoryGiB:   24,
+		VCPUs:                  16,
+		MemoryGiB:              64,
+		StreamerConcurrency:    &conc,
+		StreamerMemoryLimitGiB: &memLimit,
+		UseRunaiStreamer:       true,
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	// Concurrency must be the user's 8, not the old hardcoded 16.
+	if !strings.Contains(out, `"concurrency":8`) {
+		t.Errorf("export missing concurrency=8 in model-loader-extra-config:\n%s", out)
+	}
+	// Memory-limit env var rendered in bytes (12 GiB = 12884901888).
+	if !strings.Contains(out, "RUNAI_STREAMER_MEMORY_LIMIT") {
+		t.Error("export missing RUNAI_STREAMER_MEMORY_LIMIT env var")
+	}
+	if !strings.Contains(out, `"12884901888"`) {
+		t.Errorf("export missing 12 GiB (12884901888) byte value:\n%s", out)
+	}
+}
+
+// PRD-50: streamer_mode=off on an S3-backed run must not emit the
+// runai_streamer args — vLLM's default loader is used even for S3.
+func TestGenerateManifest_StreamerOff(t *testing.T) {
+	s3 := "s3://bucket/models/foo"
+	d := &database.RunExportDetails{
+		RunID:                "test-run-streamer-off",
+		ModelHfID:            "mistralai/Mistral-7B-Instruct-v0.3",
+		ModelS3URI:           &s3,
+		InstanceTypeName:     "g5.4xlarge",
+		Framework:            "vllm",
+		FrameworkVersion:     "v0.20.1",
+		TensorParallelDegree: 1,
+		MaxModelLen:          8192,
+		AcceleratorType:      "gpu",
+		AcceleratorName:      "A10G",
+		AcceleratorCount:     1,
+		AcceleratorMemoryGiB: 24,
+		VCPUs:                16,
+		MemoryGiB:            64,
+		UseRunaiStreamer:     false, // streamer_mode=off
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	if strings.Contains(out, "runai_streamer") {
+		t.Errorf("streamer-off export should not emit --load-format runai_streamer:\n%s", out)
+	}
+	if strings.Contains(out, "RUNAI_STREAMER_MEMORY_LIMIT") {
+		t.Error("streamer-off export should not set RUNAI_STREAMER_MEMORY_LIMIT")
+	}
+	// The S3 URI should still be passed as the model path.
+	if !strings.Contains(out, s3) {
+		t.Errorf("streamer-off export missing model S3 URI:\n%s", out)
 	}
 }

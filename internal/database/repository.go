@@ -191,8 +191,9 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		     tensor_parallel_degree, quantization, concurrency,
 		     input_sequence_length, output_sequence_length, dataset_name,
 		     run_type, status, max_model_len, scenario_id,
-		     model_s3_uri, max_num_batched_tokens, kv_cache_dtype)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		     model_s3_uri, max_num_batched_tokens, kv_cache_dtype,
+		     streamer_mode, streamer_concurrency, streamer_memory_limit_gib)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
@@ -202,6 +203,9 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		run.ModelS3URI,
 		run.MaxNumBatchedTokens,
 		run.KVCacheDtype,
+		run.StreamerMode,
+		run.StreamerConcurrency,
+		run.StreamerMemoryLimitGiB,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
@@ -433,7 +437,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
 		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested,
 		        max_num_batched_tokens, scenario_id, kv_cache_dtype,
-		        host_memory_peak_gib
+		        host_memory_peak_gib,
+		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
@@ -442,7 +447,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt, &run.ModelS3URI,
 		&run.TotalCostUSD, &run.LoadgenCostUSD, &run.OwnerPod, &run.CancelRequested,
 		&run.MaxNumBatchedTokens, &run.ScenarioID, &run.KVCacheDtype,
-		&run.HostMemoryPeakGiB)
+		&run.HostMemoryPeakGiB,
+		&run.StreamerMode, &run.StreamerConcurrency, &run.StreamerMemoryLimitGiB)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

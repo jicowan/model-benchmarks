@@ -60,6 +60,11 @@ export interface BenchmarkRun {
   max_model_len?: number;
   max_num_batched_tokens?: number | null;
   kv_cache_dtype?: string | null;
+  // PRD-50: Run:ai streamer knobs persisted on the run. Null means
+  // "used default" (auto / 16 / auto-sized at deploy time).
+  streamer_mode?: string | null;
+  streamer_concurrency?: number | null;
+  streamer_memory_limit_gib?: number | null;
   scenario_id?: string | null;
   model_s3_uri?: string | null;
   status: string;
@@ -155,6 +160,10 @@ export interface RunRequest {
   hf_token?: string;
   // PRD-47 PR #6: skip the host-memory feasibility check when set.
   allow_host_mem_override?: boolean;
+  // PRD-50: Run:ai streamer knobs. All optional. "" / 0 = default.
+  streamer_mode?: string;            // "" | "auto" | "off"
+  streamer_concurrency?: number;     // 0 = default (16)
+  streamer_memory_limit_gib?: number; // 0 = auto-sized
 }
 
 export interface RunListItem {
@@ -397,6 +406,19 @@ export interface MemoryBreakdown {
 
 export interface MemoryBreakdownResponse extends MemoryBreakdown {
   warning_message?: string;
+  // PRD-50: host RAM view. Populated alongside the GPU MemoryBreakdown.
+  // Rendered by a future PRD-51 panel; today's Run form ignores it.
+  host_memory: HostMemoryBreakdown;
+}
+
+// PRD-50: host-memory view during weight load. Separate from MemoryBreakdown
+// (which is GPU VRAM) because the streamer's CPU buffer lives in node RAM.
+export interface HostMemoryBreakdown {
+  instance_memory_gib: number;
+  streamer_buffer_gib: number;
+  framework_overhead_gib: number;
+  load_peak_gib: number;
+  headroom_gib: number;
 }
 
 // PRD-15: OOM history types
@@ -466,6 +488,10 @@ export interface SuiteRunRequest {
   hf_token?: string;
   // PRD-47 PR #6: skip the host-memory feasibility check when set.
   allow_host_mem_override?: boolean;
+  // PRD-50: Run:ai streamer knobs. All optional. "" / 0 = default.
+  streamer_mode?: string;
+  streamer_concurrency?: number;
+  streamer_memory_limit_gib?: number;
 }
 
 export interface ScenarioProgress {
@@ -558,6 +584,10 @@ export interface TestSuiteRun {
   max_num_batched_tokens?: number | null;
   max_num_seqs?: number;
   kv_cache_dtype?: string | null;
+  // PRD-50: Run:ai streamer knobs persisted on the suite run.
+  streamer_mode?: string | null;
+  streamer_concurrency?: number | null;
+  streamer_memory_limit_gib?: number | null;
   framework?: string | null;
   framework_version?: string | null;
   model_s3_uri?: string | null;

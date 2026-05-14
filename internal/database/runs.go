@@ -123,6 +123,14 @@ type RunExportDetails struct {
 	// KVCacheDtype emits --kv-cache-dtype when non-nil; typically "fp8"
 	// on FP8-capable accelerators, empty otherwise.
 	KVCacheDtype *string
+	// PRD-50: Run:ai streamer knobs. Null for historical runs (treated
+	// as auto / 16 / auto-sized). UseRunaiStreamer is the resolved
+	// decision — equivalent to `StreamerMode != "off" && ModelS3URI != ""`,
+	// materialized here so the export handler doesn't re-derive it.
+	StreamerMode           *string
+	StreamerConcurrency    *int
+	StreamerMemoryLimitGiB *int
+	UseRunaiStreamer       bool
 	// Concurrency drives --max-num-seqs at export time. Persisted on
 	// the run row under its own column; we pull it here so
 	// generateManifest has everything it needs without a second query.
@@ -146,6 +154,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 			br.framework, br.framework_version,
 			br.tensor_parallel_degree, br.quantization, br.max_model_len,
 			br.max_num_batched_tokens, br.kv_cache_dtype, br.concurrency,
+			br.streamer_mode, br.streamer_concurrency, br.streamer_memory_limit_gib,
 			it.accelerator_type, it.accelerator_name, it.accelerator_count, it.accelerator_memory_gib,
 			it.vcpus, it.memory_gib
 		FROM benchmark_runs br
@@ -157,6 +166,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 		&d.Framework, &d.FrameworkVersion,
 		&d.TensorParallelDegree, &d.Quantization, &maxModelLen,
 		&d.MaxNumBatchedTokens, &d.KVCacheDtype, &d.Concurrency,
+		&d.StreamerMode, &d.StreamerConcurrency, &d.StreamerMemoryLimitGiB,
 		&d.AcceleratorType, &d.AcceleratorName, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
 		&d.VCPUs, &d.MemoryGiB,
 	)
@@ -169,6 +179,14 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 	if maxModelLen != nil {
 		d.MaxModelLen = *maxModelLen
 	}
+	// Resolve the streamer-on decision once so the export handler and
+	// UI don't each re-derive it. "off" disables even for S3 models;
+	// otherwise it's on iff the run loaded from S3.
+	mode := ""
+	if d.StreamerMode != nil {
+		mode = *d.StreamerMode
+	}
+	d.UseRunaiStreamer = mode != "off" && d.ModelS3URI != nil && *d.ModelS3URI != ""
 	return &d, nil
 }
 

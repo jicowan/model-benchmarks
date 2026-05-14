@@ -23,6 +23,9 @@ type MemoryBreakdownRequest struct {
 type MemoryBreakdownResponse struct {
 	recommend.MemoryBreakdown
 	WarningMessage string `json:"warning_message,omitempty"`
+	// PRD-50: host-memory view. Separate struct because host RAM and GPU
+	// VRAM are distinct resources with different failure modes.
+	HostMemory recommend.HostMemoryBreakdown `json:"host_memory"`
 }
 
 // handleMemoryBreakdown returns a detailed memory breakdown for given configuration.
@@ -51,6 +54,14 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	fmt.Sscanf(q.Get("overhead_gib"), "%f", &overheadGiB)
 	quant = q.Get("quantization")
 	kvCacheDtype := q.Get("kv_cache_dtype")
+
+	// PRD-50: streamer knobs. streamer="auto" | "off" (default auto when
+	// not provided). streamer_memory_limit_gib caps the streamer buffer;
+	// 0 means auto-size. streamer_concurrency is informational (does not
+	// affect the breakdown) so we ignore it here.
+	streamerMode := q.Get("streamer")
+	var streamerMemLimitGiB int
+	fmt.Sscanf(q.Get("streamer_memory_limit_gib"), "%d", &streamerMemLimitGiB)
 
 	// Fetch model config (from S3 cache if available, else HuggingFace).
 	modelCfg, err := s.FetchModelConfig(r.Context(), modelID, hfToken)
@@ -134,8 +145,30 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 		perDeviceGiB,
 	)
 
+	// PRD-50: host-memory view. Streamer is active when mode != "off"
+	// AND the model is (or can be) loaded from S3. We don't have the
+	// per-run S3 URI here at breakdown time; use the model cache as a
+	// proxy — if the model is S3-cached, the streamer would kick in on
+	// a real run unless the user sets streamer=off.
+	streamerActive := streamerMode != "off"
+	if streamerActive {
+		cached, _ := s.repo.GetModelCacheByHfID(r.Context(), modelID, "main")
+		if cached == nil || cached.Status != "cached" {
+			// Model isn't S3-cached, so a real run would use the HF
+			// loader regardless of streamer_mode. No streamer buffer.
+			streamerActive = false
+		}
+	}
+	hostBreakdown := recommend.CalculateHostMemoryBreakdown(
+		streamerActive,
+		breakdown.ModelWeightsGiB,
+		streamerMemLimitGiB,
+		instType.MemoryGiB,
+	)
+
 	resp := MemoryBreakdownResponse{
 		MemoryBreakdown: breakdown,
+		HostMemory:      hostBreakdown,
 	}
 
 	// Add warning if memory usage is high
