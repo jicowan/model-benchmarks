@@ -12,6 +12,15 @@ data:
         root /usr/share/nginx/html;
         index index.html;
 
+        # Cognito JWT cookies (id + access + refresh) accumulate past
+        # nginx's 4k/8k default header buffers, producing "400 Bad Request
+        # Request Header Or Cookie Too Large" once a session has been
+        # active for a while. 16k held for standard pools; federated
+        # claims push higher. 32k gives durable headroom.
+        proxy_buffer_size           32k;
+        proxy_buffers               8 32k;
+        large_client_header_buffers 4 32k;
+
         # API requests proxy to backend
         location /api/ {
             proxy_pass http://{{ include "accelbench.fullname" . }}-api:{{ .Values.api.port }};
