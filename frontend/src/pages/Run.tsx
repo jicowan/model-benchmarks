@@ -103,6 +103,31 @@ export default function Run() {
       });
   }, []);
 
+  // When the page is loaded with ?model=<hf_id> (e.g. RUN link on the
+  // Models page), the autocomplete's onModelSelect never fires, so the
+  // cache lookup that normally populates model_s3_uri is skipped. Look
+  // it up here on mount so cached models route through S3 by default,
+  // matching the explicit-selection flow.
+  useEffect(() => {
+    const initialModel = searchParams.get("model")?.trim();
+    if (!initialModel) return;
+    if (form.model_s3_uri) return; // URL already provided one
+    listModelCache()
+      .then((resp) => {
+        const match = resp.rows.find(
+          (c) => c.hf_id === initialModel && c.status === "cached"
+        );
+        if (match) {
+          setCachedModel(match);
+          set("model_s3_uri", match.s3_uri);
+          setUseS3Cache(true);
+        }
+      })
+      .catch(() => {});
+    // Run once on mount; subsequent model changes go through handleModelSelect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // PRD-15: Auto-recommend when model and instance are both selected
   useEffect(() => {
     const model = form.model_hf_id.trim();
