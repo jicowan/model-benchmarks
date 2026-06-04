@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -149,18 +150,20 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.utilizationSample) == 0 {
+	if len(s.utilizationSample) == 0 && len(s.dcgmUtilSamples) == 0 {
 		return nil
 	}
 
-	var sum, peak float64
+	var sum, peak, avg float64
 	for _, v := range s.utilizationSample {
 		sum += v
 		if v > peak {
 			peak = v
 		}
 	}
-	avg := sum / float64(len(s.utilizationSample))
+	if len(s.utilizationSample) > 0 {
+		avg = sum / float64(len(s.utilizationSample))
+	}
 
 	var maxWaiting int
 	for _, w := range s.waitingSamples {
@@ -296,6 +299,13 @@ func aggregatePctSamples(samples []float64) (*float64, *float64) {
 func (s *GPUScraper) loop(ctx context.Context) {
 	defer close(s.done)
 
+	// Wait for DCGM exporter to become reachable before entering the
+	// regular scrape loop. On freshly-provisioned GPU nodes, the DCGM
+	// daemonset pod takes 30-60s to start.
+	if s.dcgmURL != "" {
+		s.waitForDCGM(ctx)
+	}
+
 	ticker := time.NewTicker(scrapeInterval)
 	defer ticker.Stop()
 
@@ -312,9 +322,35 @@ func (s *GPUScraper) loop(ctx context.Context) {
 	}
 }
 
+const dcgmWaitTimeout = 90 * time.Second
+
+func (s *GPUScraper) waitForDCGM(ctx context.Context) {
+	deadline := time.Now().Add(dcgmWaitTimeout)
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.dcgmURL, nil)
+		if err != nil {
+			return
+		}
+		resp, err := s.client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				log.Printf("[gpuscraper] DCGM exporter ready")
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+	log.Printf("[gpuscraper] DCGM exporter not reachable after %s, proceeding without", dcgmWaitTimeout)
+}
+
 func (s *GPUScraper) scrape(ctx context.Context) {
 	// Scrape vLLM metrics
-	s.scrapeVLLM(ctx)
+	s.scrapeModelServer(ctx)
 
 	// Scrape DCGM metrics if configured
 	if s.dcgmURL != "" {
@@ -322,7 +358,7 @@ func (s *GPUScraper) scrape(ctx context.Context) {
 	}
 }
 
-func (s *GPUScraper) scrapeVLLM(ctx context.Context) {
+func (s *GPUScraper) scrapeModelServer(ctx context.Context) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.metricsURL, nil)
 	if err != nil {
 		return
@@ -442,7 +478,8 @@ type promScrapeResult struct {
 }
 
 // parsePrometheusMetricsExtended does a line-by-line parse of Prometheus
-// text format to extract vLLM metrics. Returns -1 for values not found.
+// text format to extract model server metrics. Supports both vLLM and SGLang
+// metric names. Returns -1 for values not found.
 func parsePrometheusMetricsExtended(r io.Reader) promScrapeResult {
 	result := promScrapeResult{
 		utilization:   -1,
@@ -462,39 +499,64 @@ func parsePrometheusMetricsExtended(r io.Reader) promScrapeResult {
 			continue
 		}
 
-		// vLLM exposes these metrics with possible label suffixes.
-		// Match the metric name prefix.
 		switch {
+		// KV cache utilization (0.0–1.0)
 		case strings.HasPrefix(line, "vllm:kv_cache_usage_perc"),
-			strings.HasPrefix(line, "vllm:gpu_cache_usage_perc"): // legacy name
+			strings.HasPrefix(line, "vllm:gpu_cache_usage_perc"),
+			strings.HasPrefix(line, "sglang:token_usage"):
 			if v, err := parsePromValue(line); err == nil {
 				result.utilization = v
 			}
-		case strings.HasPrefix(line, "vllm:num_requests_waiting"):
+
+		// Waiting/queued requests
+		case strings.HasPrefix(line, "vllm:num_requests_waiting"),
+			strings.HasPrefix(line, "sglang:num_queue_reqs"):
 			if v, err := parsePromValue(line); err == nil {
 				result.waiting = int(v)
 			}
-		case strings.HasPrefix(line, "vllm:num_requests_running"):
+
+		// Running requests
+		case strings.HasPrefix(line, "vllm:num_requests_running"),
+			strings.HasPrefix(line, "sglang:num_running_reqs"):
 			if v, err := parsePromValue(line); err == nil {
 				result.running = int(v)
 			}
-		case strings.HasPrefix(line, "vllm:prompt_tokens_total"):
+
+		// Prompt tokens processed (counter)
+		case strings.HasPrefix(line, "vllm:prompt_tokens_total"),
+			strings.HasPrefix(line, "sglang:prompt_tokens_total"):
 			if v, err := parsePromValue(line); err == nil {
 				result.promptTokens = v
 			}
-		case strings.HasPrefix(line, "vllm:generation_tokens_total"):
+
+		// Generation tokens processed (counter)
+		case strings.HasPrefix(line, "vllm:generation_tokens_total"),
+			strings.HasPrefix(line, "sglang:generation_tokens_total"):
 			if v, err := parsePromValue(line); err == nil {
 				result.genTokens = v
 			}
+
+		// Prefix cache hits
 		case strings.HasPrefix(line, "vllm:prefix_cache_hits_total"),
-			strings.HasPrefix(line, "vllm:prefix_cache_hit_total"): // legacy name
+			strings.HasPrefix(line, "vllm:prefix_cache_hit_total"):
 			if v, err := parsePromValue(line); err == nil {
 				result.prefixHits = v
 			}
+		// SGLang exposes cache_hit_rate as a gauge (0.0–1.0) rather than
+		// a counter. We store it directly as prefixHits and set
+		// prefixQueries=1 so the rate calculation in Stop() produces the
+		// correct percentage.
+		case strings.HasPrefix(line, "sglang:cache_hit_rate"):
+			if v, err := parsePromValue(line); err == nil {
+				result.prefixHits = v * 100
+				result.prefixQueries = 100
+			}
+
 		case strings.HasPrefix(line, "vllm:prefix_cache_queries_total"):
 			if v, err := parsePromValue(line); err == nil {
 				result.prefixQueries = v
 			}
+
 		case strings.HasPrefix(line, "vllm:num_preemptions_total"):
 			if v, err := parsePromValue(line); err == nil {
 				result.preemptions = v
@@ -506,6 +568,7 @@ func parsePrometheusMetricsExtended(r io.Reader) promScrapeResult {
 
 // parsePromValue extracts the float64 value from a Prometheus text line.
 // The value is the last space-separated field (ignoring optional timestamp).
+// Returns an error for NaN/Inf values which can't be JSON-encoded.
 func parsePromValue(line string) (float64, error) {
 	// Format: metric_name{labels} value [timestamp]
 	// or:     metric_name value [timestamp]
@@ -513,9 +576,14 @@ func parsePromValue(line string) (float64, error) {
 	if len(fields) < 2 {
 		return 0, fmt.Errorf("too few fields")
 	}
-	// The value is always the second-to-last or last field.
-	// Try the field right after the metric name (index 1).
-	return strconv.ParseFloat(fields[len(fields)-1], 64)
+	v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("non-finite value")
+	}
+	return v, nil
 }
 
 // dcgmScrapeResult holds metrics parsed from DCGM exporter.

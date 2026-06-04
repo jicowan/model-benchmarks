@@ -12,8 +12,9 @@ import (
 
 // LoadgenOutput represents the JSON output from the load generator.
 type LoadgenOutput struct {
-	Requests []RequestResult `json:"requests"`
-	Summary  Summary         `json:"summary"`
+	Requests           []RequestResult        `json:"requests"`
+	Summary            Summary                `json:"summary"`
+	PrecomputedMetrics *PrecomputedPercentiles `json:"-"`
 }
 
 // RequestResult holds per-request measurements from the load generator.
@@ -156,38 +157,31 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 }
 
 // convertInferencePerfOutput converts inference-perf format to LoadgenOutput.
-// Since inference-perf provides aggregate stats (not per-request), we create
-// synthetic request entries to pass through the existing metrics pipeline.
+// Passes pre-computed percentiles directly via the PrecomputedMetrics field
+// so ComputeMetrics uses them verbatim instead of recomputing from synthetic requests.
 func convertInferencePerfOutput(ip *InferencePerfOutput) *LoadgenOutput {
 	// inference-perf reports latencies in seconds, convert to milliseconds
 	ttftP50 := ip.Successes.Latency.TimeToFirstToken.Median * 1000
 	ttftP90 := ip.Successes.Latency.TimeToFirstToken.P90 * 1000
+	ttftP95 := ip.Successes.Latency.TimeToFirstToken.P95 * 1000
 	ttftP99 := ip.Successes.Latency.TimeToFirstToken.P99 * 1000
 
 	e2eP50 := ip.Successes.Latency.RequestLatency.Median * 1000
 	e2eP90 := ip.Successes.Latency.RequestLatency.P90 * 1000
+	e2eP95 := ip.Successes.Latency.RequestLatency.P95 * 1000
 	e2eP99 := ip.Successes.Latency.RequestLatency.P99 * 1000
 
 	itlP50 := ip.Successes.Latency.InterTokenLatency.Median * 1000
 	itlP90 := ip.Successes.Latency.InterTokenLatency.P90 * 1000
+	itlP95 := ip.Successes.Latency.InterTokenLatency.P95 * 1000
 	itlP99 := ip.Successes.Latency.InterTokenLatency.P99 * 1000
 
-	// TPOT (time per output token) in milliseconds
 	tpotP50 := ip.Successes.Latency.TimePerOutputToken.Median * 1000
 	tpotP90 := ip.Successes.Latency.TimePerOutputToken.P90 * 1000
 	tpotP99 := ip.Successes.Latency.TimePerOutputToken.P99 * 1000
 
-	// Create synthetic requests at p50, p90, p99 to preserve percentile info
-	// The ComputeMetrics function will recompute percentiles from these
-	requests := []RequestResult{
-		{TTFTMs: ttftP50, E2ELatencyMs: e2eP50, ITLMs: itlP50, TPOTMs: tpotP50, Success: true},
-		{TTFTMs: ttftP50, E2ELatencyMs: e2eP50, ITLMs: itlP50, TPOTMs: tpotP50, Success: true},
-		{TTFTMs: ttftP90, E2ELatencyMs: e2eP90, ITLMs: itlP90, TPOTMs: tpotP90, Success: true},
-		{TTFTMs: ttftP99, E2ELatencyMs: e2eP99, ITLMs: itlP99, TPOTMs: tpotP99, Success: true},
-	}
-
 	return &LoadgenOutput{
-		Requests: requests,
+		Requests: []RequestResult{{Success: true}},
 		Summary: Summary{
 			TotalRequests:          ip.LoadSummary.Count,
 			SuccessfulRequests:     ip.Successes.Count,
@@ -200,13 +194,38 @@ func convertInferencePerfOutput(ip *InferencePerfOutput) *LoadgenOutput {
 			TPOTP90Ms:              tpotP90,
 			TPOTP99Ms:              tpotP99,
 		},
+		PrecomputedMetrics: &PrecomputedPercentiles{
+			TTFTP50Ms:  ttftP50,
+			TTFTP90Ms:  ttftP90,
+			TTFTP95Ms:  ttftP95,
+			TTFTP99Ms:  ttftP99,
+			E2EP50Ms:   e2eP50,
+			E2EP90Ms:   e2eP90,
+			E2EP95Ms:   e2eP95,
+			E2EP99Ms:   e2eP99,
+			ITLP50Ms:   itlP50,
+			ITLP90Ms:   itlP90,
+			ITLP95Ms:   itlP95,
+			ITLP99Ms:   itlP99,
+		},
 	}
+}
+
+// PrecomputedPercentiles holds pre-calculated percentiles from inference-perf
+// so we don't recompute them from synthetic data points.
+type PrecomputedPercentiles struct {
+	TTFTP50Ms, TTFTP90Ms, TTFTP95Ms, TTFTP99Ms float64
+	E2EP50Ms, E2EP90Ms, E2EP95Ms, E2EP99Ms     float64
+	ITLP50Ms, ITLP90Ms, ITLP95Ms, ITLP99Ms    float64
 }
 
 // ComputeMetrics takes parsed loadgen output and computes the full set of
 // benchmark metrics including p50/p90/p95/p99 percentiles.
-// Supports both legacy AccelBench loadgen and inference-perf output formats.
+// When PrecomputedMetrics is set (inference-perf output), uses those directly.
 func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
+	if out.PrecomputedMetrics != nil {
+		return computeFromPrecomputed(out)
+	}
 	successful := filterSuccessful(out.Requests)
 
 	var ttfts, e2es, itls []float64
@@ -340,6 +359,64 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 		PromptThroughputTPS:       inputTPS,
 		GenerationThroughputTPS:   genTPS,
 		OutputLengthMean:          outputLenMean,
+	}
+}
+
+// computeFromPrecomputed builds BenchmarkMetrics directly from inference-perf's
+// pre-calculated percentiles, avoiding recomputation from synthetic data points.
+func computeFromPrecomputed(out *LoadgenOutput) *database.BenchmarkMetrics {
+	p := out.PrecomputedMetrics
+	s := out.Summary
+
+	successCount := s.SuccessfulRequests
+	failCount := s.FailedRequests
+
+	var aggTPS, rps *float64
+	if s.ThroughputAggregateTPS > 0 {
+		aggTPS = &s.ThroughputAggregateTPS
+	}
+	if s.RequestsPerSecond > 0 {
+		rps = &s.RequestsPerSecond
+	}
+	var inputTPS, genTPS, outputLenMean *float64
+	if s.InputThroughputTPS > 0 {
+		inputTPS = &s.InputThroughputTPS
+	}
+	if aggTPS != nil {
+		genTPS = aggTPS
+	}
+	if s.OutputLengthMean > 0 {
+		outputLenMean = &s.OutputLengthMean
+	}
+
+	ttftP50, ttftP90, ttftP95, ttftP99 := &p.TTFTP50Ms, &p.TTFTP90Ms, &p.TTFTP95Ms, &p.TTFTP99Ms
+	e2eP50, e2eP90, e2eP95, e2eP99 := &p.E2EP50Ms, &p.E2EP90Ms, &p.E2EP95Ms, &p.E2EP99Ms
+	itlP50, itlP90, itlP95, itlP99 := &p.ITLP50Ms, &p.ITLP90Ms, &p.ITLP95Ms, &p.ITLP99Ms
+	tpotP50, tpotP90, tpotP99 := &s.TPOTP50Ms, &s.TPOTP90Ms, &s.TPOTP99Ms
+
+	return &database.BenchmarkMetrics{
+		TTFTP50Ms:               ttftP50,
+		TTFTP90Ms:               ttftP90,
+		TTFTP95Ms:               ttftP95,
+		TTFTP99Ms:               ttftP99,
+		E2ELatencyP50Ms:         e2eP50,
+		E2ELatencyP90Ms:         e2eP90,
+		E2ELatencyP95Ms:         e2eP95,
+		E2ELatencyP99Ms:         e2eP99,
+		ITLP50Ms:                itlP50,
+		ITLP90Ms:                itlP90,
+		ITLP95Ms:                itlP95,
+		ITLP99Ms:                itlP99,
+		TPOTP50Ms:               tpotP50,
+		TPOTP90Ms:               tpotP90,
+		TPOTP99Ms:               tpotP99,
+		ThroughputAggregateTPS:  aggTPS,
+		RequestsPerSecond:       rps,
+		SuccessfulRequests:      &successCount,
+		FailedRequests:          &failCount,
+		PromptThroughputTPS:     inputTPS,
+		GenerationThroughputTPS: genTPS,
+		OutputLengthMean:        outputLenMean,
 	}
 }
 

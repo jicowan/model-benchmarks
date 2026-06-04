@@ -11,6 +11,7 @@ import (
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/recommend"
+	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/google/uuid"
 )
 
@@ -297,16 +298,12 @@ func (s *Seeder) finish(ctx context.Context, id string, err error) {
 }
 
 // frameworkFor picks the right framework string for a given instance type.
-// GPU instances use vLLM; Neuron instances use vllm-neuron. The catalog matrix
-// currently only lists GPU instances but this keeps the seeder correct if
-// Neuron instances are re-enabled later.
 func frameworkFor(instanceName string) string {
-	switch {
-	case len(instanceName) >= 4 && (instanceName[:4] == "inf2" || instanceName[:4] == "trn1" || instanceName[:4] == "trn2"):
-		return "vllm-neuron"
-	default:
-		return "vllm"
+	accel := "gpu"
+	if len(instanceName) >= 4 && (instanceName[:4] == "inf2" || instanceName[:4] == "trn1" || instanceName[:4] == "trn2") {
+		accel = "neuron"
 	}
+	return runtime.ForAccelerator(accel).Name()
 }
 
 func enabledPairCount(m *database.CatalogMatrix) int {

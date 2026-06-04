@@ -18,6 +18,7 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/recommend"
+	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
 	"github.com/accelbench/accelbench/internal/seed"
 	"github.com/accelbench/accelbench/internal/testsuite"
@@ -360,6 +361,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, crErr.status, crErr.msg)
 			return
 		}
+		log.Printf("create run failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "create run failed")
 		return
 	}
@@ -428,6 +430,26 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		return "", &createRunError{http.StatusNotFound, fmt.Sprintf("instance type %s not found", req.InstanceTypeName)}
 	}
 
+	// Framework selection + version defaulting via the runtime interface.
+	if req.Framework == "" {
+		req.Framework = runtime.ForAccelerator(instType.AcceleratorType).Name()
+	}
+	rt, rtErr := runtime.Get(req.Framework)
+	if rtErr != nil {
+		return "", &createRunError{http.StatusBadRequest, rtErr.Error()}
+	}
+	if !runtime.SupportsAccelerator(rt, instType.AcceleratorType) {
+		return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("framework %q does not support %s instances", req.Framework, instType.AcceleratorType)}
+	}
+	if req.FrameworkVersion == "" {
+		if tv, _ := s.repo.GetToolVersions(ctx); tv != nil {
+			req.FrameworkVersion = rt.ResolveVersion(runtime.ToolVersions{
+				FrameworkVersion: tv.FrameworkVersion,
+				SGLangVersion:    tv.SGLangVersion,
+			})
+		}
+	}
+
 	// Default dataset from scenario if not provided
 	datasetName := req.DatasetName
 	scenarioID := req.ScenarioID
@@ -484,6 +506,16 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		v := req.KVCacheDtype
 		kvDtypePtr = &v
 	}
+	var chunkedPrefillPtr *int
+	if req.ChunkedPrefillSize > 0 {
+		n := req.ChunkedPrefillSize
+		chunkedPrefillPtr = &n
+	}
+	var memFractionPtr *float64
+	if req.MemFractionStatic > 0 {
+		v := req.MemFractionStatic
+		memFractionPtr = &v
+	}
 
 	// PRD-50: streamer knob validation + persistence. Nil on the row
 	// means "use default" (auto / 16 / auto-sized).
@@ -522,6 +554,8 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		MaxModelLen:            req.MaxModelLen,
 		MaxNumBatchedTokens:    mnbtPtr,
 		KVCacheDtype:           kvDtypePtr,
+		ChunkedPrefillSize:     chunkedPrefillPtr,
+		MemFractionStatic:      memFractionPtr,
 		StreamerMode:           streamerModePtr,
 		StreamerConcurrency:    streamerConcurrencyPtr,
 		StreamerMemoryLimitGiB: streamerMemLimitPtr,
@@ -1278,6 +1312,16 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		v := req.KVCacheDtype
 		suiteKVDtypePtr = &v
 	}
+	var suiteChunkedPrefillPtr *int
+	if req.ChunkedPrefillSize > 0 {
+		n := req.ChunkedPrefillSize
+		suiteChunkedPrefillPtr = &n
+	}
+	var suiteMemFractionPtr *float64
+	if req.MemFractionStatic > 0 {
+		v := req.MemFractionStatic
+		suiteMemFractionPtr = &v
+	}
 
 	// PRD-50: streamer knob validation + persistence.
 	if err := validateStreamerKnobs(req.StreamerMode, req.StreamerConcurrency, req.StreamerMemoryLimitGiB); err != nil {
@@ -1309,6 +1353,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		MaxModelLen:            req.MaxModelLen,
 		MaxNumBatchedTokens:    suiteMnbtPtr,
 		KVCacheDtype:           suiteKVDtypePtr,
+		ChunkedPrefillSize:     suiteChunkedPrefillPtr,
+		MemFractionStatic:      suiteMemFractionPtr,
 		StreamerMode:           suiteStreamerModePtr,
 		StreamerConcurrency:    suiteStreamerConcurrencyPtr,
 		StreamerMemoryLimitGiB: suiteStreamerMemLimitPtr,

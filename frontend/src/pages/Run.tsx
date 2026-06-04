@@ -55,11 +55,12 @@ export default function Run() {
   const [form, setForm] = useState(() => {
     const instance = searchParams.get("instance") || "";
     const isNeuron = /^(inf|trn)/.test(instance);
+    const fwParam = searchParams.get("framework") || "";
     return {
       model_hf_id: searchParams.get("model") || "",
       model_hf_revision: "main",
       instance_type_name: instance,
-      framework: isNeuron ? "vllm-neuron" : "vllm",
+      framework: fwParam || (isNeuron ? "vllm-neuron" : "vllm"),
       framework_version: "",
       tensor_parallel_degree: Number(searchParams.get("tp")) || 1,
       quantization: searchParams.get("quantization") || "",
@@ -79,6 +80,9 @@ export default function Run() {
       // is loaded from S3 — no user-facing on/off toggle anymore.
       streamer_concurrency: Number(searchParams.get("streamer_concurrency")) || 0,
       streamer_memory_limit_gib: Number(searchParams.get("streamer_memory_limit_gib")) || 0,
+      // SGLang scheduler knobs.
+      chunked_prefill_size: Number(searchParams.get("chunked_prefill_size")) || 0,
+      mem_fraction_static: Number(searchParams.get("mem_fraction_static")) || 0,
     };
   });
 
@@ -95,11 +99,15 @@ export default function Run() {
     listTestSuites().then(setTestSuites).catch(() => {});
     getToolVersions()
       .then((tv) => {
-        setForm((prev) => (prev.framework_version ? prev : { ...prev, framework_version: tv.framework_version }));
+        setForm((prev) => {
+          if (prev.framework_version) return prev;
+          const v = prev.framework === "sglang" ? tv.sglang_version : tv.framework_version;
+          return { ...prev, framework_version: v ?? "" };
+        });
       })
       .catch(() => {
         // Fall back to a sensible placeholder if the config endpoint fails.
-        setForm((prev) => (prev.framework_version ? prev : { ...prev, framework_version: "v0.19.0" }));
+        setForm((prev) => (prev.framework_version ? prev : { ...prev, framework_version: prev.framework === "sglang" ? "v0.4.10.post2-cu126" : "v0.19.0" }));
       });
   }, []);
 
@@ -472,6 +480,8 @@ export default function Run() {
           max_model_len: form.max_model_len || undefined,
           max_num_batched_tokens: form.max_num_batched_tokens || undefined,
           kv_cache_dtype: form.kv_cache_dtype || undefined,
+          chunked_prefill_size: form.chunked_prefill_size || undefined,
+          mem_fraction_static: form.mem_fraction_static || undefined,
           model_s3_uri: form.model_s3_uri || undefined,
           hf_token: form.hf_token || undefined,
           allow_host_mem_override: allowHostMemOverride || undefined,
@@ -667,7 +677,13 @@ export default function Run() {
               onChange={(e) => {
                 set("instance_type_name", e.target.value);
                 const isNeuron = /^(inf|trn)/.test(e.target.value);
-                set("framework", isNeuron ? "vllm-neuron" : "vllm");
+                // Force neuron framework on Neuron; on GPU keep the user's
+                // current framework if they picked sglang, else default vllm.
+                if (isNeuron) {
+                  set("framework", "vllm-neuron");
+                } else if (form.framework === "vllm-neuron") {
+                  set("framework", "vllm");
+                }
                 setRecommendation(null);
                 setMemoryBreakdown(null);
                 setOOMHistory(null);
@@ -695,15 +711,47 @@ export default function Run() {
               </optgroup>
             </select>
           </div>
+          {/* Framework selector — only shown on GPU instances. Neuron is
+              forced to vllm-neuron above. */}
+          {!/^(inf|trn)/.test(form.instance_type_name) && form.instance_type_name && (
+            <div>
+              <label className="eyebrow block mb-1.5">Framework</label>
+              <select
+                value={form.framework}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  set("framework", next);
+                  // Reset version when switching frameworks so the next
+                  // tool-versions fetch picks the right default.
+                  getToolVersions()
+                    .then((tv) => {
+                      set("framework_version", next === "sglang" ? tv.sglang_version : tv.framework_version);
+                    })
+                    .catch(() => {
+                      set("framework_version", next === "sglang" ? "v0.4.10.post2-cu126" : "v0.19.0");
+                    });
+                }}
+                className="input w-full"
+              >
+                <option value="vllm">vLLM</option>
+                <option value="sglang">SGLang</option>
+              </select>
+              <p className="mt-1 caption">
+                {form.framework === "sglang"
+                  ? "SGLang loads cached models from S3 via the Run:ai Streamer (same as vLLM)."
+                  : "vLLM with optional Run:ai Streamer for S3-cached weights."}
+              </p>
+            </div>
+          )}
           <div>
             <label className="eyebrow block mb-1.5">
-              vLLM Version
+              {form.framework === "sglang" ? "SGLang Version" : form.framework === "vllm-neuron" ? "vLLM-Neuron Version" : "vLLM Version"}
             </label>
             <input
               type="text"
               value={form.framework_version}
               onChange={(e) => set("framework_version", e.target.value)}
-              placeholder="v0.19.0"
+              placeholder={form.framework === "sglang" ? "v0.4.10.post2-cu126" : "v0.19.0"}
               className="input w-full"
             />
             <p className="mt-1 caption">
@@ -1114,6 +1162,46 @@ export default function Run() {
             </select>
           </div>
         </div>
+
+        {/* SGLang scheduler knobs. Only shown when framework is sglang. */}
+        {form.framework === "sglang" && (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+                Chunked Prefill Size
+                <InfoTip text="SGLang's per-iteration token budget for chunked prefill (--chunked-prefill-size). Controls how many tokens are processed in a single prefill step. Higher values reduce time-to-first-token for long prompts but increase memory usage. 0 = SGLang default (8192)." />
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={form.chunked_prefill_size}
+                onChange={(e) =>
+                  set("chunked_prefill_size", Number(e.target.value))
+                }
+                placeholder="0 = SGLang default"
+                className="input w-full"
+              />
+            </div>
+            <div>
+              <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+                Memory Fraction Static
+                <InfoTip text="Fraction of GPU memory allocated to the KV cache (--mem-fraction-static). Range 0.0–1.0. Lower values leave more memory for model weights and activations; higher values allow more concurrent requests. 0 = SGLang default (0.88)." />
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={form.mem_fraction_static}
+                onChange={(e) =>
+                  set("mem_fraction_static", Number(e.target.value))
+                }
+                placeholder="0 = SGLang default (0.88)"
+                className="input w-full"
+              />
+            </div>
+          </div>
+        )}
 
         {/* PRD-50: Run:ai streamer controls. Only shown when weights come
             from S3 — the streamer doesn't apply to HuggingFace downloads. */}

@@ -1452,6 +1452,7 @@ func (m *MockRepo) GetToolVersions(_ context.Context) (*ToolVersions, error) {
 		// SeedToolVersions still get a valid row.
 		return &ToolVersions{
 			FrameworkVersion:     "v0.19.0",
+			SGLangVersion:        "v0.4.10.post2-cu126",
 			InferencePerfVersion: "v0.2.0",
 			UpdatedAt:            time.Now(),
 		}, nil

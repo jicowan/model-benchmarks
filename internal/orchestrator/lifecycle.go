@@ -16,6 +16,7 @@ import (
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
 	"github.com/accelbench/accelbench/internal/oom"
+	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -184,8 +185,9 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	// can calibrate per-family multipliers. Starts now, stops on
 	// readiness (success or failure). Best-effort: a failed scrape
 	// leaves host_memory_peak_gib NULL and the run continues.
+	rtForMem, _ := runtime.Get(cfg.Request.Framework)
 	hostMemScraper := NewHostMemScraper(o.client, ns,
-		fmt.Sprintf("app.kubernetes.io/name=%s", modelName), "vllm")
+		fmt.Sprintf("app.kubernetes.io/name=%s", modelName), rtForMem.ContainerName())
 	hostMemScraper.Start(ctx)
 
 	// Phase 3: Wait for readiness.
@@ -384,6 +386,32 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		modelServiceAccount = "accelbench-model"
 	}
 
+	// Resolve container image, command, and args via the runtime interface.
+	rt, err := runtime.Get(cfg.Request.Framework)
+	if err != nil {
+		return err
+	}
+	rtImage := rt.ResolveImageOverride()
+	if rtImage == "" {
+		rtImage = rt.DefaultImage(cfg.Request.FrameworkVersion, os.Getenv("PULL_THROUGH_REGISTRY"))
+	}
+	rtCommand, rtArgs := rt.BuildArgs(runtime.ContainerParams{
+		ModelHfID:              cfg.Request.ModelHfID,
+		ModelS3URI:             modelS3URI,
+		UseRunaiStreamer:       useRunai,
+		TensorParallelDegree:   cfg.Request.TensorParallelDegree,
+		MaxModelLen:            cfg.Request.MaxModelLen,
+		MaxNumBatchedTokens:    cfg.Request.MaxNumBatchedTokens,
+		MaxNumSeqs:             0, // PRD-51
+		KVCacheDtype:           cfg.Request.KVCacheDtype,
+		Quantization:           derefStr(cfg.Request.Quantization),
+		StreamerConcurrency:    streamerConcurrency,
+		StreamerMemoryLimitGiB: streamerMemLimitGiB,
+		ChunkedPrefillSize:     cfg.Request.ChunkedPrefillSize,
+		MemFractionStatic:      cfg.Request.MemFractionStatic,
+		AcceleratorName:        cfg.InstanceType.AcceleratorName,
+	})
+
 	yamlStr, err := manifest.RenderModelDeployment(manifest.ModelDeploymentParams{
 		Name:                 name,
 		Namespace:            ns,
@@ -400,13 +428,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		InstanceFamily:       cfg.InstanceType.Family,
 		MaxModelLen:          cfg.Request.MaxModelLen,
 		MaxNumBatchedTokens:  cfg.Request.MaxNumBatchedTokens,
-		// PRD-51: don't emit --max-num-seqs. Wiring it to the form's
-		// concurrency field was wrong for open-loop scenarios where
-		// steady-state in-flight count is `rate × latency`, not a
-		// closed-loop worker count. Letting vLLM use its upstream
-		// default of 256 works for both open- and closed-loop loads;
-		// KV cache stays the binding constraint via PRD-47's math.
-		MaxNumSeqs:   0,
+		MaxNumSeqs:           0,
 		KVCacheDtype: cfg.Request.KVCacheDtype,
 		CPURequest:           cpuReq,
 		MemoryRequest:        memReq,
@@ -417,6 +439,11 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		StreamerMemoryLimitGiB:  streamerMemLimitGiB,
 		PullThroughRegistry:     os.Getenv("PULL_THROUGH_REGISTRY"),
 		VLLMImageOverride:       ResolveVLLMImageOverride(),
+		SGLangImageOverride:     ResolveSGLangImageOverride(),
+		RuntimeContainerName:    rt.ContainerName(),
+		RuntimeImage:            rtImage,
+		RuntimeCommand:          rtCommand,
+		RuntimeArgs:             rtArgs,
 	})
 	if err != nil {
 		return err

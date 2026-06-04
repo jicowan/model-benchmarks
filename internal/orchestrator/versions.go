@@ -41,3 +41,10 @@ func (o *Orchestrator) resolveInferencePerfImage(ctx context.Context) (string, e
 func ResolveVLLMImageOverride() string {
 	return os.Getenv("VLLM_IMAGE")
 }
+
+// ResolveSGLangImageOverride returns the value of the SGLANG_IMAGE env
+// var (empty when unset). Same purpose as ResolveVLLMImageOverride but
+// for SGLang model deployments.
+func ResolveSGLangImageOverride() string {
+	return os.Getenv("SGLANG_IMAGE")
+}

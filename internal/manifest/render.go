@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"strings"
 	"text/template"
 )
 
@@ -20,6 +21,34 @@ func init() {
 		// gibBytes converts a GiB count to bytes for env vars like
 		// RUNAI_STREAMER_MEMORY_LIMIT that expect a raw byte count.
 		"gibBytes":   func(gib int) int64 { return int64(gib) * 1024 * 1024 * 1024 },
+		// toYAMLStringList renders a Go []string as an inline YAML list
+		// e.g. ["python3"] → '["python3"]'
+		"toYAMLStringList": func(ss []string) string {
+			if len(ss) == 0 {
+				return "[]"
+			}
+			var b strings.Builder
+			b.WriteString("[")
+			for i, s := range ss {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString("\"")
+				b.WriteString(s)
+				b.WriteString("\"")
+			}
+			b.WriteString("]")
+			return b.String()
+		},
+		// yamlQuote quotes a string for use as a YAML scalar value.
+		// Uses single quotes for values containing double quotes (e.g. JSON),
+		// double quotes for everything else.
+		"yamlQuote": func(s string) string {
+			if strings.Contains(s, "\"") {
+				return "'" + s + "'"
+			}
+			return "\"" + s + "\""
+		},
 	}).ParseFS(templateFS, "templates/*.yaml.tmpl")
 	if err != nil {
 		panic(fmt.Sprintf("parse manifest templates: %v", err))
@@ -32,7 +61,7 @@ type ModelDeploymentParams struct {
 	Namespace            string
 	ModelHfID            string
 	HfToken              string
-	Framework            string // "vllm" or "vllm-neuron"
+	Framework            string // "vllm", "vllm-neuron", or "sglang"
 	FrameworkVersion     string
 	TensorParallelDegree int
 	Quantization         string // "fp16", "int8", "int4", or ""
@@ -57,10 +86,21 @@ type ModelDeploymentParams struct {
 	// FrameworkVersion template path is skipped. Plumbed from the
 	// VLLM_IMAGE env var on the API pod; see internal/orchestrator/versions.go.
 	VLLMImageOverride     string
+	// SGLangImageOverride: full SGLang image URI override. Plumbed from
+	// the SGLANG_IMAGE env var. Mirrors VLLMImageOverride for SGLang
+	// deployments; ignored unless Framework == "sglang".
+	SGLangImageOverride   string
 	// PRD-50: RUNAI_STREAMER_MEMORY_LIMIT env var (in GiB). Caps the
 	// streamer's shared CPU buffer during weight load. 0 = emit no env
 	// var, inheriting the upstream 40 GB default.
 	StreamerMemoryLimitGiB int
+
+	// Runtime interface fields: when Image is non-empty, the template uses
+	// these pre-computed values instead of the legacy framework conditionals.
+	RuntimeContainerName string   // k8s container name (e.g. "vllm", "sglang")
+	RuntimeImage         string   // fully resolved container image URI
+	RuntimeCommand       []string // container command (nil = use image entrypoint)
+	RuntimeArgs          []string // container args
 }
 
 // LoadgenJobParams holds values for rendering the load generator Job.
@@ -85,7 +125,8 @@ type LoadgenJobParams struct {
 	MemoryLimit   string
 }
 
-// CacheJobParams holds values for rendering the model cache Job.
+// CacheJobParams holds values for rendering the model cache Job, which
+// streams a HuggingFace model into the S3 cache bucket.
 type CacheJobParams struct {
 	Name       string
 	Namespace  string

@@ -1075,6 +1075,7 @@ function AuditLogAccordion() {
 function ToolVersionsCard() {
   const [tv, setTV] = useState<ToolVersions | null>(null);
   const [framework, setFramework] = useState("");
+  const [sglang, setSGLang] = useState("");
   const [inferencePerf, setInferencePerf] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1087,6 +1088,7 @@ function ToolVersionsCard() {
       const fresh = await getToolVersions();
       setTV(fresh);
       setFramework(fresh.framework_version);
+      setSGLang(fresh.sglang_version);
       setInferencePerf(fresh.inference_perf_version);
     } catch (err: any) {
       setError(err.message || "Failed to load tool versions");
@@ -1103,10 +1105,12 @@ function ToolVersionsCard() {
     try {
       const fresh = await putToolVersions({
         framework_version: framework.trim(),
+        sglang_version: sglang.trim(),
         inference_perf_version: inferencePerf.trim(),
       });
       setTV(fresh);
       setFramework(fresh.framework_version);
+      setSGLang(fresh.sglang_version);
       setInferencePerf(fresh.inference_perf_version);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
@@ -1120,6 +1124,7 @@ function ToolVersionsCard() {
   const dirty =
     tv != null &&
     (framework.trim() !== tv.framework_version ||
+      sglang.trim() !== tv.sglang_version ||
       inferencePerf.trim() !== tv.inference_perf_version);
 
   return (
@@ -1132,7 +1137,7 @@ function ToolVersionsCard() {
           {error && <span className="font-mono text-[11.5px] text-danger">{error}</span>}
           <button
             onClick={handleSave}
-            disabled={saving || loading || !dirty || !framework.trim() || !inferencePerf.trim()}
+            disabled={saving || loading || !dirty || !framework.trim() || !sglang.trim() || !inferencePerf.trim()}
             className="btn btn-primary"
           >
             {saving ? "SAVING…" : "SAVE"}
@@ -1144,11 +1149,16 @@ function ToolVersionsCard() {
         <div className="panel p-5 caption">Loading…</div>
       ) : (
         <div className="panel p-5">
-          <div className="grid grid-cols-2 gap-4 mb-3">
+          <div className="grid grid-cols-3 gap-4 mb-3">
             <LabeledInput
               label="Framework Version (vLLM)"
               value={framework}
               onChange={setFramework}
+            />
+            <LabeledInput
+              label="SGLang Version"
+              value={sglang}
+              onChange={setSGLang}
             />
             <LabeledInput
               label="Inference-Perf Version"
@@ -1158,7 +1168,7 @@ function ToolVersionsCard() {
           </div>
           <p className="meta">
             Applies to all new benchmark runs. Existing runs retain the version they were submitted with.
-            vLLM can still be overridden per-run from the new-benchmark page; inference-perf is platform-wide.
+            vLLM/SGLang can still be overridden per-run from the new-benchmark page; inference-perf is platform-wide.
           </p>
           {tv?.env_override_active && (
             <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
@@ -1181,6 +1191,18 @@ function ToolVersionsCard() {
               <p className="caption mt-1">
                 The API pod has the <code>VLLM_IMAGE</code> env var set — new runs deploy this image verbatim.
                 Edits to Framework Version above will be saved but ignored at runtime until the env var is removed.
+              </p>
+            </div>
+          )}
+          {tv?.sglang_env_override_active && (
+            <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
+              <div className="caption text-warn mb-1">SGLANG_IMAGE ENV OVERRIDE ACTIVE</div>
+              <div className="font-mono text-[11.5px] text-ink-0 break-all">
+                {tv.sglang_env_override_image}
+              </div>
+              <p className="caption mt-1">
+                The API pod has the <code>SGLANG_IMAGE</code> env var set — SGLang runs deploy this image verbatim.
+                Edits to SGLang Version above will be saved but ignored at runtime until the env var is removed.
               </p>
             </div>
           )}

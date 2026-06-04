@@ -3,6 +3,8 @@ package manifest
 import (
 	"strings"
 	"testing"
+
+	"github.com/accelbench/accelbench/internal/runtime"
 )
 
 func TestRenderModelDeployment_GPU(t *testing.T) {
@@ -558,5 +560,311 @@ func TestRenderModelDeployment_MultiDocument(t *testing.T) {
 	}
 	if !strings.Contains(out, "---") {
 		t.Error("output missing YAML document separator")
+	}
+}
+
+func TestRenderModelDeployment_SGLang(t *testing.T) {
+	params := ModelDeploymentParams{
+		Name:                 "bench-sglang",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "sglang",
+		FrameworkVersion:     "v0.4.10.post2-cu126",
+		TensorParallelDegree: 2,
+		Quantization:         "fp8",
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     2,
+		AcceleratorMemoryGiB: 80,
+		InstanceTypeName:     "g6e.12xlarge",
+		InstanceFamily:       "g6e",
+		MaxModelLen:          8192,
+		CPURequest:           "8",
+		MemoryRequest:        "32Gi",
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	for _, want := range []string{
+		"name: sglang",
+		"image: lmsysorg/sglang:v0.4.10.post2-cu126",
+		"sglang.launch_server",
+		"--model-path",
+		"meta-llama/Llama-3.1-8B-Instruct",
+		"--tp-size",
+		`"2"`,
+		"--quantization",
+		"fp8",
+		"--context-length",
+		`"8192"`,
+		`nvidia.com/gpu: "2"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q", want)
+		}
+	}
+
+	// Should NOT contain vLLM-specific args.
+	if strings.Contains(out, "vllm/vllm-openai") {
+		t.Error("sglang manifest must not reference vllm image")
+	}
+	if strings.Contains(out, "--tensor-parallel-size") {
+		t.Error("sglang manifest must use --tp-size, not vLLM's --tensor-parallel-size")
+	}
+}
+
+func TestRenderModelDeployment_SGLangImageOverride(t *testing.T) {
+	params := ModelDeploymentParams{
+		Name:                 "bench-sglang-override",
+		Namespace:            "accelbench",
+		ModelHfID:            "Qwen/Qwen2.5-7B",
+		Framework:            "sglang",
+		FrameworkVersion:     "v0.4.10.post2-cu126",
+		TensorParallelDegree: 1,
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     1,
+		InstanceTypeName:     "g6.xlarge",
+		InstanceFamily:       "g6",
+		CPURequest:           "4",
+		MemoryRequest:        "16Gi",
+		SGLangImageOverride:  "123456789012.dkr.ecr.us-east-2.amazonaws.com/internal/sglang:custom",
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+	if !strings.Contains(out, "image: 123456789012.dkr.ecr.us-east-2.amazonaws.com/internal/sglang:custom") {
+		t.Error("SGLangImageOverride was ignored")
+	}
+	if strings.Contains(out, "lmsysorg/sglang:v0.4.10.post2-cu126") {
+		t.Error("override should suppress the default lmsysorg image")
+	}
+}
+
+func TestRenderModelDeployment_SGLangRunaiStreamer(t *testing.T) {
+	// SGLang supports the Run:ai streamer natively for s3:// model
+	// paths. When a run is dispatched against a cached (S3-backed)
+	// model, the manifest must pass the S3 URI as --model-path,
+	// add --load-format runai_streamer, and surface streamer
+	// concurrency + memory limit through --model-loader-extra-config.
+	params := ModelDeploymentParams{
+		Name:                   "bench-sglang-s3",
+		Namespace:              "accelbench",
+		ModelHfID:              "meta-llama/Llama-3.1-8B-Instruct",
+		ModelS3URI:             "s3://accelbench-models-111111111111/models/meta-llama/Llama-3.1-8B-Instruct",
+		Framework:              "sglang",
+		FrameworkVersion:       "v0.4.10.post2-cu126",
+		TensorParallelDegree:   2,
+		AcceleratorType:        "gpu",
+		AcceleratorCount:       2,
+		InstanceTypeName:       "g6e.12xlarge",
+		InstanceFamily:         "g6e",
+		CPURequest:             "8",
+		MemoryRequest:          "32Gi",
+		UseRunaiStreamer:       true,
+		StreamerConcurrency:    8,
+		StreamerMemoryLimitGiB: 16,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+	for _, want := range []string{
+		"sglang.launch_server",
+		"s3://accelbench-models-111111111111/models/meta-llama/Llama-3.1-8B-Instruct",
+		`"runai_streamer"`,
+		`"distributed":true`,
+		`"concurrency":8`,
+		`"memory_limit":17179869184`, // 16 GiB in bytes
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n---\n%s", want, out)
+		}
+	}
+	// Plain HF id must NOT appear as a model-path arg when streaming.
+	if strings.Contains(out, `- "meta-llama/Llama-3.1-8B-Instruct"`) {
+		t.Error("HF id leaked into args even though we're streaming from S3")
+	}
+}
+
+// TestRenderModelDeployment_RuntimePath_VLLMgpu verifies the runtime interface
+// path produces output matching the legacy template assertions.
+func TestRenderModelDeployment_RuntimePath_VLLMgpu(t *testing.T) {
+	rt, _ := runtime.Get("vllm")
+	image := rt.DefaultImage("v0.6.0", "")
+	cmd, args := rt.BuildArgs(runtime.ContainerParams{
+		ModelHfID:            "meta-llama/Llama-3.1-70B-Instruct",
+		TensorParallelDegree: 8,
+		Quantization:         "fp16",
+	})
+
+	params := ModelDeploymentParams{
+		Name:                 "bench-test123",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-70B-Instruct",
+		HfToken:              "hf_test_token",
+		Framework:            "vllm",
+		FrameworkVersion:     "v0.6.0",
+		TensorParallelDegree: 8,
+		Quantization:         "fp16",
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     8,
+		AcceleratorMemoryGiB: 640,
+		InstanceTypeName:     "p5.48xlarge",
+		InstanceFamily:       "p5",
+		CPURequest:           "8",
+		MemoryRequest:        "32Gi",
+		RuntimeContainerName: rt.ContainerName(),
+		RuntimeImage:         image,
+		RuntimeCommand:       cmd,
+		RuntimeArgs:          args,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"deployment name", "name: bench-test123"},
+		{"namespace", "namespace: accelbench"},
+		{"model arg", "meta-llama/Llama-3.1-70B-Instruct"},
+		{"vllm image", "vllm/vllm-openai:v0.6.0"},
+		{"gpu toleration", "nvidia.com/gpu"},
+		{"tensor parallel", `"8"`},
+		{"quantization dtype", `"float16"`},
+		{"hf token", "hf_test_token"},
+		{"service port 8000", "port: 8000"},
+		{"readiness probe", "/health"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output does not contain %q\n---\n%s", c.name, c.want, out)
+		}
+	}
+}
+
+// TestRenderModelDeployment_RuntimePath_SGLang verifies the SGLang runtime
+// interface path.
+func TestRenderModelDeployment_RuntimePath_SGLang(t *testing.T) {
+	rt, _ := runtime.Get("sglang")
+	image := rt.DefaultImage("v0.4.10.post2-cu126", "")
+	cmd, args := rt.BuildArgs(runtime.ContainerParams{
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		TensorParallelDegree: 2,
+		Quantization:         "fp8",
+		MaxModelLen:          8192,
+	})
+
+	params := ModelDeploymentParams{
+		Name:                 "bench-sglang-rt",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "sglang",
+		FrameworkVersion:     "v0.4.10.post2-cu126",
+		TensorParallelDegree: 2,
+		Quantization:         "fp8",
+		AcceleratorType:      "gpu",
+		AcceleratorCount:     2,
+		AcceleratorMemoryGiB: 80,
+		InstanceTypeName:     "g6e.12xlarge",
+		InstanceFamily:       "g6e",
+		MaxModelLen:          8192,
+		CPURequest:           "8",
+		MemoryRequest:        "32Gi",
+		RuntimeContainerName: rt.ContainerName(),
+		RuntimeImage:         image,
+		RuntimeCommand:       cmd,
+		RuntimeArgs:          args,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	for _, want := range []string{
+		"name: sglang",
+		"image: lmsysorg/sglang:v0.4.10.post2-cu126",
+		"sglang.launch_server",
+		"--model-path",
+		"meta-llama/Llama-3.1-8B-Instruct",
+		"--tp-size",
+		`"2"`,
+		"--quantization",
+		"fp8",
+		"--context-length",
+		`"8192"`,
+		`nvidia.com/gpu: "2"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n---\n%s", want, out)
+		}
+	}
+
+	if strings.Contains(out, "vllm/vllm-openai") {
+		t.Error("sglang manifest must not reference vllm image")
+	}
+}
+
+// TestRenderModelDeployment_RuntimePath_Neuron verifies the Neuron runtime
+// interface path.
+func TestRenderModelDeployment_RuntimePath_Neuron(t *testing.T) {
+	rt, _ := runtime.Get("vllm-neuron")
+	image := rt.DefaultImage("v0.6.0", "")
+	cmd, args := rt.BuildArgs(runtime.ContainerParams{
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		TensorParallelDegree: 2,
+	})
+
+	params := ModelDeploymentParams{
+		Name:                 "bench-neuron-rt",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "vllm-neuron",
+		FrameworkVersion:     "v0.6.0",
+		TensorParallelDegree: 2,
+		AcceleratorType:      "neuron",
+		AcceleratorCount:     2,
+		AcceleratorMemoryGiB: 32,
+		InstanceTypeName:     "inf2.xlarge",
+		InstanceFamily:       "inf2",
+		CPURequest:           "4",
+		MemoryRequest:        "16Gi",
+		RuntimeContainerName: rt.ContainerName(),
+		RuntimeImage:         image,
+		RuntimeCommand:       cmd,
+		RuntimeArgs:          args,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"neuron image", "public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04"},
+		{"neuron toleration", "aws.amazon.com/neuron"},
+		{"neuron resource", `aws.amazon.com/neuron: "1"`},
+		{"command vllm", `["vllm"]`},
+		{"serve arg", `"serve"`},
+		{"block-size", `"32"`},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output does not contain %q\n---\n%s", c.name, c.want, out)
+		}
 	}
 }

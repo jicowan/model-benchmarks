@@ -10,6 +10,7 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
+	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/testsuite"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -139,8 +140,9 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	// PRD-47: scrape peak host memory during the shared load phase.
 	// Suites reuse one model deployment across scenarios, so a single
 	// peak is both sufficient and correct.
+	rtForMem, _ := runtime.Get(req.Framework)
 	hostMemScraper := NewHostMemScraper(o.client, ns,
-		fmt.Sprintf("app.kubernetes.io/name=%s", modelName), "vllm")
+		fmt.Sprintf("app.kubernetes.io/name=%s", modelName), rtForMem.ContainerName())
 	hostMemScraper.Start(ctx)
 
 	// Wait for model readiness

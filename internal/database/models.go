@@ -49,6 +49,9 @@ type BenchmarkRun struct {
 	// and UI treat null as "flag omitted, vLLM picked its default."
 	MaxNumBatchedTokens   *int       `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype          *string    `json:"kv_cache_dtype,omitempty"`
+	// SGLang scheduler knobs. Null on non-SGLang runs and historical rows.
+	ChunkedPrefillSize  *int     `json:"chunked_prefill_size,omitempty"`
+	MemFractionStatic   *float64 `json:"mem_fraction_static,omitempty"`
 	// PRD-50: Run:ai model streamer knobs. Null on historical rows.
 	// streamer_mode "off" disables the streamer even for S3 models.
 	// streamer_concurrency 0 means "use default (16)".
@@ -169,6 +172,9 @@ type RunRequest struct {
 	// the recommender's choice if available, else vLLM's default."
 	MaxNumBatchedTokens  int     `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype         string  `json:"kv_cache_dtype,omitempty"`
+	// SGLang scheduler knobs. Zero means "use SGLang default".
+	ChunkedPrefillSize   int     `json:"chunked_prefill_size,omitempty"`
+	MemFractionStatic    float64 `json:"mem_fraction_static,omitempty"`
 	// PRD-50: Run:ai streamer knobs. Empty string / 0 means "use default".
 	StreamerMode           string `json:"streamer_mode,omitempty"`             // "" | "auto" | "off"
 	StreamerConcurrency    int    `json:"streamer_concurrency,omitempty"`      // 0 → 16
@@ -198,6 +204,9 @@ type TestSuiteRun struct {
 	// PRD-46: vLLM scheduler knobs (see BenchmarkRun).
 	MaxNumBatchedTokens *int    `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype        *string `json:"kv_cache_dtype,omitempty"`
+	// SGLang scheduler knobs (see BenchmarkRun).
+	ChunkedPrefillSize *int     `json:"chunked_prefill_size,omitempty"`
+	MemFractionStatic  *float64 `json:"mem_fraction_static,omitempty"`
 	// PRD-50: Run:ai streamer knobs (see BenchmarkRun).
 	StreamerMode           *string `json:"streamer_mode,omitempty"`
 	StreamerConcurrency    *int    `json:"streamer_concurrency,omitempty"`
@@ -284,6 +293,9 @@ type SuiteRunRequest struct {
 	// PRD-46: vLLM scheduler knobs (see RunRequest).
 	MaxNumBatchedTokens  int      `json:"max_num_batched_tokens,omitempty"`
 	KVCacheDtype         string   `json:"kv_cache_dtype,omitempty"`
+	// SGLang scheduler knobs (see RunRequest).
+	ChunkedPrefillSize   int     `json:"chunked_prefill_size,omitempty"`
+	MemFractionStatic    float64 `json:"mem_fraction_static,omitempty"`
 	// PRD-50: Run:ai streamer knobs (see RunRequest).
 	StreamerMode           string `json:"streamer_mode,omitempty"`
 	StreamerConcurrency    int    `json:"streamer_concurrency,omitempty"`
@@ -315,6 +327,9 @@ type CacheModelRequest struct {
 	HfToken    string `json:"hf_token,omitempty"`
 }
 
+// RegisterCustomModelRequest registers an existing model directory in S3 as
+// a cached entry without running a HF download. The caller must already have
+// uploaded an HF-snapshot-layout directory to the given S3 URI.
 type RegisterCustomModelRequest struct {
 	S3URI       string `json:"s3_uri"`
 	DisplayName string `json:"display_name"`
@@ -345,10 +360,12 @@ type CatalogSeedDefaults struct {
 }
 
 // ToolVersions is the singleton row holding platform-wide tool versions
-// (PRD-34). framework_version is the vLLM image tag; inference_perf_version
-// is the inference-perf image tag. Both apply to every new benchmark run.
+// (PRD-34). framework_version is the vLLM image tag; sglang_version is
+// the SGLang image tag (used when a run's framework="sglang");
+// inference_perf_version is the inference-perf image tag.
 type ToolVersions struct {
 	FrameworkVersion     string    `json:"framework_version"`
+	SGLangVersion        string    `json:"sglang_version"`
 	InferencePerfVersion string    `json:"inference_perf_version"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }

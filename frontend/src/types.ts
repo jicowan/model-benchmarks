@@ -495,6 +495,8 @@ export interface SuiteRunRequest {
   max_model_len?: number;
   max_num_batched_tokens?: number;
   kv_cache_dtype?: string;
+  chunked_prefill_size?: number;
+  mem_fraction_static?: number;
   model_s3_uri?: string;
   hf_token?: string;
   // PRD-47 PR #6: skip the host-memory feasibility check when set.
@@ -663,9 +665,10 @@ export interface CatalogSeedDefaults {
   updated_at?: string;
 }
 
-// PRD-34: tool versions (vLLM + inference-perf) singleton.
+// PRD-34: tool versions (vLLM + sglang + inference-perf) singleton.
 export interface ToolVersions {
   framework_version: string;
+  sglang_version: string;
   inference_perf_version: string;
   updated_at: string;
   env_override_active: boolean;
@@ -674,6 +677,9 @@ export interface ToolVersions {
   // is still saved but the orchestrator ignores it at runtime.
   vllm_env_override_active: boolean;
   vllm_env_override_image?: string;
+  // SGLANG_IMAGE env var status (mirror of VLLM_IMAGE for SGLang runs).
+  sglang_env_override_active: boolean;
+  sglang_env_override_image?: string;
 }
 
 export interface CatalogModelEntry {

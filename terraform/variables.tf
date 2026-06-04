@@ -85,8 +85,8 @@ variable "manage_cluster" {
 
     See docs/brownfield.md for a worked example.
   EOT
-  type    = bool
-  default = true
+  type        = bool
+  default     = true
 }
 
 variable "cluster_name" {
