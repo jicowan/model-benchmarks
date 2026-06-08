@@ -17,13 +17,13 @@ locals {
 
   # PRD-53: cluster attributes abstracted so downstream modules don't
   # need to know whether they came from module.eks or a data source.
-  cluster_endpoint = var.manage_cluster ? module.eks[0].cluster_endpoint : data.aws_eks_cluster.existing[0].endpoint
-  cluster_ca_data  = var.manage_cluster ? module.eks[0].cluster_certificate_authority_data : data.aws_eks_cluster.existing[0].certificate_authority[0].data
-  oidc_issuer_url  = var.manage_cluster ? module.eks[0].cluster_oidc_issuer_url : data.aws_eks_cluster.existing[0].identity[0].oidc[0].issuer
-  oidc_provider_arn = var.manage_cluster ? module.eks[0].oidc_provider_arn : data.aws_iam_openid_connect_provider.existing[0].arn
+  cluster_endpoint       = var.manage_cluster ? module.eks[0].cluster_endpoint : data.aws_eks_cluster.existing[0].endpoint
+  cluster_ca_data        = var.manage_cluster ? module.eks[0].cluster_certificate_authority_data : data.aws_eks_cluster.existing[0].certificate_authority[0].data
+  oidc_issuer_url        = var.manage_cluster ? module.eks[0].cluster_oidc_issuer_url : data.aws_eks_cluster.existing[0].identity[0].oidc[0].issuer
+  oidc_provider_arn      = var.manage_cluster ? module.eks[0].oidc_provider_arn : data.aws_iam_openid_connect_provider.existing[0].arn
   node_security_group_id = var.manage_cluster ? module.eks[0].node_security_group_id : data.aws_eks_cluster.existing[0].vpc_config[0].cluster_security_group_id
-  vpc_id          = var.manage_cluster ? module.vpc[0].vpc_id : var.vpc_id
-  private_subnets = var.manage_cluster ? module.vpc[0].private_subnets : var.private_subnet_ids
+  vpc_id                 = var.manage_cluster ? module.vpc[0].vpc_id : var.vpc_id
+  private_subnets        = var.manage_cluster ? module.vpc[0].private_subnets : var.private_subnet_ids
 }
 
 # PRD-53: brownfield precondition. manage_cluster=false requires the
@@ -80,9 +80,9 @@ resource "aws_ec2_tag" "cluster_sg_discovery" {
 # landed in v1.0 and were polished through v1.9. The NodePool YAML
 # will render but silently degrade on older versions.
 data "kubernetes_resource" "karpenter_deployment" {
-  count        = !var.manage_cluster && !var.install_karpenter_controller ? 1 : 0
-  api_version  = "apps/v1"
-  kind         = "Deployment"
+  count       = !var.manage_cluster && !var.install_karpenter_controller ? 1 : 0
+  api_version = "apps/v1"
+  kind        = "Deployment"
   metadata {
     name      = "karpenter"
     namespace = "kube-system"
@@ -96,7 +96,7 @@ check "karpenter_version" {
       var.install_karpenter_controller ||
       length(data.kubernetes_resource.karpenter_deployment) == 0 ||
       can(regex(":(1\\.(9|[1-9][0-9])|[2-9]\\.)",
-        try(data.kubernetes_resource.karpenter_deployment[0].object.spec.template.spec.containers[0].image, "")))
+      try(data.kubernetes_resource.karpenter_deployment[0].object.spec.template.spec.containers[0].image, "")))
     )
     error_message = "AccelBench requires Karpenter >= v1.9 when reusing an existing controller (install_karpenter_controller=false). Upgrade the operator's Karpenter, or set install_karpenter_controller=true to have Terraform install a compatible version."
   }

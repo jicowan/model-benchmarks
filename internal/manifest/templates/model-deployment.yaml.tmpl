@@ -41,8 +41,42 @@ spec:
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .InstanceTypeName }}
       containers:
-        - name: vllm
-{{- if eq .AcceleratorType "gpu" }}
+{{- if .RuntimeImage }}
+        - name: {{ .RuntimeContainerName }}
+          image: {{ .RuntimeImage }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: HF_TOKEN
+              value: "{{ .HfToken }}"
+{{- if and (eq .AcceleratorType "gpu") (gt .TensorParallelDegree 1) }}
+            - name: NCCL_DEBUG
+              value: "INFO"
+            - name: NCCL_P2P_LEVEL
+              value: "NVL"
+{{- end }}
+{{- if and .UseRunaiStreamer (gt .StreamerMemoryLimitGiB 0) }}
+            - name: RUNAI_STREAMER_MEMORY_LIMIT
+              value: "{{ gibBytes .StreamerMemoryLimitGiB }}"
+{{- end }}
+{{- if .RuntimeCommand }}
+          command: {{ toYAMLStringList .RuntimeCommand }}
+{{- end }}
+          args:
+{{- range .RuntimeArgs }}
+            - {{ . | yamlQuote }}
+{{- end }}
+{{- else }}
+        - name: {{ if eq .Framework "sglang" }}sglang{{ else }}vllm{{ end }}
+{{- if eq .Framework "sglang" }}
+{{- if .SGLangImageOverride }}
+          image: {{ .SGLangImageOverride }}
+{{- else }}
+          image: lmsysorg/sglang:{{ .FrameworkVersion }}
+{{- end }}
+{{- else if eq .AcceleratorType "gpu" }}
 {{- if .VLLMImageOverride }}
           image: {{ .VLLMImageOverride }}
 {{- else }}
@@ -65,12 +99,56 @@ spec:
               value: "NVL"
 {{- end }}
 {{- if and .UseRunaiStreamer (gt .StreamerMemoryLimitGiB 0) }}
-            # PRD-50: cap the Run:ai streamer's shared CPU buffer. The
-            # upstream default is 40 GB, which exceeds small-instance RAM.
             - name: RUNAI_STREAMER_MEMORY_LIMIT
               value: "{{ gibBytes .StreamerMemoryLimitGiB }}"
 {{- end }}
-{{- if eq .AcceleratorType "gpu" }}
+{{- if eq .Framework "sglang" }}
+          command: ["python3"]
+          args:
+            - "-m"
+            - "sglang.launch_server"
+            - "--model-path"
+{{- if .UseRunaiStreamer }}
+            {{- /* SGLang auto-detects runai_streamer from an s3:// path
+                   but we pass --load-format explicitly to match what
+                   the vLLM branch does and to make the manifest export
+                   self-documenting. Tuning is JSON in
+                   --model-loader-extra-config (concurrency,
+                   memory_limit bytes, distributed). */}}
+            - "{{ .ModelS3URI }}"
+            - "--load-format"
+            - "runai_streamer"
+            - "--model-loader-extra-config"
+            - '{"distributed":true,"concurrency":{{ if gt .StreamerConcurrency 0 }}{{ .StreamerConcurrency }}{{ else }}16{{ end }}{{ if gt .StreamerMemoryLimitGiB 0 }},"memory_limit":{{ gibBytes .StreamerMemoryLimitGiB }}{{ end }}}'
+{{- else }}
+            - "{{ .ModelHfID }}"
+{{- end }}
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--tp-size"
+            - "{{ .TensorParallelDegree }}"
+            - "--trust-remote-code"
+{{- if eq .Quantization "fp8" }}
+            - "--quantization"
+            - "fp8"
+{{- else if eq .Quantization "int8" }}
+            - "--quantization"
+            - "w8a8_int8"
+{{- else if eq .Quantization "int4" }}
+            - "--quantization"
+            - "awq"
+{{- end }}
+{{- if gt .MaxModelLen 0 }}
+            - "--context-length"
+            - "{{ .MaxModelLen }}"
+{{- end }}
+{{- if gt .MaxNumSeqs 0 }}
+            - "--max-running-requests"
+            - "{{ .MaxNumSeqs }}"
+{{- end }}
+{{- else if eq .AcceleratorType "gpu" }}
           args:
 {{- if .UseRunaiStreamer }}
             - "--model"
@@ -145,6 +223,7 @@ spec:
             - "{{ .MaxNumSeqs }}"
 {{- end }}
 {{- end }}
+{{- end }}
           resources:
             requests:
               cpu: {{ .CPURequest }}
@@ -176,6 +255,7 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
 {{- if eq .AcceleratorType "gpu" }}
             failureThreshold: 120
 {{- else }}

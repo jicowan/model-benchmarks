@@ -60,6 +60,53 @@ vllm:num_preemptions_total{model_name="llama"} 3
 	}
 }
 
+func TestParsePrometheusMetricsExtended_SGLang(t *testing.T) {
+	input := `# HELP sglang:token_usage The token usage
+# TYPE sglang:token_usage gauge
+sglang:token_usage{} 0.62
+# HELP sglang:num_queue_reqs The number of requests in the waiting queue
+# TYPE sglang:num_queue_reqs gauge
+sglang:num_queue_reqs{} 3
+# HELP sglang:num_running_reqs The number of running requests
+# TYPE sglang:num_running_reqs gauge
+sglang:num_running_reqs{} 4
+# HELP sglang:prompt_tokens_total Number of prefill tokens processed
+# TYPE sglang:prompt_tokens_total counter
+sglang:prompt_tokens_total{} 8000
+# HELP sglang:generation_tokens_total Number of generation tokens processed
+# TYPE sglang:generation_tokens_total counter
+sglang:generation_tokens_total{} 4000
+# HELP sglang:cache_hit_rate The cache hit rate
+# TYPE sglang:cache_hit_rate gauge
+sglang:cache_hit_rate{} 0.35
+`
+
+	result := parsePrometheusMetricsExtended(strings.NewReader(input))
+
+	if result.utilization != 0.62 {
+		t.Errorf("utilization = %v, want 0.62", result.utilization)
+	}
+	if result.waiting != 3 {
+		t.Errorf("waiting = %v, want 3", result.waiting)
+	}
+	if result.running != 4 {
+		t.Errorf("running = %v, want 4", result.running)
+	}
+	if result.promptTokens != 8000 {
+		t.Errorf("promptTokens = %v, want 8000", result.promptTokens)
+	}
+	if result.genTokens != 4000 {
+		t.Errorf("genTokens = %v, want 4000", result.genTokens)
+	}
+	// SGLang cache_hit_rate is a gauge (0.0–1.0) scaled to percentage
+	if result.prefixHits != 35 {
+		t.Errorf("prefixHits = %v, want 35 (0.35 * 100)", result.prefixHits)
+	}
+	if result.prefixQueries != 100 {
+		t.Errorf("prefixQueries = %v, want 100", result.prefixQueries)
+	}
+}
+
 func TestParsePrometheusMetricsExtended_Missing(t *testing.T) {
 	input := `# Only GPU cache metric
 vllm:gpu_cache_usage_perc{model_name="llama"} 0.5

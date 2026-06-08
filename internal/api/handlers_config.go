@@ -435,6 +435,7 @@ func (s *Server) handleListAuditLog(w http.ResponseWriter, r *http.Request) {
 
 type toolVersionsResponse struct {
 	FrameworkVersion     string    `json:"framework_version"`
+	SGLangVersion        string    `json:"sglang_version"`
 	InferencePerfVersion string    `json:"inference_perf_version"`
 	UpdatedAt            time.Time `json:"updated_at"`
 	// EnvOverrideActive is true when the orchestrator will ignore
@@ -447,6 +448,10 @@ type toolVersionsResponse struct {
 	// into benchmark_runs for audit — it doesn't pick the image.
 	VLLMEnvOverrideActive bool   `json:"vllm_env_override_active"`
 	VLLMEnvOverrideImage  string `json:"vllm_env_override_image,omitempty"`
+	// SGLANG_IMAGE env var status — sibling of VLLM_IMAGE for SGLang
+	// runs. Same semantics: when set, sglang_version is only audit data.
+	SGLangEnvOverrideActive bool   `json:"sglang_env_override_active"`
+	SGLangEnvOverrideImage  string `json:"sglang_env_override_image,omitempty"`
 }
 
 func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
@@ -462,19 +467,24 @@ func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
 	vllmEnvImage := os.Getenv("VLLM_IMAGE")
+	sglangEnvImage := os.Getenv("SGLANG_IMAGE")
 	s.writeCachedJSON(w, cacheKey, http.StatusOK, toolVersionsResponse{
-		FrameworkVersion:      tv.FrameworkVersion,
-		InferencePerfVersion:  tv.InferencePerfVersion,
-		UpdatedAt:             tv.UpdatedAt,
-		EnvOverrideActive:     envImage != "",
-		EnvOverrideImage:      envImage,
-		VLLMEnvOverrideActive: vllmEnvImage != "",
-		VLLMEnvOverrideImage:  vllmEnvImage,
+		FrameworkVersion:        tv.FrameworkVersion,
+		SGLangVersion:           tv.SGLangVersion,
+		InferencePerfVersion:    tv.InferencePerfVersion,
+		UpdatedAt:               tv.UpdatedAt,
+		EnvOverrideActive:       envImage != "",
+		EnvOverrideImage:        envImage,
+		VLLMEnvOverrideActive:   vllmEnvImage != "",
+		VLLMEnvOverrideImage:    vllmEnvImage,
+		SGLangEnvOverrideActive: sglangEnvImage != "",
+		SGLangEnvOverrideImage:  sglangEnvImage,
 	})
 }
 
 type putToolVersionsRequest struct {
 	FrameworkVersion     string `json:"framework_version"`
+	SGLangVersion        string `json:"sglang_version"`
 	InferencePerfVersion string `json:"inference_perf_version"`
 }
 
@@ -485,6 +495,7 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.FrameworkVersion = strings.TrimSpace(req.FrameworkVersion)
+	req.SGLangVersion = strings.TrimSpace(req.SGLangVersion)
 	req.InferencePerfVersion = strings.TrimSpace(req.InferencePerfVersion)
 	if req.FrameworkVersion == "" {
 		writeError(w, http.StatusBadRequest, "framework_version is required")
@@ -494,9 +505,17 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "inference_perf_version is required")
 		return
 	}
+	// SGLang version: empty means "keep existing". The migration seeds
+	// a default so a missing field on a fresh PUT is benign.
+	if req.SGLangVersion == "" {
+		if cur, err := s.repo.GetToolVersions(r.Context()); err == nil && cur != nil {
+			req.SGLangVersion = cur.SGLangVersion
+		}
+	}
 
 	tv := &database.ToolVersions{
 		FrameworkVersion:     req.FrameworkVersion,
+		SGLangVersion:        req.SGLangVersion,
 		InferencePerfVersion: req.InferencePerfVersion,
 	}
 	if err := s.repo.PutToolVersions(r.Context(), tv); err != nil {
@@ -504,20 +523,24 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/tool-versions",
-		fmt.Sprintf("framework_version=%s inference_perf_version=%s",
-			req.FrameworkVersion, req.InferencePerfVersion))
+		fmt.Sprintf("framework_version=%s sglang_version=%s inference_perf_version=%s",
+			req.FrameworkVersion, req.SGLangVersion, req.InferencePerfVersion))
 	s.cache.Invalidate("tool-versions")
 
 	fresh, _ := s.repo.GetToolVersions(r.Context())
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
 	vllmEnvImage := os.Getenv("VLLM_IMAGE")
+	sglangEnvImage := os.Getenv("SGLANG_IMAGE")
 	writeJSON(w, http.StatusOK, toolVersionsResponse{
-		FrameworkVersion:      fresh.FrameworkVersion,
-		InferencePerfVersion:  fresh.InferencePerfVersion,
-		UpdatedAt:             fresh.UpdatedAt,
-		EnvOverrideActive:     envImage != "",
-		EnvOverrideImage:      envImage,
-		VLLMEnvOverrideActive: vllmEnvImage != "",
-		VLLMEnvOverrideImage:  vllmEnvImage,
+		FrameworkVersion:        fresh.FrameworkVersion,
+		SGLangVersion:           fresh.SGLangVersion,
+		InferencePerfVersion:    fresh.InferencePerfVersion,
+		UpdatedAt:               fresh.UpdatedAt,
+		EnvOverrideActive:       envImage != "",
+		EnvOverrideImage:        envImage,
+		VLLMEnvOverrideActive:   vllmEnvImage != "",
+		VLLMEnvOverrideImage:    vllmEnvImage,
+		SGLangEnvOverrideActive: sglangEnvImage != "",
+		SGLangEnvOverrideImage:  sglangEnvImage,
 	})
 }

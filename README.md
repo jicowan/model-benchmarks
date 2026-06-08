@@ -72,7 +72,7 @@ Instance selection in the Run form pulls live pricing and filters by accelerator
 | API server | Go 1.24, stdlib `net/http`, `jackc/pgx/v5`, k8s `client-go` (typed + dynamic), AWS SDK v2 (Secrets Manager, EC2, ECR, S3, Pricing) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite, Recharts |
 | Load generator | [inference-perf](https://github.com/intel/inference-perf) (Python 3.12) |
-| Inference | vLLM (GPU), vLLM-Neuron (Inferentia/Trainium) |
+| Inference | vLLM (GPU), SGLang (GPU), vLLM-Neuron (Inferentia/Trainium) |
 | Database | Aurora PostgreSQL Serverless v2 |
 | Infrastructure | Terraform, Helm, Karpenter 1.9 (SOCI parallel-pull, NVMe instance store, reserved-capacity beta) |
 | Cluster | EKS 1.31, AL2023 NVIDIA-optimized AMIs for GPU nodes |
@@ -262,7 +262,7 @@ Model cache:
 |--------|------|---------|
 | `GET` | `/api/v1/model-cache` | List cached models |
 | `POST` | `/api/v1/model-cache` | Trigger a cache job (HF → S3) |
-| `POST` | `/api/v1/model-cache/register` | Register a pre-existing S3 model (no job) |
+| `POST` | `/api/v1/model-cache/register` | Register a pre-existing S3 prefix as a cached model |
 | `GET` | `/api/v1/model-cache/{id}` | Cache entry status |
 | `DELETE` | `/api/v1/model-cache/{id}` | Remove entry (also deletes S3 prefix) |
 

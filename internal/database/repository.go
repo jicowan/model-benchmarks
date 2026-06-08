@@ -192,8 +192,9 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		     input_sequence_length, output_sequence_length, dataset_name,
 		     run_type, status, max_model_len, scenario_id,
 		     model_s3_uri, max_num_batched_tokens, kv_cache_dtype,
+		     chunked_prefill_size, mem_fraction_static,
 		     streamer_mode, streamer_concurrency, streamer_memory_limit_gib)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
@@ -203,6 +204,8 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		run.ModelS3URI,
 		run.MaxNumBatchedTokens,
 		run.KVCacheDtype,
+		run.ChunkedPrefillSize,
+		run.MemFractionStatic,
 		run.StreamerMode,
 		run.StreamerConcurrency,
 		run.StreamerMemoryLimitGiB,

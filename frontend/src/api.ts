@@ -547,6 +547,7 @@ export async function getToolVersions(): Promise<ToolVersions> {
 
 export async function putToolVersions(payload: {
   framework_version: string;
+  sglang_version?: string;
   inference_perf_version: string;
 }): Promise<ToolVersions> {
   const res = await fetch(`${BASE}/config/tool-versions`, {
