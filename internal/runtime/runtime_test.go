@@ -81,7 +81,7 @@ func TestVLLMgpu_DefaultImage(t *testing.T) {
 	if got := rt.DefaultImage("v0.6.0", ""); got != "vllm/vllm-openai:v0.6.0" {
 		t.Errorf("DefaultImage without pull-through = %q", got)
 	}
-	if got := rt.DefaultImage("v0.6.0", "820537372947.dkr.ecr.us-east-2.amazonaws.com"); got != "820537372947.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai:v0.6.0" {
+	if got := rt.DefaultImage("v0.6.0", "123456789012.dkr.ecr.us-east-2.amazonaws.com"); got != "123456789012.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai:v0.6.0" {
 		t.Errorf("DefaultImage with pull-through = %q", got)
 	}
 }
@@ -221,7 +221,10 @@ func TestSGLang_ContainerName(t *testing.T) {
 func TestSGLang_DefaultImage(t *testing.T) {
 	rt := &SGLang{}
 	if got := rt.DefaultImage("v0.4.10.post2-cu126", ""); got != "lmsysorg/sglang:v0.4.10.post2-cu126" {
-		t.Errorf("DefaultImage = %q", got)
+		t.Errorf("DefaultImage without pull-through = %q", got)
+	}
+	if got := rt.DefaultImage("v0.5.2-cu126", "123456789012.dkr.ecr.us-east-2.amazonaws.com"); got != "123456789012.dkr.ecr.us-east-2.amazonaws.com/dockerhub/lmsysorg/sglang:v0.5.2-cu126" {
+		t.Errorf("DefaultImage with pull-through = %q", got)
 	}
 }
 
