@@ -10,8 +10,8 @@ import (
 // SGLang implements Runtime for the "sglang" framework on GPU instances.
 type SGLang struct{}
 
-func (s *SGLang) Name() string          { return "sglang" }
-func (s *SGLang) ContainerName() string  { return "sglang" }
+func (s *SGLang) Name() string                    { return "sglang" }
+func (s *SGLang) ContainerName() string           { return "sglang" }
 func (s *SGLang) SupportedAccelerators() []string { return []string{"gpu"} }
 
 func (s *SGLang) ResolveImageOverride() string {
@@ -19,6 +19,9 @@ func (s *SGLang) ResolveImageOverride() string {
 }
 
 func (s *SGLang) DefaultImage(version, pullThroughRegistry string) string {
+	if pullThroughRegistry != "" {
+		return fmt.Sprintf("%s/dockerhub/lmsysorg/sglang:%s", pullThroughRegistry, version)
+	}
 	return fmt.Sprintf("lmsysorg/sglang:%s", version)
 }
 
@@ -85,7 +88,6 @@ func (s *SGLang) BuildArgs(p ContainerParams) (command []string, args []string) 
 
 	return command, args
 }
-
 
 // isNonHopperGPU reports whether the accelerator is a non-Hopper NVIDIA GPU
 // (Ampere/Ada). SGLang's FlashAttention3 backend requires Hopper (H100/H200);
