@@ -53,8 +53,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Silent refresh loop — only runs while user is populated.
+  // PRD-52: skip when auth is disabled — there's no Cognito session to
+  // refresh, and /auth/refresh returns 503, which would clear the
+  // synthetic principal and bounce the user to /login every 10 minutes.
   useEffect(() => {
     if (!user) return;
+    if (user.auth_disabled) return;
     const id = setInterval(async () => {
       const ok = await authRefresh();
       if (!ok) {

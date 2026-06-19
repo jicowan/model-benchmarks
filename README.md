@@ -119,7 +119,11 @@ The Terraform config creates:
 
 Six images — five app images plus the tools image used by CLI operations. GPU nodes pull the vLLM image directly from the pull-through cache, not from this registry.
 
+The `docker build` invocations below resolve `docker/Dockerfile.*` and the build context (`.`) relative to the repo root, so step back out of `terraform/` first:
+
 ```bash
+cd "$(git rev-parse --show-toplevel)"   # or simply: cd ..
+
 export REGION=us-east-2
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
