@@ -1,8 +1,11 @@
 terraform {
   required_providers {
     kubectl = {
-      source  = "alekc/kubectl"
-      version = "~> 2.0"
+      # See terraform/versions.tf — using gavinbunney/kubectl 1.x to
+      # avoid 2.x's plan-time provider-config validation, which breaks
+      # greenfield apply when cluster_endpoint is unknown.
+      source  = "gavinbunney/kubectl"
+      version = "~> 1.19"
     }
     helm = {
       source  = "hashicorp/helm"

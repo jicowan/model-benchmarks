@@ -79,13 +79,33 @@ resource "aws_ec2_tag" "cluster_sg_discovery" {
 # (disruption.budgets, consolidationPolicy, consolidateAfter) that
 # landed in v1.0 and were polished through v1.9. The NodePool YAML
 # will render but silently degrade on older versions.
+#
+# Operator-installed Karpenter doesn't always live at the upstream
+# default (kube-system / "karpenter") — common alternatives are a
+# dedicated "karpenter" namespace or a per-tenant install. The
+# karpenter_namespace + karpenter_release_name variables let the
+# operator point this lookup at the right location.
 data "kubernetes_resource" "karpenter_deployment" {
   count       = !var.manage_cluster && !var.install_karpenter_controller ? 1 : 0
   api_version = "apps/v1"
   kind        = "Deployment"
   metadata {
-    name      = "karpenter"
-    namespace = "kube-system"
+    name      = var.karpenter_release_name
+    namespace = var.karpenter_namespace
+  }
+}
+
+# Two separate checks: distinguish "couldn't find Karpenter" from
+# "found it, version is too old" so the operator gets actionable
+# advice instead of a misleading version error.
+check "karpenter_found" {
+  assert {
+    condition = (
+      var.manage_cluster ||
+      var.install_karpenter_controller ||
+      try(data.kubernetes_resource.karpenter_deployment[0].object.spec.template.spec.containers[0].image, "") != ""
+    )
+    error_message = "Could not find Karpenter Deployment '${var.karpenter_release_name}' in namespace '${var.karpenter_namespace}'. Confirm the install location with `kubectl get deploy -A | grep karpenter`, then set karpenter_namespace and/or karpenter_release_name to match. Or set install_karpenter_controller=true to have Terraform install Karpenter."
   }
 }
 
@@ -94,7 +114,7 @@ check "karpenter_version" {
     condition = (
       var.manage_cluster ||
       var.install_karpenter_controller ||
-      length(data.kubernetes_resource.karpenter_deployment) == 0 ||
+      try(data.kubernetes_resource.karpenter_deployment[0].object.spec.template.spec.containers[0].image, "") == "" ||
       can(regex(":(1\\.(9|[1-9][0-9])|[2-9]\\.)",
       try(data.kubernetes_resource.karpenter_deployment[0].object.spec.template.spec.containers[0].image, "")))
     )

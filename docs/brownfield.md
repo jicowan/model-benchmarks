@@ -86,6 +86,17 @@ The Pod Identity agent and EBS CSI driver don't have dedicated
 toggles — they come with our EKS module in greenfield and are
 assumed pre-existing in brownfield (they're prerequisites).
 
+When `install_karpenter_controller = false`, Terraform looks up the
+existing controller's Deployment to confirm its version is ≥ v1.9.
+Two optional variables tell Terraform where to find it:
+
+| Variable | Default | Set when |
+|---|---|---|
+| `karpenter_namespace` | `kube-system` | Operator installed Karpenter in a different namespace (e.g. `karpenter`). |
+| `karpenter_release_name` | `karpenter` | Operator installed Karpenter under a different Helm release name. |
+
+Confirm the right values with `kubectl get deploy -A | grep karpenter`.
+
 ## Setup
 
 ### 1. Prepare inputs
@@ -103,7 +114,8 @@ Run these to verify your cluster meets the prerequisites:
 ```bash
 kubectl config current-context                          # confirm you're pointed at the right cluster
 kubectl get daemonset -n kube-system                    # check for pod-identity-agent, ebs-csi-node, nvidia-device-plugin, aws-load-balancer-controller
-kubectl get deployment -n kube-system karpenter -o \
+kubectl get deploy -A | grep karpenter                  # find the namespace + Deployment name (defaults: kube-system / karpenter)
+kubectl get deployment -n <ns> <name> -o \
   jsonpath='{.spec.template.spec.containers[0].image}'  # confirm Karpenter version >= 1.9
 ```
 
@@ -330,6 +342,14 @@ brownfield modes. Operators don't need to — and can't — attach
 reservations to their existing NodePools through AccelBench's UI.
 
 ## Troubleshooting
+
+**`terraform plan` fails with "Could not find Karpenter Deployment..."**
+: Terraform looked up the Karpenter Deployment in
+  `karpenter_namespace` / `karpenter_release_name` and got back
+  nothing. Run `kubectl get deploy -A | grep karpenter` to find the
+  actual location, then set those two variables to match. Or set
+  `install_karpenter_controller = true` to skip the lookup and have
+  Terraform install Karpenter itself.
 
 **`terraform plan` fails with "Karpenter version..."**
 : Your installed Karpenter is older than v1.9. Either upgrade the

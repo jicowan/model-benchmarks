@@ -163,6 +163,33 @@ variable "install_karpenter_controller" {
   default     = true
 }
 
+variable "karpenter_namespace" {
+  description = <<-EOT
+    Namespace where the existing Karpenter controller Deployment lives.
+    Only consulted in brownfield mode (manage_cluster=false +
+    install_karpenter_controller=false) to look up the controller's
+    image and assert version >= v1.9. Default "kube-system" matches the
+    upstream chart's default; some operators install Karpenter in a
+    namespace named "karpenter" or in a per-tenant namespace, in which
+    case set this accordingly.
+  EOT
+  type        = string
+  default     = "kube-system"
+}
+
+variable "karpenter_release_name" {
+  description = <<-EOT
+    Name of the Karpenter controller Deployment in karpenter_namespace.
+    Only consulted in brownfield mode (manage_cluster=false +
+    install_karpenter_controller=false). Default "karpenter" matches
+    the upstream chart; if the operator installed under a different
+    Helm release name, set this to that name. Confirm with:
+      kubectl get deploy -n <karpenter_namespace>
+  EOT
+  type        = string
+  default     = "karpenter"
+}
+
 variable "install_nvidia_device_plugin" {
   description = <<-EOT
     PRD-53: install the NVIDIA device plugin DaemonSet. Set false if the
