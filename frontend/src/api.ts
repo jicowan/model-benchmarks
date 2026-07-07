@@ -50,15 +50,28 @@ export async function getStatus(): Promise<StatusResponse> {
 }
 
 // PRD-43: all API calls carry HttpOnly auth cookies via credentials:"include".
-// On a 401 response, fetchJSON attempts exactly one silent refresh; if that
-// succeeds, the original request is retried once. If the refresh returns 401
-// too, we redirect the user to /login (except for the auth endpoints
-// themselves, which handle 401 as a "bad credentials" UX state).
+// On a genuine auth 401, fetchJSON attempts exactly one silent refresh; if
+// that succeeds, the original request is retried once. If the refresh fails,
+// we redirect the user to /login (except for the auth endpoints themselves,
+// which handle 401 as a "bad credentials" UX state).
+//
+// A 401 is only treated as an auth failure when the response carries a
+// `WWW-Authenticate` header, which the auth middleware sets (see
+// internal/auth/middleware.go). This distinguishes a real expired-session
+// 401 from a 401 that merely originated upstream — e.g. a gated-model
+// response relayed from HuggingFace by /recommend, /estimate, or
+// /memory-breakdown. Without this guard, selecting a gated model bounced
+// the user to /login (and, with auth disabled, /auth/refresh returns 503
+// so the redirect fired every time).
+function isAuthChallenge(res: Response): boolean {
+  return res.status === 401 && res.headers.has("WWW-Authenticate");
+}
+
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const withCreds: RequestInit = { credentials: "include", ...(init ?? {}) };
   let res = await fetch(url, withCreds);
 
-  if (res.status === 401 && !isAuthEndpoint(url)) {
+  if (isAuthChallenge(res) && !isAuthEndpoint(url)) {
     const refreshed = await trySilentRefresh();
     if (refreshed) {
       res = await fetch(url, withCreds);

@@ -90,6 +90,12 @@ func Middleware(cfg Config, verifier *Verifier) func(http.Handler) http.Handler 
 }
 
 func writeUnauthorized(w http.ResponseWriter, code string) {
+	// WWW-Authenticate marks this as a genuine authentication failure so
+	// the frontend can distinguish it from a 401 that merely originated
+	// from an upstream (e.g. a gated-model 401 relayed from HuggingFace).
+	// Only on this header does fetchJSON run its silent-refresh +
+	// redirect-to-login flow. See frontend/src/api.ts.
+	w.Header().Set("WWW-Authenticate", "Bearer")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})

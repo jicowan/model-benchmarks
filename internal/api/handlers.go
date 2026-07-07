@@ -956,12 +956,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	// Fetch model config (from S3 cache if available, else HuggingFace).
 	modelCfg, err := s.FetchModelConfig(r.Context(), modelID, hfToken)
 	if err != nil {
-		var hfErr *recommend.HFError
-		if errors.As(err, &hfErr) {
-			writeError(w, hfErr.StatusCode, hfErr.Message)
-			return
-		}
-		writeError(w, http.StatusBadGateway, "failed to fetch model metadata from HuggingFace")
+		writeHFError(w, err)
 		return
 	}
 
@@ -1147,6 +1142,28 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// writeHFError translates an error from FetchModelConfig into an HTTP
+// response. It exists so a gated/unauthorized HuggingFace model never
+// surfaces to the browser as the API's own 401/403: the frontend's
+// fetchJSON treats any 401 as a session expiry and bounces the user to
+// /login (see frontend/src/api.ts). HuggingFace 401/403 (gated model,
+// missing/expired platform token, or HF rate-limiting) is a
+// request-level problem, not an auth failure, so we remap it to 422
+// Unprocessable Entity. The original message ("model is gated — provide
+// an HF token …") is preserved. Non-HFError failures become 502.
+func writeHFError(w http.ResponseWriter, err error) {
+	var hfErr *recommend.HFError
+	if errors.As(err, &hfErr) {
+		code := hfErr.StatusCode
+		if code == http.StatusUnauthorized || code == http.StatusForbidden {
+			code = http.StatusUnprocessableEntity
+		}
+		writeError(w, code, hfErr.Message)
+		return
+	}
+	writeError(w, http.StatusBadGateway, "failed to fetch model metadata from HuggingFace")
 }
 
 // handleListScenarios returns all available benchmark scenarios.

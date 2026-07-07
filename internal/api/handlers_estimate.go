@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -121,12 +120,7 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 	// Fetch model config (from S3 cache if available, else HuggingFace).
 	modelCfg, err := s.FetchModelConfig(ctx, modelID, hfToken)
 	if err != nil {
-		var hfErr *recommend.HFError
-		if errors.As(err, &hfErr) {
-			writeError(w, hfErr.StatusCode, hfErr.Message)
-			return
-		}
-		writeError(w, http.StatusBadGateway, "failed to fetch model metadata from HuggingFace")
+		writeHFError(w, err)
 		return
 	}
 

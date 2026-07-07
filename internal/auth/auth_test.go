@@ -130,6 +130,13 @@ func TestMiddleware_MissingCookie_Returns401(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
+	// A genuine auth 401 must carry WWW-Authenticate so the frontend can
+	// tell it apart from a 401 relayed from an upstream (e.g. a gated
+	// HuggingFace model). Without this marker fetchJSON would not run its
+	// refresh + redirect-to-login flow.
+	if got := rec.Header().Get("WWW-Authenticate"); got == "" {
+		t.Errorf("WWW-Authenticate header missing on auth 401")
+	}
 }
 
 func TestMiddleware_ExpiredToken_Returns401(t *testing.T) {

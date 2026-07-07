@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -64,12 +63,7 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	// Fetch model config (from S3 cache if available, else HuggingFace).
 	modelCfg, err := s.FetchModelConfig(r.Context(), modelID, hfToken)
 	if err != nil {
-		var hfErr *recommend.HFError
-		if errors.As(err, &hfErr) {
-			writeError(w, hfErr.StatusCode, hfErr.Message)
-			return
-		}
-		writeError(w, http.StatusBadGateway, "failed to fetch model metadata")
+		writeHFError(w, err)
 		return
 	}
 
