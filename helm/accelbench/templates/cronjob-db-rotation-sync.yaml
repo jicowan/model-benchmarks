@@ -1,0 +1,98 @@
+{{- if .Values.dbRotationSync.enabled }}
+{{- $img := .Values.dbRotationSync.image }}
+{{- $repo := $img.repository | default .Values.image.tools.repository }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "accelbench.fullname" . }}-db-rotation-sync
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.dbRotationSync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "accelbench.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "accelbench.api.serviceAccountName" . }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: db-rotation-sync
+              image: "{{ $repo }}:{{ $img.tag }}"
+              imagePullPolicy: {{ $img.pullPolicy }}
+              command: ["/bin/bash", "-euo", "pipefail", "-c"]
+              args:
+                - |
+                  MASTER_ARN="${MASTER_SECRET_ARN}"
+                  SECRET_NAME="${DB_SECRET_NAME}"
+                  API_DEPLOY="${API_DEPLOYMENT}"
+
+                  # Region: prefer AWS_REGION if set, else parse it out of the
+                  # secret ARN (arn:aws:secretsmanager:<region>:...).
+                  if [ -z "${AWS_REGION:-}" ]; then
+                    AWS_REGION="$(printf '%s' "${MASTER_ARN}" | cut -d: -f4)"
+                    export AWS_REGION
+                  fi
+
+                  # The host/port/db path lives only in the current DATABASE_URL
+                  # (database.host is unset in the release), so we preserve the
+                  # existing URL and swap ONLY the password. This makes the job
+                  # depend on nothing but the live secret + the master secret.
+                  CURRENT="$(kubectl get secret "${SECRET_NAME}" \
+                    -o jsonpath='{.data.DATABASE_URL}' 2>/dev/null | base64 -d || true)"
+                  if [ -z "${CURRENT}" ]; then
+                    echo "[db-rotation-sync] ERROR: ${SECRET_NAME} has no DATABASE_URL to update" >&2
+                    exit 1
+                  fi
+
+                  echo "[db-rotation-sync] reading Aurora master secret in ${AWS_REGION}..."
+                  CREDS="$(aws secretsmanager get-secret-value \
+                    --secret-id "${MASTER_ARN}" \
+                    --query SecretString --output text)"
+                  USER="$(printf '%s' "${CREDS}" | jq -r '.username')"
+                  # @uri percent-encodes the password for safe use in the URI.
+                  ENC_PW="$(printf '%s' "${CREDS}" | jq -rj '.password | @uri')"
+
+                  # Rebuild credentials in the existing URL:
+                  #   postgres://<user>:<pw>@<host:port/db?params>
+                  # Split on the first '@' — everything after is host onward.
+                  SUFFIX="${CURRENT#*@}"
+                  DESIRED="postgres://${USER}:${ENC_PW}@${SUFFIX}"
+
+                  if [ "${CURRENT}" = "${DESIRED}" ]; then
+                    echo "[db-rotation-sync] DATABASE_URL already current — no-op."
+                    exit 0
+                  fi
+
+                  echo "[db-rotation-sync] credentials changed — patching ${SECRET_NAME} and restarting ${API_DEPLOY}"
+                  NEW_B64="$(printf '%s' "${DESIRED}" | base64 | tr -d '\n')"
+                  kubectl patch secret "${SECRET_NAME}" --type merge \
+                    -p "{\"data\":{\"DATABASE_URL\":\"${NEW_B64}\"}}"
+                  kubectl rollout restart "deployment/${API_DEPLOY}"
+                  echo "[db-rotation-sync] done."
+              env:
+                - name: MASTER_SECRET_ARN
+                  value: {{ required "dbRotationSync.masterSecretArn is required when dbRotationSync.enabled" .Values.dbRotationSync.masterSecretArn | quote }}
+                - name: DB_SECRET_NAME
+                  value: {{ include "accelbench.dbSecretName" . | quote }}
+                - name: API_DEPLOYMENT
+                  value: {{ printf "%s-api" (include "accelbench.fullname" .) | quote }}
+                {{- with .Values.region }}
+                - name: AWS_REGION
+                  value: {{ . | quote }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.dbRotationSync.resources | nindent 16 }}
+{{- end }}

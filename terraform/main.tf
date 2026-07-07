@@ -724,6 +724,29 @@ resource "aws_iam_role_policy" "api_config_secrets" {
   })
 }
 
+# db-rotation-sync CronJob: read the Aurora RDS-managed master user secret so
+# it can rebuild DATABASE_URL after Aurora's automatic (7-day) password
+# rotation and re-sync the in-cluster accelbench-db secret. Read-only and
+# scoped to exactly that one secret ARN — the CronJob never mutates it.
+resource "aws_iam_role_policy" "api_db_master_secret_read" {
+  name = "AuroraMasterSecretRead"
+  role = aws_iam_role.api_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      Resource = [
+        module.aurora.cluster_master_user_secret[0].secret_arn,
+      ]
+    }]
+  })
+}
+
 # PRD-32: Registry card on the Configuration page lists cached repos in the
 # pull-through cache and their size + last-pulled timestamps. Describe-only,
 # no mutation, resource="*" because ECR DescribeRepositories/DescribeImages

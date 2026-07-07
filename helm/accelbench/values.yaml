@@ -140,6 +140,36 @@ pricingRefresh:
       cpu: 500m
       memory: 512Mi
 
+# -- DB rotation sync (self-heal the DATABASE_URL secret after Aurora rotates)
+# Aurora's RDS-managed master user secret rotates automatically (7-day default).
+# The in-cluster accelbench-db secret is a static snapshot, so after each
+# rotation the API can no longer authenticate (SASL 28P01) and crashloops.
+# This CronJob re-reads the master secret, rebuilds the URL-encoded
+# DATABASE_URL, and — only when it changed — patches accelbench-db and
+# rollout-restarts the API. Requires the accelbench-api role to have
+# secretsmanager:GetSecretValue on masterSecretArn (Terraform:
+# aws_iam_role_policy.api_db_master_secret_read).
+dbRotationSync:
+  enabled: true
+  schedule: "0 * * * *"  # hourly — recover within an hour of a rotation
+  # ARN of the Aurora RDS-managed master user secret (Terraform output
+  # aurora_master_user_secret[0].secret_arn). Required when enabled.
+  masterSecretArn: ""
+  # Image with aws-cli v2 + kubectl. Defaults to the accelbench-tools repo
+  # with a dedicated :db-sync tag (built from docker/Dockerfile.db-sync) so
+  # it never collides with the API's TOOLS_IMAGE (accelbench-tools:latest).
+  image:
+    repository: ""  # defaults to image.tools.repository if empty
+    tag: "db-sync"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 # -- Catalog seed (on-demand via API, no schedule)
 catalogSeed:
   enabled: true

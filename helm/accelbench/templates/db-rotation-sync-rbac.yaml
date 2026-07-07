@@ -1,0 +1,40 @@
+{{- if .Values.dbRotationSync.enabled }}
+# Least-privilege RBAC for the db-rotation-sync CronJob. It reuses the API
+# ServiceAccount (which carries the Pod Identity that can read the Aurora
+# master secret) but is granted only what the sync needs in-cluster:
+#   - get/patch the single accelbench-db Secret
+#   - get/patch the API Deployment (to trigger a rollout restart)
+# Scoped to the accelbench namespace; no cluster-scoped grants.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "accelbench.fullname" . }}-db-rotation-sync
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "accelbench.dbSecretName" . | quote }}]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ printf "%s-api" (include "accelbench.fullname" .) | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "accelbench.fullname" . }}-db-rotation-sync
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "accelbench.fullname" . }}-db-rotation-sync
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "accelbench.api.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

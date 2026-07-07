@@ -1,0 +1,27 @@
+# Image for the db-rotation-sync CronJob: needs aws-cli v2 (read the
+# RDS-managed Aurora master secret via Pod Identity) + kubectl (patch the
+# accelbench-db secret and rollout-restart the API). Kept separate from
+# Dockerfile.tools so the API's TOOLS_IMAGE (accelbench-tools:latest) is
+# never affected by this job's dependencies.
+#
+# Base is the public-ECR mirror of amazon/aws-cli (no Docker Hub rate limit,
+# no pull-through-cache requirement). kubectl is pinned one minor within the
+# EKS control-plane version (currently 1.31) per the kubectl skew policy.
+FROM public.ecr.aws/aws-cli/aws-cli:2.17.0
+
+ARG KUBECTL_VERSION=v1.31.4
+ARG TARGETARCH=amd64
+
+# jq is used by the db-rotation-sync job to parse the RDS master secret JSON
+# and URL-encode the password (@uri). Only download + install binaries here —
+# do NOT execute kubectl/aws in this layer: when building linux/amd64 on an
+# arm64 host they run under QEMU emulation and crash (Go runtime fault), so
+# verification happens at runtime on real amd64 nodes, not at build time.
+RUN yum install -y jq \
+    && yum clean all \
+    && rm -rf /var/cache/yum \
+    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+      -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
+
+ENTRYPOINT ["/bin/bash"]
