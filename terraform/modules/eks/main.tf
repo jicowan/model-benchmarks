@@ -1,19 +1,18 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0"
+  version = "~> 21.0"
 
-  cluster_name    = var.cluster_name
-  cluster_version = var.cluster_version
+  # v21: `cluster_name` → `name`, `cluster_version` → `kubernetes_version`,
+  # `cluster_endpoint_public_access` → `endpoint_public_access`,
+  # `cluster_addons` → `addons`. `bootstrap_self_managed_addons` is now
+  # ignored by the module (hardcoded), so it's removed.
+  name               = var.cluster_name
+  kubernetes_version = var.cluster_version
 
   vpc_id     = var.vpc_id
   subnet_ids = var.private_subnet_ids
 
-  cluster_endpoint_public_access = true
-
-  # Match how the live cluster was originally bootstrapped. Setting this is
-  # a create-time-only attribute; without this line the module defaults to
-  # null (AWS interprets as true) and forces replacement of the cluster.
-  bootstrap_self_managed_addons = false
+  endpoint_public_access = true
 
   # Automatically grant cluster admin to the IAM principal that creates
   # the cluster (i.e. whoever runs terraform apply). This ensures the
@@ -22,7 +21,7 @@ module "eks" {
   # already exists outside Terraform.
   enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
 
-  cluster_addons = {
+  addons = {
     # vpc-cni and kube-proxy are DaemonSets — they register immediately and
     # run once nodes exist. Safe to wait on these.
     kube-proxy = {
@@ -54,17 +53,20 @@ module "eks" {
 # Without this, nodes launch with no pod networking and fail health checks.
 module "system_node_group" {
   source  = "terraform-aws-modules/eks/aws//modules/eks-managed-node-group"
-  version = "~> 20.0"
+  version = "~> 21.0"
 
-  name            = "system"
-  cluster_name    = module.eks.cluster_name
-  cluster_version = var.cluster_version
-  subnet_ids      = var.private_subnet_ids
+  # v21: `cluster_version` → `kubernetes_version`.
+  name               = "system"
+  cluster_name       = module.eks.cluster_name
+  kubernetes_version = var.cluster_version
+  subnet_ids         = var.private_subnet_ids
 
   cluster_primary_security_group_id = module.eks.cluster_primary_security_group_id
   vpc_security_group_ids            = [module.eks.node_security_group_id]
   cluster_service_cidr              = module.eks.cluster_service_cidr
 
+  # v21 default is AL2023_x86_64_STANDARD; set explicitly for clarity.
+  ami_type       = "AL2023_x86_64_STANDARD"
   instance_types = ["m5.large"]
   min_size       = 2
   max_size       = 3
@@ -100,7 +102,7 @@ resource "aws_eks_addon" "coredns" {
 resource "aws_eks_addon" "ebs_csi_driver" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "aws-ebs-csi-driver"
-  service_account_role_arn    = module.ebs_csi_irsa.iam_role_arn
+  service_account_role_arn    = module.ebs_csi_irsa.arn
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
@@ -108,10 +110,12 @@ resource "aws_eks_addon" "ebs_csi_driver" {
 }
 
 module "ebs_csi_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.0"
+  # v6 renamed this submodule (dropped the `-eks` suffix) and `role_name`
+  # → `name`. `oidc_providers` + `attach_ebs_csi_policy` are unchanged.
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts"
+  version = "~> 6.0"
 
-  role_name             = "${var.cluster_name}-ebs-csi"
+  name                  = "${var.cluster_name}-ebs-csi"
   attach_ebs_csi_policy = true
 
   oidc_providers = {

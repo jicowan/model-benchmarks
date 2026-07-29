@@ -31,13 +31,13 @@ moved {
 
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 20.31"
+  version = "~> 21.0"
 
   cluster_name = var.cluster_name
 
-  enable_v1_permissions = true
-
-  enable_pod_identity             = true
+  # v21: Pod Identity is the default (the `enable_pod_identity` and
+  # `enable_v1_permissions` toggles were removed). We still opt into
+  # creating the association between the Karpenter controller SA and role.
   create_pod_identity_association = true
 
   node_iam_role_additional_policies = {

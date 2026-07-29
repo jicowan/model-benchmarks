@@ -31,13 +31,13 @@ variable "vpc_cidr" {
 variable "cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
-  default     = "1.31"
+  default     = "1.36"
 }
 
 variable "karpenter_version" {
   description = "Karpenter Helm chart version"
   type        = string
-  default     = "1.9.0"
+  default     = "1.11.3"
 }
 
 variable "aurora_min_capacity" {

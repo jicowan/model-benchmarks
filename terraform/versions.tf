@@ -3,8 +3,11 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source = "hashicorp/aws"
+      # v6 required by terraform-aws-modules/eks v21. See the v6 upgrade
+      # guide for breaking changes (region arg, aws_eks_addon
+      # resolve_conflicts removal, aws_eip vpc→domain, etc.).
+      version = "~> 6.0"
     }
     helm = {
       source  = "hashicorp/helm"
