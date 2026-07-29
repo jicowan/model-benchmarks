@@ -20,15 +20,32 @@ locals {
   manage_dns_record = local.manage_cert && var.ingress_deployed
 }
 
-data "aws_lb" "ingress" {
+# Look the ingress ALB up by the tag the LB controller stamps on it.
+# Use the PLURAL `aws_lbs` data source, which returns a (possibly empty)
+# set of ARNs, instead of singular `aws_lb`, which hard-ERRORS on 0 or
+# >1 results. That error used to break `terraform destroy`: once the ALB
+# was gone, the refresh of a singular lookup failed and blocked the whole
+# destroy graph. The plural form degrades gracefully — no ALB simply
+# means no DNS record, during teardown or before the ingress exists.
+data "aws_lbs" "ingress" {
   count = local.manage_dns_record ? 1 : 0
   tags = {
     "ingress.k8s.aws/stack" = "accelbench/accelbench"
   }
 }
 
+locals {
+  ingress_lb_arns  = local.manage_dns_record ? tolist(data.aws_lbs.ingress[0].arns) : []
+  ingress_lb_found = length(local.ingress_lb_arns) == 1
+}
+
+data "aws_lb" "ingress" {
+  count = local.ingress_lb_found ? 1 : 0
+  arn   = local.ingress_lb_arns[0]
+}
+
 resource "aws_route53_record" "app" {
-  count   = local.manage_dns_record ? 1 : 0
+  count   = local.ingress_lb_found ? 1 : 0
   zone_id = data.aws_route53_zone.app[0].zone_id
   name    = var.app_host
   type    = "A"

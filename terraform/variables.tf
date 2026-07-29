@@ -10,6 +10,18 @@ variable "project_name" {
   default     = "accelbench"
 }
 
+variable "force_destroy_buckets" {
+  description = <<-EOT
+    Allow `terraform destroy` to delete S3 buckets that still contain
+    objects. Defaults to false so a normal destroy can't silently wipe
+    cached model weights or results. Set to true for an intentional
+    teardown (avoids the manual `aws s3 rm --recursive` step that a
+    non-empty models bucket otherwise forces).
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for the VPC"
   type        = string

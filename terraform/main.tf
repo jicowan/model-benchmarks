@@ -221,6 +221,38 @@ module "vpc" {
   tags = local.tags
 }
 
+# Pre-destroy cleanup of runtime-created, un-managed resources.
+# The AWS Load Balancer Controller and VPC-CNI create ALBs and k8s-*
+# security groups at runtime that Terraform never tracks; they block VPC
+# teardown (orphaned ALB ENIs pin subnets/IGW; k8s SGs pin the VPC), which
+# is what forced multiple manual destroy passes historically.
+#
+# Because destroy runs in reverse-dependency order, this resource is
+# destroyed BEFORE module.vpc / module.eks — so its destroy-time
+# provisioner runs while the cluster + VPC still exist, which is exactly
+# when the cleanup can find and delete those resources.
+#
+# Greenfield only: never touch an operator's cluster in brownfield mode.
+resource "null_resource" "lb_cleanup" {
+  count = var.manage_cluster ? 1 : 0
+
+  # triggers are the only values available to a destroy provisioner
+  # (it can't reference vars/locals), so stash what the script needs.
+  triggers = {
+    region  = var.region
+    cluster = local.cluster_name
+    script  = "${path.module}/scripts/cleanup-orphaned-lbs.sh"
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    command    = "${self.triggers.script} ${self.triggers.region} ${self.triggers.cluster}"
+    on_failure = continue # best-effort; never block destroy on cleanup
+  }
+
+  depends_on = [module.vpc, module.eks]
+}
+
 # ---------- EKS ----------
 # PRD-53: skipped in brownfield mode. Cluster attributes come from
 # the data sources computed in local.cluster_* instead.
@@ -326,6 +358,15 @@ resource "kubernetes_namespace" "accelbench" {
       metadata[0].labels,
       metadata[0].annotations,
     ]
+  }
+
+  # Cap the delete wait. On teardown the K8s API is going away with the
+  # cluster, and a lingering finalizer on the namespace makes the delete
+  # hang indefinitely (it hit the destroy context deadline historically).
+  # A short timeout turns that infinite hang into a fast, clear failure
+  # that a re-run (or `state rm`) resolves quickly.
+  timeouts {
+    delete = "3m"
   }
 
   depends_on = [module.eks]
@@ -553,8 +594,10 @@ resource "aws_eks_pod_identity_association" "loadgen" {
 
 # ---------- S3 Bucket for Model Weights ----------
 resource "aws_s3_bucket" "models" {
-  bucket        = "${var.project_name}-models-${data.aws_caller_identity.current.account_id}"
-  force_destroy = false
+  bucket = "${var.project_name}-models-${data.aws_caller_identity.current.account_id}"
+  # Default false protects cached model weights from an accidental
+  # destroy; flip force_destroy_buckets=true for an intentional teardown.
+  force_destroy = var.force_destroy_buckets
   tags          = local.tags
 }
 

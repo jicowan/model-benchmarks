@@ -59,15 +59,15 @@ resource "helm_release" "karpenter_crd" {
 }
 
 resource "helm_release" "karpenter" {
-  count            = var.install_controller ? 1 : 0
-  namespace        = "kube-system"
-  name             = "karpenter"
-  repository       = "oci://public.ecr.aws/karpenter"
-  chart            = "karpenter"
-  version          = var.karpenter_version
-  wait             = true
-  wait_for_jobs    = true
-  timeout          = 600
+  count         = var.install_controller ? 1 : 0
+  namespace     = "kube-system"
+  name          = "karpenter"
+  repository    = "oci://public.ecr.aws/karpenter"
+  chart         = "karpenter"
+  version       = var.karpenter_version
+  wait          = true
+  wait_for_jobs = true
+  timeout       = 600
 
   values = [
     <<-EOT
@@ -358,11 +358,11 @@ resource "kubectl_manifest" "neuron_node_pool" {
 # ---------- NVIDIA Device Plugin ----------
 # PRD-53: skipped in brownfield mode when the cluster already has it.
 resource "kubectl_manifest" "nvidia_device_plugin" {
-  count              = var.install_nvidia_device_plugin ? 1 : 0
-  server_side_apply  = true
-  force_conflicts    = true
-  wait               = false
-  wait_for_rollout   = false
+  count             = var.install_nvidia_device_plugin ? 1 : 0
+  server_side_apply = true
+  force_conflicts   = true
+  wait              = false
+  wait_for_rollout  = false
 
   yaml_body = <<-YAML
     apiVersion: apps/v1
@@ -484,10 +484,10 @@ resource "kubectl_manifest" "neuron_device_plugin_binding" {
 }
 
 resource "kubectl_manifest" "neuron_device_plugin" {
-  server_side_apply  = true
-  force_conflicts    = true
-  wait               = false
-  wait_for_rollout   = false
+  server_side_apply = true
+  force_conflicts   = true
+  wait              = false
+  wait_for_rollout  = false
 
   yaml_body = <<-YAML
     apiVersion: apps/v1
@@ -559,10 +559,10 @@ resource "kubectl_manifest" "neuron_device_plugin" {
 
 # ---------- DCGM Exporter for GPU Metrics ----------
 resource "kubectl_manifest" "dcgm_exporter" {
-  server_side_apply  = true
-  force_conflicts    = true
-  wait               = false
-  wait_for_rollout   = false
+  server_side_apply = true
+  force_conflicts   = true
+  wait              = false
+  wait_for_rollout  = false
 
   yaml_body = <<-YAML
     apiVersion: apps/v1
