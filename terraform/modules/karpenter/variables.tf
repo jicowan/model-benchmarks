@@ -8,6 +8,17 @@ variable "cluster_endpoint" {
   type        = string
 }
 
+variable "kubernetes_version" {
+  description = <<-EOT
+    Kubernetes minor version (e.g. "1.36") of the cluster. Used to build
+    the SSM parameter path that resolves the EKS-optimized AMI ids for the
+    GPU / accelerated node classes, so benchmark hardware is reproducible
+    (pinned to a concrete AMI id in the plan) rather than drifting with
+    Karpenter's `al2023@latest` alias.
+  EOT
+  type        = string
+}
+
 variable "karpenter_version" {
   description = "Karpenter Helm chart version"
   type        = string

@@ -1,3 +1,20 @@
+# PRD-55: resolve the EKS-optimized ACCELERATED (NVIDIA) AL2023 AMI id
+# from AWS's public SSM parameter, and pin the GPU node class to that
+# concrete id. Two reasons:
+#   1. Reproducibility — a benchmark platform must not have node recycles
+#      silently pull a newer AMI that shifts results. An SSM lookup
+#      captures a concrete ami-... in the plan (reviewable), while still
+#      being trivially re-resolved on a deliberate re-apply.
+#   2. Correctness — Karpenter's `al2023@latest` alias resolves the
+#      STANDARD AL2023 AMI, NOT the GPU/accelerated one. GPU nodes need
+#      the accelerated AMI (bundled NVIDIA driver), so the alias was
+#      effectively wrong for the gpu node class.
+# Path format per AWS docs (retrieve-ami-id):
+#   /aws/service/eks/optimized-ami/<ver>/amazon-linux-2023/<arch>/<type>/recommended/image_id
+data "aws_ssm_parameter" "gpu_ami" {
+  name = "/aws/service/eks/optimized-ami/${var.kubernetes_version}/amazon-linux-2023/x86_64/nvidia/recommended/image_id"
+}
+
 # PRD-53: state migrations for resources that became counted.
 # helm_release.karpenter_crd + helm_release.karpenter are gated on
 # install_controller; time_sleep.wait_for_karpenter follows them;
@@ -186,8 +203,15 @@ resource "kubectl_manifest" "gpu_node_class" {
     metadata:
       name: gpu
     spec:
+      # Pinned to the EKS-optimized ACCELERATED (NVIDIA) AL2023 AMI id
+      # resolved from SSM (see data.aws_ssm_parameter.gpu_ami above).
+      # NOT `alias: al2023@latest`, which resolves the STANDARD AMI.
+      # amiFamily is REQUIRED when amiSelectorTerms uses `id` rather than
+      # `alias` (the alias implies the family); Karpenter rejects the
+      # EC2NodeClass at reconcile time without it.
+      amiFamily: AL2023
       amiSelectorTerms:
-        - alias: al2023@latest
+        - id: ${data.aws_ssm_parameter.gpu_ami.value}
       role: ${module.karpenter.node_iam_role_name}
       subnetSelectorTerms:
         - tags:

@@ -283,9 +283,10 @@ module "eks" {
 module "karpenter" {
   source = "./modules/karpenter"
 
-  cluster_name      = local.cluster_name
-  cluster_endpoint  = local.cluster_endpoint
-  karpenter_version = var.karpenter_version
+  cluster_name       = local.cluster_name
+  cluster_endpoint   = local.cluster_endpoint
+  kubernetes_version = var.cluster_version
+  karpenter_version  = var.karpenter_version
 
   install_controller           = var.install_karpenter_controller
   install_nvidia_device_plugin = var.install_nvidia_device_plugin
