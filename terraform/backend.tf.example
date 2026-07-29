@@ -1,0 +1,40 @@
+# Backend configuration — OPTIONAL and per-operator.
+#
+# By default this project uses LOCAL state (a terraform.tfstate file on
+# disk). That works for a solo operator and requires zero setup — just
+# `terraform init`.
+#
+# Terraform does NOT let you parameterize the backend *type* with
+# variables, so a committed backend block would force one choice — and,
+# for S3, one specific account's bucket — on everyone who clones the repo.
+# So `backend.tf` is gitignored; copy this file to `backend.tf` and edit
+# it if you want remote state. Use whatever backend suits you (S3, GCS,
+# azurerm, Terraform Cloud, Consul, …).
+#
+# ── Recommended for shared / production use: S3 + DynamoDB lock ──
+#
+# Remote state gives you locking (two applies can't corrupt state) and
+# durability (state survives a lost laptop). To set it up on AWS:
+#
+#   1. Create the state bucket + lock table once, with the helper root:
+#        cd bootstrap && terraform init && terraform apply
+#      It outputs `state_bucket` and `lock_table`.
+#   2. cp backend.tf.example backend.tf
+#   3. Uncomment the block below, fill in YOUR bucket name from step 1
+#      (the bootstrap names it "<project_name>-tfstate-<account_id>").
+#   4. terraform init -migrate-state
+#
+# terraform {
+#   backend "s3" {
+#     bucket         = "REPLACE-WITH-YOUR-STATE-BUCKET"
+#     key            = "accelbench/terraform.tfstate"
+#     region         = "us-east-2"
+#     dynamodb_table = "REPLACE-WITH-YOUR-LOCK-TABLE" # e.g. accelbench-tflock
+#     encrypt        = true
+#   }
+# }
+#
+# ── Other backends ──
+# Prefer GCS, Azure, Terraform Cloud, or plain local? Delete the S3 block
+# above and configure the backend of your choice here instead. Leaving
+# backend.tf absent entirely keeps local state, which is a fine default.

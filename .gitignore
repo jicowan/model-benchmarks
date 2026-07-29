@@ -21,6 +21,11 @@ tfplan
 .terraform.lock.hcl
 crash.log
 override.tf
+# Backend config is per-operator (backend TYPE can't be parameterized in
+# Terraform, so committing one forces it — and its account-specific
+# bucket — on everyone). Each operator copies backend.tf.example to
+# backend.tf and picks their own backend; a fresh clone uses local state.
+backend.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
