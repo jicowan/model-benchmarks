@@ -64,6 +64,38 @@ variable "multinode_instance_type" {
   default     = "p5.48xlarge"
 }
 
+# Serving-stack chart/CRD versions (gateway.tf). Pinned; verified against
+# each project's GitHub releases. LWS chart version has NO `v` prefix.
+variable "lws_version" {
+  description = "LeaderWorkerSet Helm chart version (oci://registry.k8s.io/lws/charts/lws)."
+  type        = string
+  default     = "0.9.0"
+}
+
+variable "gateway_api_version" {
+  description = "Gateway API release tag for standard-install.yaml CRDs."
+  type        = string
+  default     = "v1.6.1"
+}
+
+variable "inference_extension_version" {
+  description = "Gateway API Inference Extension release tag for manifests.yaml (InferencePool v1 GA)."
+  type        = string
+  default     = "v1.5.0"
+}
+
+variable "envoy_gateway_version" {
+  description = "Envoy Gateway Helm chart version (oci://docker.io/envoyproxy/gateway-helm)."
+  type        = string
+  default     = "v1.8.3"
+}
+
+variable "envoy_ai_gateway_version" {
+  description = "Envoy AI Gateway version — shared by ai-gateway-crds-helm + ai-gateway-helm, and the envoy-gateway-values.yaml ref."
+  type        = string
+  default     = "v1.0.0"
+}
+
 variable "aurora_min_capacity" {
   description = "Minimum ACU capacity for Aurora Serverless v2"
   type        = number
