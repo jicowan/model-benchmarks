@@ -63,6 +63,29 @@ variable "install_dra_drivers" {
   default     = false
 }
 
+variable "enable_multinode" {
+  description = "Create the per-AZ static EFA GPU EC2NodeClasses + NodePools for distributed inference."
+  type        = bool
+  default     = false
+}
+
+variable "multinode_instance_type" {
+  description = "Single EFA-capable GPU instance type pinned by every per-AZ multi-node pool."
+  type        = string
+  default     = "p5.48xlarge"
+}
+
+variable "multinode_placement_groups" {
+  description = <<-EOT
+    Map of AZ name -> EC2 cluster placement-group name. One static
+    NodePool + EC2NodeClass is created per entry, pinned to that AZ and
+    selecting that placement group via spec.placementGroupSelector.
+    Empty (default) creates no multi-node pools.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "nvidia_dra_driver_version" {
   description = "nvidia-dra-driver-gpu Helm chart version (NGC: https://helm.ngc.nvidia.com/nvidia)."
   type        = string

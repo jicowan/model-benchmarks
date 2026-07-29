@@ -764,3 +764,117 @@ resource "helm_release" "aws_dranet" {
 
   depends_on = [time_sleep.wait_for_karpenter]
 }
+
+# ---------- Multi-node static EFA GPU pools, one per AZ (PRD-55) ----------
+# For each AZ the VPC spans, a dedicated EC2NodeClass + static NodePool:
+#   - pinned to ONE instance type (var.multinode_instance_type) and ONE AZ
+#   - bound to that AZ's cluster placement group (co-location for EFA/NCCL)
+#   - EFA network interfaces (efa-only on device index 1) for RDMA
+#   - labeled accelbench.io/dra=true so the DRA drivers land here and the
+#     classic device plugin stays off (KEP-5004)
+#   - tainted accelbench.io/multinode so only distributed-inference pods run
+#   - spec.replicas: 0 at rest. The orchestrator (PRD-56) scales the chosen
+#     AZ's pool up per run and back to 0 on teardown; a future capacity
+#     fallback can try another AZ's pool. Terraform ignores replicas so a
+#     re-apply never fights a mid-run scale-out.
+resource "kubectl_manifest" "multinode_node_class" {
+  for_each = var.enable_multinode ? var.multinode_placement_groups : {}
+
+  yaml_body = <<-YAML
+    apiVersion: karpenter.k8s.aws/v1
+    kind: EC2NodeClass
+    metadata:
+      name: multinode-${each.key}
+    spec:
+      # Accelerated (NVIDIA) AL2023 AMI, pinned via SSM (same as `gpu`).
+      amiFamily: AL2023
+      amiSelectorTerms:
+        - id: ${data.aws_ssm_parameter.gpu_ami.value}
+      role: ${module.karpenter.node_iam_role_name}
+      # Single AZ: select only this AZ's discovery-tagged private subnet.
+      subnetSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+            "topology.kubernetes.io/zone": ${each.key}
+      securityGroupSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      # Co-locate all nodes of this pool in this AZ's cluster placement
+      # group (Karpenter selects an existing PG; Terraform creates it).
+      placementGroupSelector:
+        name: ${each.value}
+      # EFA for multi-node NCCL/RDMA: standard ENA on device 0, an
+      # efa-only (IP-less, RDMA) interface on device 1.
+      networkInterfaces:
+        - networkCardIndex: 0
+          deviceIndex: 0
+          interfaceType: interface
+        - networkCardIndex: 0
+          deviceIndex: 1
+          interfaceType: efa-only
+      instanceStorePolicy: RAID0
+      blockDeviceMappings:
+        - deviceName: /dev/xvda
+          ebs:
+            volumeSize: 100Gi
+            volumeType: gp3
+            encrypted: true
+            throughput: 1000
+            iops: 16000
+  YAML
+
+  depends_on = [time_sleep.wait_for_karpenter]
+}
+
+resource "kubectl_manifest" "multinode_node_pool" {
+  for_each = var.enable_multinode ? var.multinode_placement_groups : {}
+
+  # Ignore ONLY spec.replicas server-side: Terraform creates the pool at
+  # 0 and never reconciles the count afterwards (the orchestrator owns it
+  # at runtime — a stray apply must not reset a mid-run scale-out). Every
+  # other field (instance type, taints, PG) still reconciles normally.
+  ignore_fields = ["spec.replicas"]
+
+  # spec.replicas makes this a STATIC pool (fixed node count, no
+  # scheduling simulation — the one Karpenter mode compatible with DRA).
+  # Starts at 0; orchestrator-managed at runtime.
+  yaml_body = <<-YAML
+    apiVersion: karpenter.sh/v1
+    kind: NodePool
+    metadata:
+      name: multinode-${each.key}
+    spec:
+      replicas: 0
+      weight: 100
+      template:
+        metadata:
+          labels:
+            accelbench.io/dra: "true"
+        spec:
+          requirements:
+            - key: kubernetes.io/arch
+              operator: In
+              values: ["amd64"]
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values: ["${var.multinode_instance_type}"]
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values: ["${each.key}"]
+            - key: karpenter.sh/capacity-type
+              operator: In
+              values: ["reserved", "on-demand"]
+          taints:
+            - key: nvidia.com/gpu
+              effect: NoSchedule
+            - key: accelbench.io/multinode
+              value: "true"
+              effect: NoSchedule
+          nodeClassRef:
+            group: karpenter.k8s.aws
+            kind: EC2NodeClass
+            name: multinode-${each.key}
+  YAML
+
+  depends_on = [kubectl_manifest.multinode_node_class]
+}

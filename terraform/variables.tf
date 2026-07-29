@@ -40,6 +40,30 @@ variable "karpenter_version" {
   default     = "1.14.0"
 }
 
+# ---------- Multi-node / distributed inference (PRD-55) ----------
+
+variable "enable_multinode" {
+  description = <<-EOT
+    Provision the distributed-inference foundations: one EC2 cluster
+    placement group + one static EFA GPU Karpenter NodePool per AZ, and
+    the DRA drivers (NVIDIA GPU + AWS DRANET/EFA). Greenfield only. Off by
+    default — the single-instance platform is unaffected. Requires EKS
+    1.34+ and Karpenter >= v1.11.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "multinode_instance_type" {
+  description = <<-EOT
+    The single EFA-capable GPU instance type for the multi-node static
+    pools (e.g. "p5.48xlarge" / "p5en.48xlarge"). A cluster placement
+    group wants one instance type; each per-AZ pool pins this type.
+  EOT
+  type        = string
+  default     = "p5.48xlarge"
+}
+
 variable "aurora_min_capacity" {
   description = "Minimum ACU capacity for Aurora Serverless v2"
   type        = number

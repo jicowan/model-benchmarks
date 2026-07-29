@@ -274,6 +274,26 @@ module "eks" {
   tags = local.tags
 }
 
+# ---------- Multi-node cluster placement groups (PRD-55) ----------
+# One EC2 "cluster" placement group PER AZ the VPC spans. A cluster PG
+# co-locates instances in a single AZ on the same high-bisection-bandwidth
+# segment — the AWS-recommended topology for tightly-coupled EFA/NCCL
+# traffic. Per-AZ (not one) gives flexibility in which zone the static
+# multi-node pool lands, and headroom for future per-zone capacity
+# fallback. Greenfield only (needs the VPC's AZ list); brownfield operators
+# supply their own capacity story.
+locals {
+  multinode_azs = var.manage_cluster && var.enable_multinode ? module.vpc[0].azs : []
+}
+
+resource "aws_placement_group" "multinode" {
+  for_each = toset(local.multinode_azs)
+
+  name     = "${var.project_name}-multinode-${each.value}"
+  strategy = "cluster"
+  tags     = merge(local.tags, { "accelbench.io/az" = each.value })
+}
+
 # ---------- Karpenter ----------
 # PRD-53: install_controller splits the module so the controller
 # Helm release is skipped on brownfield clusters that already run
@@ -292,6 +312,14 @@ module "karpenter" {
   install_nvidia_device_plugin = var.install_nvidia_device_plugin
   manage_pull_through_cache    = var.manage_pull_through_cache
   cluster_oidc_issuer_url      = local.oidc_issuer_url
+
+  # PRD-55: multi-node/distributed-inference pool. One static EFA GPU
+  # NodePool per AZ, each bound to that AZ's cluster placement group.
+  enable_multinode        = var.enable_multinode
+  install_dra_drivers     = var.enable_multinode
+  multinode_instance_type = var.multinode_instance_type
+  # map AZ -> placement group name, consumed by the per-AZ NodeClasses.
+  multinode_placement_groups = { for az, pg in aws_placement_group.multinode : az => pg.name }
 
   tags = local.tags
 }
