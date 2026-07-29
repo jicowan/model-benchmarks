@@ -410,10 +410,19 @@ resource "kubectl_manifest" "nvidia_device_plugin" {
             nodeAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
                 nodeSelectorTerms:
+                  # g/p instances, EXCEPT the multi-node DRA pool. The
+                  # classic device plugin and the NVIDIA DRA driver cannot
+                  # coexist on a node (KEP-5004); DRA-pool nodes are
+                  # labeled accelbench.io/dra=true and run the DRA driver
+                  # instead. (DCGM below is intentionally NOT narrowed — it
+                  # reads GPU telemetry, doesn't allocate devices, and its
+                  # metrics on the DRA pool are needed for PRD-56.)
                   - matchExpressions:
                       - key: karpenter.k8s.aws/instance-category
                         operator: In
                         values: ["g", "p"]
+                      - key: accelbench.io/dra
+                        operator: DoesNotExist
           tolerations:
             - key: nvidia.com/gpu
               operator: Exists
@@ -682,4 +691,76 @@ resource "aws_iam_role_policy" "karpenter_node_ecr_pullthrough" {
       Resource = "*"
     }]
   })
+}
+
+# ---------- DRA drivers for the multi-node / distributed-inference pool (PRD-55) ----------
+# Both drivers run ONLY on nodes labeled accelbench.io/dra=true (the
+# static EFA GPU pool). The classic NVIDIA device plugin is excluded from
+# those nodes (see its nodeAffinity above) because a DRA GPU driver and
+# the classic device plugin cannot manage GPUs on the same node
+# (KEP-5004). DCGM is intentionally left cluster-wide (telemetry only).
+
+# NVIDIA DRA driver — GPU allocation via the gpu.nvidia.com DeviceClass.
+# ComputeDomain (multi-node NVLink / IMEX, GB200) is DISABLED — out of
+# scope until a GB200 PRD. gpuResourcesEnabledOverride=true is REQUIRED:
+# the chart hard-errors if resources.gpus.enabled=true without it (its
+# KEP-5004 safety guard against colliding with the classic device
+# plugin, which we satisfy by node-partitioning).
+resource "helm_release" "nvidia_dra_driver" {
+  count = var.install_dra_drivers ? 1 : 0
+
+  name             = "nvidia-dra-driver-gpu"
+  namespace        = "nvidia-dra-driver-gpu"
+  create_namespace = true
+  repository       = "https://helm.ngc.nvidia.com/nvidia"
+  chart            = "nvidia-dra-driver-gpu"
+  version          = var.nvidia_dra_driver_version
+
+  values = [yamlencode({
+    gpuResourcesEnabledOverride = true
+    # Host-provided driver: the EKS accelerated AL2023 AMI installs the
+    # NVIDIA driver on the host at `/` (not operator-provided at
+    # /run/nvidia/driver). This matches the chart default; set explicitly
+    # so a future default change can't silently break GPU discovery.
+    nvidiaDriverRoot = "/"
+    resources = {
+      gpus           = { enabled = true }
+      computeDomains = { enabled = false }
+    }
+    # Pin the kubelet-plugin DaemonSet to the multi-node DRA pool only.
+    kubeletPlugin = {
+      nodeSelector = { "accelbench.io/dra" = "true" }
+      tolerations = [
+        { key = "nvidia.com/gpu", operator = "Exists", effect = "NoSchedule" },
+        { key = "accelbench.io/multinode", operator = "Exists", effect = "NoSchedule" },
+      ]
+    }
+  })]
+
+  depends_on = [time_sleep.wait_for_karpenter]
+}
+
+# AWS EFA DRA driver (DRANET) — EFA allocation via the
+# efa.networking.k8s.aws DeviceClass, topology-aligned to GPUs on the
+# same PCIe root. DaemonSet `aws-dranet` in kube-system; requires EKS
+# 1.34+. Node targeting is top-level nodeSelector/tolerations (no nested
+# kubeletPlugin key in this chart).
+resource "helm_release" "aws_dranet" {
+  count = var.install_dra_drivers ? 1 : 0
+
+  name       = "aws-dranet"
+  namespace  = "kube-system"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-dranet"
+  version    = var.aws_dranet_version
+
+  values = [yamlencode({
+    nodeSelector = { "accelbench.io/dra" = "true" }
+    tolerations = [
+      { key = "nvidia.com/gpu", operator = "Exists", effect = "NoSchedule" },
+      { key = "accelbench.io/multinode", operator = "Exists", effect = "NoSchedule" },
+    ]
+  })]
+
+  depends_on = [time_sleep.wait_for_karpenter]
 }

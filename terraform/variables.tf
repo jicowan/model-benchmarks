@@ -37,7 +37,7 @@ variable "cluster_version" {
 variable "karpenter_version" {
   description = "Karpenter Helm chart version"
   type        = string
-  default     = "1.11.3"
+  default     = "1.14.0"
 }
 
 variable "aurora_min_capacity" {
