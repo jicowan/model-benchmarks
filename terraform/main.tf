@@ -253,6 +253,34 @@ resource "null_resource" "lb_cleanup" {
   depends_on = [module.vpc, module.eks]
 }
 
+# Pre-destroy cleanup of Karpenter custom resources. Karpenter's CRs
+# (NodePools / EC2NodeClasses / NodeClaims) hold controller-managed
+# finalizers; on teardown the karpenter-crd Helm uninstall hangs
+# (`context deadline exceeded`) because the controller is torn down
+# alongside the CRD chart and never clears them — this has forced a
+# second `terraform destroy` on every teardown so far. This resource
+# depends_on module.karpenter + module.eks, so on destroy (reverse order)
+# it runs FIRST — while the cluster + CRDs still exist — deleting the CRs
+# and stripping finalizers so the CRD chart uninstalls in one pass.
+# Greenfield only; on_failure=continue so it can never block a destroy.
+resource "null_resource" "karpenter_cr_cleanup" {
+  count = var.manage_cluster ? 1 : 0
+
+  triggers = {
+    region  = var.region
+    cluster = local.cluster_name
+    script  = "${path.module}/scripts/cleanup-karpenter-crs.sh"
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    command    = "${self.triggers.script} ${self.triggers.region} ${self.triggers.cluster}"
+    on_failure = continue
+  }
+
+  depends_on = [module.karpenter, module.eks]
+}
+
 # ---------- EKS ----------
 # PRD-53: skipped in brownfield mode. Cluster attributes come from
 # the data sources computed in local.cluster_* instead.
