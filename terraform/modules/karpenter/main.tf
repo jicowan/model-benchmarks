@@ -57,6 +57,12 @@ module "karpenter" {
   # creating the association between the Karpenter controller SA and role.
   create_pod_identity_association = true
 
+  # The v21 controller policy exceeds the 6144-char MANAGED-policy limit
+  # (apply failed with `LimitExceeded: Cannot exceed quota for PolicySize:
+  # 6144`). Emit it as an INLINE role policy instead (10240-char limit) —
+  # the module's own sanctioned fix for exactly this error.
+  enable_inline_policy = true
+
   node_iam_role_additional_policies = {
     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
   }
