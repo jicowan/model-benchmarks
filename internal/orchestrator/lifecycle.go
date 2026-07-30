@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -44,6 +45,58 @@ type RunConfig struct {
 	Model        *database.Model
 	InstanceType *database.InstanceType
 	Request      *database.RunRequest
+
+	// PRD-56: multi-node topology. Lives on RunConfig (the in-memory
+	// execution config), NOT on database.RunRequest — persisting it is
+	// PRD-57's job. Zero values mean a single-node run (the default,
+	// byte-for-byte the existing path). Set only when the run selects the
+	// "llm-d" framework; a hand-built RunConfig exercises this in PRD-56.
+	//
+	// NodeCount is the LeaderWorkerSet group size (number of GPU nodes).
+	// PipelineParallelDegree is pipeline shards across nodes; TP within a
+	// node comes from Request.TensorParallelDegree. GPUsPerNode defaults to
+	// the instance's accelerator count when zero.
+	NodeCount              int
+	PipelineParallelDegree int
+	GPUsPerNode            int
+
+	// NodePoolOverride pins the run to a specific static multinode NodePool
+	// (e.g. "multinode-us-east-2a"). Empty = auto-select, preferring pools
+	// backed by a capacity reservation / Capacity Block (see
+	// selectMultinodePool). PRD-57's UI can surface this so a user picks a
+	// pool/AZ explicitly.
+	NodePoolOverride string
+
+	// NetworkMode selects the cross-node collective fabric for a distributed
+	// run: NetworkModeEFA (default, preferred — EFA/RDMA) or NetworkModeTCP
+	// (NCCL over plain sockets, no EFA devices claimed). TCP lets users
+	// benchmark multi-node on GPU instances that lack EFA (or when EFA
+	// capacity is unavailable), at a throughput cost. Empty ⇒ EFA.
+	NetworkMode string
+}
+
+// Cross-node fabric modes for distributed runs (PRD-56).
+const (
+	NetworkModeEFA = "efa" // EFA/RDMA via libfabric — preferred, default.
+	NetworkModeTCP = "tcp" // NCCL over TCP sockets — no EFA required.
+)
+
+// networkMode returns the effective fabric mode, defaulting to EFA.
+func (c RunConfig) networkMode() string {
+	if c.NetworkMode == NetworkModeTCP {
+		return NetworkModeTCP
+	}
+	return NetworkModeEFA
+}
+
+// IsDistributed reports whether this run uses the multi-node deploy path:
+// the framework is a multi-node runtime AND a node count > 1 was requested.
+func (c RunConfig) IsDistributed() bool {
+	rt, err := runtime.Get(c.Request.Framework)
+	if err != nil {
+		return false
+	}
+	return runtime.IsMultiNode(rt) && c.NodeCount > 1
 }
 
 // Orchestrator manages the benchmark lifecycle.
@@ -58,8 +111,19 @@ type Orchestrator struct {
 	repo        database.Repo
 	oomDetector *oom.Detector
 	secrets     HFTokenResolver // optional; nil = no auto-injection
+	// PRD-56: dynamic client for applying/deleting CRDs (LeaderWorkerSet,
+	// InferencePool, HTTPRoute, ResourceClaimTemplate) that the typed
+	// clientset can't create, plus patching the static Karpenter NodePool's
+	// replica count. nil = single-node only (multi-node runs are rejected).
+	// Injected via SetDynamicClient after construction, mirroring how the
+	// API server receives its dynamic client (PRD-33).
+	dynClient dynamic.Interface
 	mu          sync.Mutex
 	cancels     map[string]context.CancelFunc // runID → cancel
+	// PRD-56: per-run distributed state (applied CRD graph + scaled NodePool),
+	// so teardown deletes exactly what was created and returns the pool to 0.
+	// Guarded by mu. Empty/absent for single-node runs.
+	distributed map[string]*distributedState
 	// PRD-40: this pod's hostname. Written into benchmark_runs.owner_pod +
 	// test_suite_runs.owner_pod when Execute starts so orphan recovery on
 	// sibling pods can attribute ownership.
@@ -73,14 +137,33 @@ func New(client kubernetes.Interface, repo database.Repo, hostname string) *Orch
 		repo:        repo,
 		oomDetector: oom.NewDetector(client, defaultNamespace),
 		cancels:     make(map[string]context.CancelFunc),
+		distributed: make(map[string]*distributedState),
 		hostname:    hostname,
 	}
+}
+
+// distributedState records what a multi-node run allocated so teardown can
+// undo it precisely: the applied CRD/Service graph and the scaled NodePool.
+// Keyed in o.distributed by the run's modelName ("bench-<runID[:8]>"), which
+// both Execute and cleanupResources derive identically — so teardown reaches
+// the state without threading the full runID through its signature.
+type distributedState struct {
+	poolName string          // the multinode NodePool scaled out (empty = none)
+	applied  []appliedObject // CRDs + Service applied via the dynamic client
 }
 
 // SetSecretsStore enables HF token auto-injection. Called from the API server
 // after construction; leaving it unset falls back to per-request tokens only.
 func (o *Orchestrator) SetSecretsStore(s HFTokenResolver) {
 	o.secrets = s
+}
+
+// SetDynamicClient injects the client-go dynamic client (PRD-56). Called from
+// the API server after construction with the same in-cluster client the
+// reservations handlers use. Leaving it nil disables the multi-node deploy
+// path — distributed runs are rejected at Execute time with a clear error.
+func (o *Orchestrator) SetDynamicClient(dc dynamic.Interface) {
+	o.dynClient = dc
 }
 
 // resolveHFToken returns the per-request token when set, otherwise the
@@ -174,6 +257,19 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	// Ensure teardown happens regardless of outcome.
 	defer o.teardown(context.Background(), ns, modelName, loadgenName, configMapName)
 
+	// PRD-56 Layer 3: for a distributed run, claim the shared multi-node pool
+	// (serialized — one at a time) and scale it out before deploying. The
+	// pool is scaled back to 0 by teardown (registered above). Runs before
+	// deployModel so nodes exist when the LeaderWorkerSet schedules.
+	if cfg.IsDistributed() {
+		log.Printf("[%s] distributed run: %d nodes, TP=%d PP=%d",
+			cfg.RunID[:8], cfg.NodeCount, cfg.Request.TensorParallelDegree, cfg.PipelineParallelDegree)
+		if err := o.acquireDistributedPool(ctx, ns, modelName, cfg); err != nil {
+			o.markFailed(ctx, cfg.RunID, fmt.Sprintf("acquire distributed pool: %v", err))
+			return fmt.Errorf("acquire distributed pool: %w", err)
+		}
+	}
+
 	// Phase 2: Deploy model Deployment + Service.
 	log.Printf("[%s] deploying model %s on %s", cfg.RunID[:8], cfg.Request.ModelHfID, cfg.Request.InstanceTypeName)
 	if err := o.deployModel(ctx, ns, modelName, cfg); err != nil {
@@ -214,12 +310,21 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	var gpuScraper *GPUScraper
 	if strings.EqualFold(cfg.InstanceType.AcceleratorType, "gpu") {
 		totalMemGiB := float64(cfg.InstanceType.AcceleratorMemoryGiB)
-		// Try to get node IP for DCGM metrics
-		nodeIP := o.getModelPodNodeIP(ctx, ns, modelName)
-		if nodeIP != "" {
-			log.Printf("[%s] DCGM scraping enabled (node %s)", cfg.RunID[:8], nodeIP)
+		if cfg.IsDistributed() {
+			// PRD-56: GPUs live on every group node — fan DCGM out across all.
+			// The model metrics endpoint is the leader Service (modelName:8000).
+			nodeIPs := o.llmdServingNodeIPs(ctx, ns, modelName)
+			log.Printf("[%s] DCGM scraping enabled across %d serving node(s)", cfg.RunID[:8], len(nodeIPs))
+			// Total memory scales with the group: per-instance accel memory × nodes.
+			gpuScraper = NewGPUScraperMultiNode(modelName, 8000, totalMemGiB*float64(cfg.NodeCount), nodeIPs)
+		} else {
+			// Try to get node IP for DCGM metrics
+			nodeIP := o.getModelPodNodeIP(ctx, ns, modelName)
+			if nodeIP != "" {
+				log.Printf("[%s] DCGM scraping enabled (node %s)", cfg.RunID[:8], nodeIP)
+			}
+			gpuScraper = NewGPUScraperWithDCGM(modelName, 8000, totalMemGiB, nodeIP)
 		}
-		gpuScraper = NewGPUScraperWithDCGM(modelName, 8000, totalMemGiB, nodeIP)
 		gpuScraper.Start(ctx)
 		log.Printf("[%s] started GPU metrics scraper", cfg.RunID[:8])
 	}
@@ -327,6 +432,13 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 }
 
 func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg RunConfig) error {
+	// PRD-56: multi-node runs render the llm-d object graph (LWS + gateway +
+	// DRA claims) and apply it via the dynamic client. Single-node runs take
+	// the unchanged typed-Deployment path below.
+	if cfg.IsDistributed() {
+		return o.deployLLMD(ctx, ns, name, cfg)
+	}
+
 	// Reserve headroom for kubelet, kube-proxy, and OS overhead.
 	// Request ~75% of instance vCPUs and ~85% of memory.
 	vcpus := cfg.InstanceType.VCPUs
@@ -453,6 +565,11 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 }
 
 func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg RunConfig) error {
+	// PRD-56: multi-node runs poll the LeaderWorkerSet group status instead of
+	// a Deployment's ReadyReplicas.
+	if cfg.IsDistributed() {
+		return o.waitForLWSReady(ctx, ns, name, cfg)
+	}
 	deadline := time.Now().Add(readinessTimeout)
 	for time.Now().Before(deadline) {
 		dep, err := o.client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -500,7 +617,15 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 	if s == nil {
 		return fmt.Errorf("unknown scenario: %s", cfg.Request.ScenarioID)
 	}
-	inferencePerfConfig := s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
+	// PRD-56: distributed runs target the shared Envoy AI Gateway (ClusterIP)
+	// instead of the model Service. inference-perf is unchanged — it's a
+	// drop-in swap of the target host/port.
+	targetHost, targetPort := modelSvc, 8000
+	if cfg.IsDistributed() {
+		targetHost, targetPort = o.gatewayLoadgenTarget(ctx)
+		log.Printf("[%s] loadgen targeting gateway %s:%d", cfg.RunID[:8], targetHost, targetPort)
+	}
+	inferencePerfConfig := s.ToInferencePerfConfig(cfg.Request.ModelHfID, targetHost, targetPort)
 	log.Printf("[%s] using scenario %q: %s", cfg.RunID[:8], s.ID, s.Name)
 
 	// Allow dataset override from request
@@ -734,6 +859,12 @@ func (o *Orchestrator) teardown(ctx context.Context, ns, modelName, loadgenName,
 	if configMapName != "" {
 		_ = o.client.CoreV1().ConfigMaps(ns).Delete(ctx, configMapName, metav1.DeleteOptions{})
 	}
+
+	// PRD-56: for a distributed run, delete the llm-d object graph (LWS +
+	// gateway route + DRA claims) and scale the NodePool back to 0. No-op for
+	// single-node runs (nothing recorded under modelName). Deleting the LWS's
+	// pods first (above/here) lets nodes drain before scale-in.
+	o.teardownDistributed(ctx, ns, modelName)
 }
 
 // createConfigMap creates a ConfigMap with the given data.
@@ -811,6 +942,10 @@ func (o *Orchestrator) applyYAML(ctx context.Context, ns, yamlStr string) error 
 				return err
 			}
 		default:
+			// The single-node path only ever renders the three typed kinds
+			// above. Custom resources (the multi-node llm-d object graph) are
+			// applied via the dynamic client through applyManifestSet, which
+			// also tracks them for teardown — not through this typed path.
 			return fmt.Errorf("unsupported resource kind: %s", meta.Kind)
 		}
 	}

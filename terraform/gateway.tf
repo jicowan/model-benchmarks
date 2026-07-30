@@ -202,3 +202,64 @@ resource "kubectl_manifest" "envoy_proxy_clusterip" {
   server_side_apply = true
   depends_on        = [helm_release.envoy_gateway]
 }
+
+# ---------- Shared GatewayClass + Gateway (PRD-56) ----------
+# The llm-d deploy path (PRD-56) renders a per-run HTTPRoute whose parentRef is
+# this ONE shared, long-lived Gateway — created here, not per-run, so a single
+# Envoy fronts every distributed model regardless of which AZ it lands in
+# (answers PRD-55's "can 1 gateway serve models in any AZ?" — yes). The
+# GatewayClass points at the ClusterIP EnvoyProxy config above via
+# parametersRef, so the provisioned Envoy Service is ClusterIP (loadgen is
+# in-cluster; no NLB).
+resource "kubectl_manifest" "accelbench_gatewayclass" {
+  count = local.multinode_serving ? 1 : 0
+
+  yaml_body = <<-YAML
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: GatewayClass
+    metadata:
+      name: accelbench
+    spec:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+      parametersRef:
+        group: gateway.envoyproxy.io
+        kind: EnvoyProxy
+        name: accelbench-clusterip
+        namespace: envoy-gateway-system
+  YAML
+
+  server_side_apply = true
+  depends_on = [
+    kubectl_manifest.envoy_proxy_clusterip,
+    kubectl_manifest.gateway_api_crds,
+  ]
+}
+
+resource "kubectl_manifest" "accelbench_gateway" {
+  count = local.multinode_serving ? 1 : 0
+
+  # Name/namespace match the orchestrator's defaults (LLMD_GATEWAY_NAME /
+  # LLMD_GATEWAY_NAMESPACE). The orchestrator resolves the gateway Service by
+  # DNS at <name>.<namespace>.svc.cluster.local:80.
+  yaml_body = <<-YAML
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    metadata:
+      name: accelbench-gateway
+      namespace: envoy-gateway-system
+    spec:
+      gatewayClassName: accelbench
+      listeners:
+        - name: http
+          protocol: HTTP
+          port: 80
+          allowedRoutes:
+            # llm-d HTTPRoutes live in the accelbench namespace; the Gateway is
+            # in envoy-gateway-system, so cross-namespace routes must be allowed.
+            namespaces:
+              from: All
+  YAML
+
+  server_side_apply = true
+  depends_on        = [kubectl_manifest.accelbench_gatewayclass]
+}

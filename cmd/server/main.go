@@ -66,6 +66,12 @@ func main() {
 
 	srv := api.NewServer(repo, k8sClient, hostname)
 
+	// PRD-56: give the orchestrator the dynamic client so the multi-node
+	// deploy path can apply CRDs (LeaderWorkerSet / InferencePool / route /
+	// ResourceClaimTemplate) and scale the static Karpenter NodePool. This is
+	// independent of AWS config, unlike the reservations wiring below.
+	srv.Orchestrator().SetDynamicClient(dynClient)
+
 	// PRD-38: shared response cache for slow-changing read endpoints.
 	// 60-second TTL; mutation handlers invalidate their keys explicitly.
 	responseCache := cache.New(60 * time.Second)

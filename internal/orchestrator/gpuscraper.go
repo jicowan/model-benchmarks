@@ -64,7 +64,7 @@ type GPUMetrics struct {
 // DCGM exporter for actual GPU hardware metrics.
 type GPUScraper struct {
 	metricsURL     string
-	dcgmURL        string // DCGM exporter endpoint (optional)
+	dcgmURLs       []string // DCGM exporter endpoints, one per serving node (optional; PRD-56 multi-node fans out across all)
 	totalMemoryGiB float64
 	client         *http.Client
 
@@ -110,13 +110,27 @@ func NewGPUScraper(serviceHost string, port int, totalMemoryGiB float64) *GPUScr
 // NewGPUScraperWithDCGM creates a scraper that targets both vLLM metrics and
 // DCGM exporter for hardware GPU metrics. If nodeIP is empty, DCGM scraping is disabled.
 func NewGPUScraperWithDCGM(serviceHost string, port int, totalMemoryGiB float64, nodeIP string) *GPUScraper {
-	var dcgmURL string
+	var nodeIPs []string
 	if nodeIP != "" {
-		dcgmURL = fmt.Sprintf("http://%s:9400/metrics", nodeIP)
+		nodeIPs = []string{nodeIP}
+	}
+	return NewGPUScraperMultiNode(serviceHost, port, totalMemoryGiB, nodeIPs)
+}
+
+// NewGPUScraperMultiNode creates a scraper that fans DCGM scraping out across
+// every serving node's exporter (PRD-56). A multi-node llm-d deployment has
+// GPUs on every group node, so DCGM samples from all nodeIPs are aggregated
+// together into one GPUMetrics. Empty nodeIPs disables DCGM scraping.
+func NewGPUScraperMultiNode(serviceHost string, port int, totalMemoryGiB float64, nodeIPs []string) *GPUScraper {
+	dcgmURLs := make([]string, 0, len(nodeIPs))
+	for _, ip := range nodeIPs {
+		if ip != "" {
+			dcgmURLs = append(dcgmURLs, fmt.Sprintf("http://%s:9400/metrics", ip))
+		}
 	}
 	return &GPUScraper{
 		metricsURL:     fmt.Sprintf("http://%s:%d/metrics", serviceHost, port),
-		dcgmURL:        dcgmURL,
+		dcgmURLs:       dcgmURLs,
 		totalMemoryGiB: totalMemoryGiB,
 		client: &http.Client{
 			Timeout: scrapeTimeout,
@@ -302,7 +316,7 @@ func (s *GPUScraper) loop(ctx context.Context) {
 	// Wait for DCGM exporter to become reachable before entering the
 	// regular scrape loop. On freshly-provisioned GPU nodes, the DCGM
 	// daemonset pod takes 30-60s to start.
-	if s.dcgmURL != "" {
+	if len(s.dcgmURLs) > 0 {
 		s.waitForDCGM(ctx)
 	}
 
@@ -327,16 +341,20 @@ const dcgmWaitTimeout = 90 * time.Second
 func (s *GPUScraper) waitForDCGM(ctx context.Context) {
 	deadline := time.Now().Add(dcgmWaitTimeout)
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.dcgmURL, nil)
-		if err != nil {
-			return
-		}
-		resp, err := s.client.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				log.Printf("[gpuscraper] DCGM exporter ready")
-				return
+		// Ready as soon as the first exporter answers; the rest are polled
+		// best-effort each scrape (a slow node just contributes samples late).
+		for _, url := range s.dcgmURLs {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				continue
+			}
+			resp, err := s.client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					log.Printf("[gpuscraper] DCGM exporter ready (%d node(s))", len(s.dcgmURLs))
+					return
+				}
 			}
 		}
 		select {
@@ -352,9 +370,11 @@ func (s *GPUScraper) scrape(ctx context.Context) {
 	// Scrape vLLM metrics
 	s.scrapeModelServer(ctx)
 
-	// Scrape DCGM metrics if configured
-	if s.dcgmURL != "" {
-		s.scrapeDCGM(ctx)
+	// Scrape DCGM metrics from every serving node if configured. Samples from
+	// all nodes are aggregated into the same slices (peak = hottest GPU across
+	// the group; avg = mean across all nodes' samples).
+	for _, url := range s.dcgmURLs {
+		s.scrapeDCGM(ctx, url)
 	}
 }
 
@@ -425,8 +445,8 @@ func (s *GPUScraper) scrapeModelServer(ctx context.Context) {
 	s.samplesCollected++
 }
 
-func (s *GPUScraper) scrapeDCGM(ctx context.Context) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.dcgmURL, nil)
+func (s *GPUScraper) scrapeDCGM(ctx context.Context, dcgmURL string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dcgmURL, nil)
 	if err != nil {
 		return
 	}

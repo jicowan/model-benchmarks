@@ -11,6 +11,24 @@ func init() {
 	Register(&VLLMgpu{})
 	Register(&VLLMneuron{})
 	Register(&SGLang{})
+	Register(&LLMD{}) // PRD-56: multi-node llm-d runtime
+}
+
+// MultiNode is an optional capability a Runtime implements when its
+// deployment spans multiple GPU nodes (a leader + N workers) rather than a
+// single container. The orchestrator type-asserts for it to select the
+// multi-node deploy path; single-container runtimes don't implement it and
+// take the unchanged typed-client Deployment path.
+type MultiNode interface {
+	IsMultiNode() bool
+}
+
+// IsMultiNode reports whether the given Runtime requires the multi-node
+// deploy path. Safe for any Runtime — returns false for those that don't
+// implement the MultiNode capability.
+func IsMultiNode(r Runtime) bool {
+	m, ok := r.(MultiNode)
+	return ok && m.IsMultiNode()
 }
 
 func Register(r Runtime) {

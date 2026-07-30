@@ -1,0 +1,86 @@
+# TEMPORARY multi-node TEST pool (PRD-56) — applied by kubectl, NOT Terraform.
+#
+# Purpose: run a real end-to-end DISTRIBUTED (multi-node) benchmark in TCP
+# network mode on small, available GPU instances (g6.xlarge / L4), without EFA
+# or a p5 Capacity Block. This exercises the whole PRD-56 path — LWS gang
+# scheduling, cross-node NCCL-over-sockets, GPU DRA claims, gateway routing,
+# multi-node GPU-scrape fan-out, teardown + scale-in — minus EFA fabric
+# performance (which stays deferred to the p5 Capacity Block validation).
+#
+# This is a THROWAWAY pool. Tear it down when testing is done:
+#   kubectl delete -f terraform/manifests/multinode-test-pool.yaml
+#
+# Why kubectl, not Terraform: it's temporary and must not enter TF state (a
+# plain `terraform apply` without -var enable_multinode=true would try to
+# destroy the whole multinode stack). The real per-AZ p5 pools live in
+# terraform/modules/karpenter (var.multinode_instance_type).
+#
+# Prereqs (all already satisfied on accelbench-eks):
+#   - Karpenter staticCapacity feature gate ON (enable_multinode=true applied).
+#   - NVIDIA DRA driver DaemonSet targets accelbench.io/dra=true nodes.
+#   - Node IAM role + subnet/SG discovery tags exist (shared with the `gpu` pool).
+#
+# Orchestrator wiring: the pool name starts with "multinode-", so
+# selectMultinodePool() discovers it. Run with NetworkMode="tcp",
+# NodePoolOverride="multinode-test", NodeCount=2, TP=1, PP=2, GPUsPerNode=1.
+---
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: multinode-test
+spec:
+  # Accelerated (NVIDIA) AL2023 AMI — same pinned image as the `gpu` pool.
+  amiFamily: AL2023
+  amiSelectorTerms:
+    - id: ami-099c38b2d9e83b18f
+  role: Karpenter-accelbench-eks-ae69ce29ccb3fe545172632bda
+  # No AZ pin and no placement group: TCP mode doesn't need co-location, and
+  # small on-demand GPU capacity is easier to get across all AZs.
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: accelbench-eks
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: accelbench-eks
+  # NO networkInterfaces block — this is a non-EFA pool (standard ENA only).
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 100Gi
+        volumeType: gp3
+        encrypted: true
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: multinode-test
+spec:
+  # STATIC pool (spec.replicas) — the DRA-blind path, orchestrator-managed.
+  # Starts at 0; the orchestrator scales it to NodeCount for the run and back.
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        # DRA driver DaemonSet lands here; classic device plugin stays off.
+        accelbench.io/dra: "true"
+    spec:
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["g6.xlarge"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+      taints:
+        - key: nvidia.com/gpu
+          effect: NoSchedule
+        - key: accelbench.io/multinode
+          value: "true"
+          effect: NoSchedule
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: multinode-test

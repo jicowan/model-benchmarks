@@ -41,4 +41,19 @@ type ContainerParams struct {
 	// select GPU-architecture-appropriate launch flags such as the SGLang
 	// attention backend.
 	AcceleratorName string
+
+	// PRD-56 multi-node knobs. All zero-valued for single-container runtimes
+	// (vLLM/SGLang/Neuron), so their BuildArgs output is unchanged. Only the
+	// llm-d runtime consults these to render a leader+worker topology.
+	//
+	// PipelineParallelDegree is pipeline-parallel shards across NODES; the
+	// existing TensorParallelDegree stays tensor-parallel WITHIN a node. The
+	// serving world size is TensorParallelDegree * PipelineParallelDegree.
+	PipelineParallelDegree int
+	// NodeCount is the LeaderWorkerSet group size (1 leader + NodeCount-1
+	// workers). Conventionally equal to PipelineParallelDegree.
+	NodeCount int
+	// GPUsPerNode is the accelerators claimed per pod (conventionally equal
+	// to TensorParallelDegree).
+	GPUsPerNode int
 }

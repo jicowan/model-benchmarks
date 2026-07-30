@@ -154,6 +154,50 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 	if err := o.repo.DeleteStaleHeartbeats(ctx, 2*heartbeatTTL); err != nil {
 		log.Printf("[recovery] delete stale heartbeats: %v", err)
 	}
+
+	// PRD-56 (critical): reclaim leaked distributed pool capacity. If the pod
+	// that owned a distributed run died, its in-memory distributedState (and
+	// thus its scale-in) died with it — the p5 nodes would leak real money.
+	// This runs on the surviving sibling.
+	o.reapLeakedDistributedPools(ctx, live)
+}
+
+// reapLeakedDistributedPools scales every static multinode NodePool back to 0
+// when no LIVE distributed run holds the lock. Belt-and-suspenders for the
+// deferred teardown: it survives owner-pod crashes because it reads live
+// cluster state (the lock ConfigMap + heartbeats) rather than in-memory run
+// state. The lock — held for the WHOLE run including the pre-LWS provisioning
+// window — is what prevents this from racing a legitimate scale-out. Safe to
+// run every recovery pass; scaling an already-0 pool to 0 is a no-op.
+func (o *Orchestrator) reapLeakedDistributedPools(ctx context.Context, livePods []string) {
+	if o.dynClient == nil {
+		return
+	}
+	// A lock owned by a live pod ⇒ a distributed run is legitimately active
+	// (serving OR still provisioning nodes). Leave the pools alone.
+	if owner, exists := o.distributedLockOwner(ctx, defaultNamespace); exists {
+		if podIsLive(owner, livePods) {
+			return
+		}
+		// Dead owner: clear the stale lock so the pool is reclaimable and the
+		// next run isn't blocked by a ghost holder.
+		log.Printf("[recovery] distributed lock owner %q is dead — releasing stale lock", owner)
+		o.releaseDistributedLock(ctx, defaultNamespace)
+	}
+	pools, err := o.selectMultinodePool(ctx, "")
+	if err != nil {
+		return // no multinode pools (enable_multinode off) — nothing to reap.
+	}
+	for _, pool := range pools {
+		n := o.countReadyDRANodes(ctx, pool)
+		if n == 0 {
+			continue // already drained; avoid a pointless patch/log line.
+		}
+		log.Printf("[recovery] no live distributed run but pool %s has %d node(s) — scaling to 0", pool, n)
+		if err := o.scaleNodePool(ctx, pool, 0); err != nil {
+			log.Printf("[recovery] scale %s to 0: %v", pool, err)
+		}
+	}
 }
 
 // orphanFailureMessage is the error_message persisted on a run / suite row

@@ -1,0 +1,214 @@
+{{- /*
+PRD-56: multi-node llm-d object graph. Rendered as one multi-document YAML and
+applied together by the orchestrator via the dynamic client. Documents:
+  1. ResourceClaimTemplate  — GPU + EFA devices, PCIe-root-aligned (DRA)
+  2. LeaderWorkerSet        — leader + (NodeCount-1) workers, one pod per node
+  3. Service                — headless-ish ClusterIP over the leader (metrics/scrape)
+  4. InferencePool          — Gateway API Inference Extension pool over the LWS pods
+  5. HTTPRoute              — binds the pool to the shared Envoy AI Gateway
+
+The llm-d-aws image bundles vLLM + EFA + libfabric; the leader runs the vLLM
+serving process and coordinates workers over the fabric. GPUs are claimed via
+DRA (not the nvidia.com/gpu extended resource) because the PRD-55 GPU nodes run
+the NVIDIA DRA driver, not the classic device plugin.
+*/ -}}
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: {{ .Name }}-devices
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    accelbench/role: model
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: {{ .GPUDeviceClass }}
+            count: {{ .GPUsPerNode }}
+{{- if gt .EFAPerNode 0 }}
+        - name: efa
+          exactly:
+            deviceClassName: {{ .EFADeviceClass }}
+            count: {{ .EFAPerNode }}
+      constraints:
+        # Pin the EFA NIC(s) to the same PCIe root complex as the GPUs so NCCL
+        # gets the lowest-latency fabric path. The upstream llm-d charts have
+        # no EKS/EFA overlay — this alignment is the PRD-56 pod-spec wiring.
+        - requests: ["gpu", "efa"]
+          matchAttribute: "resource.kubernetes.io/pcieRoot"
+{{- end }}
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+    accelbench/role: model
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: {{ .NodeCount }}
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: {{ .Name }}
+          app.kubernetes.io/component: model-server
+          accelbench/role: model
+          accelbench/lws-role: leader
+      spec:
+{{- template "llmdPodSpec" (dict "p" . "role" "leader") }}
+    workerTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: {{ .Name }}
+          app.kubernetes.io/component: model-server
+          accelbench/role: model
+          accelbench/lws-role: worker
+      spec:
+{{- template "llmdPodSpec" (dict "p" . "role" "worker") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ .Name }}
+    accelbench/lws-role: leader
+---
+# PRD-56 routes the gateway straight to the leader Service via a standard
+# Gateway API HTTPRoute backendRef. The Inference Extension's InferencePool +
+# Endpoint Picker (KV-cache-aware routing across many endpoints) is deferred to
+# PRD-58 — a single multi-node group has one serving endpoint (the LWS leader),
+# so plain backendRef routing is the right fit and needs no EPP.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    accelbench/role: model
+spec:
+  parentRefs:
+    - name: {{ .GatewayName }}
+      namespace: {{ .GatewayNamespace }}
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: {{ .Name }}
+          port: 8000
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+{{- define "llmdPodSpec" }}
+{{- $p := .p }}
+        terminationGracePeriodSeconds: 60
+{{- if $p.ModelServiceAccount }}
+        serviceAccountName: {{ $p.ModelServiceAccount }}
+{{- end }}
+        tolerations:
+          # PRD-55 static multi-node GPU pool taint.
+          - key: {{ $p.MultiNodeTaintKey }}
+            operator: Equal
+            value: "{{ $p.MultiNodeTaintValue }}"
+            effect: NoSchedule
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: accelbench.io/dedicated
+            operator: Equal
+            value: "true"
+            effect: NoSchedule
+        nodeSelector:
+          # Only land on nodes where DRANET + the NVIDIA DRA driver are ready.
+          {{ $p.DRANodeSelectorKey }}: "{{ $p.DRANodeSelectorVal }}"
+        resourceClaims:
+          - name: devices
+            resourceClaimTemplateName: {{ $p.Name }}-devices
+        containers:
+          - name: {{ $p.ContainerName }}
+            image: {{ $p.Image }}
+            ports:
+              - name: http
+                containerPort: 8000
+                protocol: TCP
+            env:
+              - name: HF_TOKEN
+                value: "{{ $p.HfToken }}"
+              - name: NCCL_DEBUG
+                value: "INFO"
+{{- if eq $p.NetworkMode "tcp" }}
+              # TCP-sockets fabric (no EFA). NCCL falls back to plain sockets
+              # over the standard ENA interface — functionally correct, slower
+              # than EFA/RDMA. The user opted out of EFA for this run (e.g. to
+              # test on GPU instances that lack EFA or have no EFA capacity).
+              - name: NCCL_NET
+                value: "Socket"
+              - name: NCCL_SOCKET_IFNAME
+                value: "eth0"
+{{- else }}
+              # EFA / libfabric wiring the llm-d-aws image expects (preferred).
+              # Lifted from the PRD-55 hand-validated deployment (empirical).
+              - name: FI_PROVIDER
+                value: "efa"
+              - name: FI_EFA_USE_DEVICE_RDMA
+                value: "1"
+              - name: NCCL_PROTO
+                value: "simple"
+{{- end }}
+{{- if $p.Command }}
+            command: {{ toYAMLStringList $p.Command }}
+{{- end }}
+            args:
+{{- range $p.Args }}
+              - {{ . | yamlQuote }}
+{{- end }}
+            resources:
+              requests:
+                cpu: {{ $p.CPURequest }}
+                memory: {{ $p.MemoryRequest }}
+              limits:
+                memory: {{ $p.MemoryRequest }}
+              claims:
+                - name: devices
+            volumeMounts:
+              - name: shm
+                mountPath: /dev/shm
+{{- if eq .role "leader" }}
+            # Only the leader exposes the OpenAI/serving API; worker pods join
+            # the group over the fabric and never answer /health themselves.
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: http
+              initialDelaySeconds: 60
+              periodSeconds: 15
+              timeoutSeconds: 5
+              failureThreshold: 80
+{{- end }}
+        volumes:
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 32Gi
+{{- end }}

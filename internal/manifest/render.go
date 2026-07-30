@@ -49,6 +49,24 @@ func init() {
 			}
 			return "\"" + s + "\""
 		},
+		// dict builds a map from alternating key/value args, so a nested
+		// template can receive the outer params plus extra fields (PRD-56
+		// uses this to pass the LWS pod role — leader vs worker — into the
+		// shared pod-spec define).
+		"dict": func(kv ...any) (map[string]any, error) {
+			if len(kv)%2 != 0 {
+				return nil, fmt.Errorf("dict: odd number of arguments (%d)", len(kv))
+			}
+			m := make(map[string]any, len(kv)/2)
+			for i := 0; i < len(kv); i += 2 {
+				key, ok := kv[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict: key %d is not a string", i)
+				}
+				m[key] = kv[i+1]
+			}
+			return m, nil
+		},
 	}).ParseFS(templateFS, "templates/*.yaml.tmpl")
 	if err != nil {
 		panic(fmt.Sprintf("parse manifest templates: %v", err))
@@ -138,6 +156,70 @@ type CacheJobParams struct {
 	S3Bucket   string
 	HfToken    string
 	AWSRegion  string
+}
+
+// LLMDDeploymentParams holds values for rendering a multi-node llm-d
+// deployment (PRD-56): a LeaderWorkerSet spanning NodeCount GPU nodes, an
+// InferencePool selecting its pods, an HTTPRoute binding the pool to the
+// Envoy AI Gateway, and the DRA/EFA ResourceClaimTemplates. The single
+// object graph is applied by the orchestrator via the dynamic client and torn
+// down together.
+type LLMDDeploymentParams struct {
+	Name      string
+	Namespace string
+
+	// Container image + command. Resolved by the caller via the llm-d
+	// Runtime (image override → default GHCR image; args from BuildArgs).
+	Image            string
+	Command          []string // nil = use image entrypoint
+	Args             []string
+	ContainerName    string // k8s container name (e.g. "vllm")
+	ModelHfID        string
+	HfToken          string
+	ModelServiceAccount string // K8s service account for S3 access (empty = default SA)
+
+	// Topology.
+	NodeCount              int // LWS group size (leader + workers)
+	TensorParallelDegree   int // GPUs per node (within-node parallelism)
+	PipelineParallelDegree int // shards across nodes
+	GPUsPerNode            int // accelerators claimed per pod
+
+	// Per-pod resource requests (CPU/memory); GPUs are claimed via the DRA
+	// ResourceClaimTemplate, not the nvidia.com/gpu extended resource.
+	CPURequest    string
+	MemoryRequest string
+
+	// NetworkMode selects the cross-node collective fabric (PRD-56):
+	//   "efa" (default, preferred) — claim EFA devices + libfabric efa provider.
+	//   "tcp"                      — NCCL over plain sockets, no EFA claim.
+	// When "tcp", EFAPerNode is ignored (no EFA ResourceClaimTemplate rendered)
+	// and the pod env drops the EFA vars in favor of NCCL_NET=Socket.
+	NetworkMode string
+
+	// DRA/EFA wiring. The GPU claim and the EFA claim are PCIe-root-aligned
+	// so NCCL gets the NIC on the same PCIe switch as the GPUs.
+	GPUDeviceClass string // e.g. "gpu.nvidia.com"
+	EFADeviceClass string // e.g. "efa.networking.k8s.aws"
+	EFAPerNode     int    // EFA devices claimed per pod (ignored when NetworkMode == "tcp")
+
+	// Gateway binding. The route attaches to the shared Envoy AI Gateway
+	// (PRD-55) which is a ClusterIP Service; the loadgen targets it by DNS.
+	GatewayName      string
+	GatewayNamespace string
+
+	// Scheduling: the PRD-55 static multi-node pool. Pods tolerate the
+	// dedicated taint and select the DRA-ready label.
+	MultiNodeTaintKey   string // e.g. "accelbench.io/multinode"
+	MultiNodeTaintValue string // e.g. "true"
+	DRANodeSelectorKey  string // e.g. "accelbench.io/dra"
+	DRANodeSelectorVal  string // e.g. "true"
+}
+
+// RenderLLMDDeployment renders the multi-node llm-d object graph as a
+// multi-document YAML string (PRD-56). Documents: ResourceClaimTemplate(s),
+// LeaderWorkerSet, Service, InferencePool, HTTPRoute.
+func RenderLLMDDeployment(params LLMDDeploymentParams) (string, error) {
+	return renderTemplate("llmd-deployment.yaml.tmpl", params)
 }
 
 // RenderCacheJob renders the model cache Job manifest.

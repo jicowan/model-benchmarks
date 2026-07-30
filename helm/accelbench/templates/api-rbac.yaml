@@ -15,6 +15,17 @@ rules:
   - apiGroups: [""]
     resources: ["nodes/proxy"]
     verbs: ["get"]
+  # PRD-56: count Ready + DRA-labeled nodes when scaling the static multi-node
+  # NodePool 0→N and back (waitForNodes / reapLeakedDistributedPools).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  # PRD-56: resolve the Envoy AI Gateway's backing Service (generated name in
+  # envoy-gateway-system) so the loadgen can target the gateway ClusterIP.
+  # Cluster-scoped because that Service lives outside the accelbench namespace.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
   # PRD-33: Capacity Reservations card patches Karpenter CRDs to attach
   # ODCRs/CBRs to the GPU + Neuron EC2NodeClasses and keep the NodePools'
   # capacity-type requirement including 'reserved'.
@@ -66,6 +77,21 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch"]
+  # PRD-56: multi-node llm-d deploy path. The orchestrator applies + deletes
+  # the object graph a distributed run needs (LeaderWorkerSet, HTTPRoute,
+  # ResourceClaimTemplate) alongside the typed kinds above, and holds a
+  # ConfigMap lock (create/delete already granted via configmaps). The gateway
+  # routes straight to the leader Service; InferencePool + Endpoint Picker are
+  # deferred to PRD-58.
+  - apiGroups: ["leaderworkerset.x-k8s.io"]
+    resources: ["leaderworkersets"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaimtemplates"]
+    verbs: ["get", "list", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
