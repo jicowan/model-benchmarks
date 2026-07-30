@@ -850,8 +850,10 @@ resource "kubectl_manifest" "multinode_node_pool" {
     metadata:
       name: multinode-${each.key}
     spec:
+      # NOTE: `weight` is NOT valid on static (replicas-based) NodePools —
+      # Karpenter rejects it. Weight only applies to dynamic pools that
+      # compete in scheduling. These pools are explicitly targeted by name.
       replicas: 0
-      weight: 100
       template:
         metadata:
           labels:
