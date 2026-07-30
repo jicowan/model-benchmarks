@@ -88,8 +88,24 @@ resource "helm_release" "envoy_gateway" {
   chart            = "gateway-helm"
   version          = var.envoy_gateway_version
 
-  # AI-Gateway integration values (inference-pool support, etc.).
-  values = [data.http.envoy_gateway_values[0].response_body]
+  # AI-Gateway integration values (inference-pool support, etc.), then our
+  # CRD overrides (later values win).
+  values = [
+    data.http.envoy_gateway_values[0].response_body,
+    yamlencode({
+      # Do NOT let the chart install the Gateway API CRDs — we manage those
+      # separately at v1.6.1 (kubectl_manifest.gateway_api_crds). The chart
+      # bundles an OLDER copy, and the v1.6.1 CRDs ship a ValidatingAdmission
+      # Policy (safe-upgrades.gateway.networking.k8s.io) that rejects any
+      # pre-v1.5.0 Gateway API CRD install — so letting the chart install its
+      # bundled copy fails the release. Envoy Gateway's OWN CRDs (EnvoyProxy,
+      # etc., which envoy_proxy_clusterip uses) still install.
+      crds = {
+        gatewayAPI   = { enabled = false }
+        envoyGateway = { enabled = true }
+      }
+    }),
+  ]
 
   wait    = true
   timeout = 600
