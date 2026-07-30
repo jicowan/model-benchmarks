@@ -100,8 +100,12 @@ resource "helm_release" "karpenter" {
       interruptionQueue: ${module.karpenter.queue_name}
       # PRD-33: enables capacityReservationSelectorTerms on EC2NodeClass
       # and 'reserved' as a capacity-type. Still beta in Karpenter 1.9.
+      # PRD-55: staticCapacity enables spec.replicas on NodePools (the
+      # multi-node static pools). Off by default in 1.14 — without it the
+      # controller silently ignores replicas and provisions nothing.
       featureGates:
         reservedCapacity: true
+        staticCapacity: ${var.enable_multinode}
     EOT
   ]
 
