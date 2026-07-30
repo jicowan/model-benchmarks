@@ -299,6 +299,10 @@ module "eks" {
   # leave this at its default (true).
   enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
 
+  # Operator-supplied cluster-admin principals (e.g. the apply principal),
+  # granted via EKS access entries. See var.cluster_admin_principal_arns.
+  cluster_admin_principal_arns = var.cluster_admin_principal_arns
+
   tags = local.tags
 }
 

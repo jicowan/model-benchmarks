@@ -78,6 +78,39 @@ resource "kubectl_manifest" "inference_extension_crds" {
 # ---------- Envoy Gateway ----------
 # The Gateway API implementation Envoy AI Gateway layers on. Installed with
 # the AI-Gateway-specific values file (adds inference-pool + ext-proc wiring).
+# Envoy Gateway's OWN CRDs (EnvoyProxy, Backend, SecurityPolicy, …) — from
+# the separate gateway-crds-helm chart, where EVERYTHING is templated so
+# values toggles work. We install only Envoy's CRDs (envoyGateway=true) and
+# NOT the Gateway API CRDs (gatewayAPI=false) — those we own separately at
+# v1.6.1 (kubectl_manifest.gateway_api_crds).
+#
+# Why a separate release + skip_crds on the controller below: the main
+# gateway-helm chart ships the Gateway API CRDs in a raw Helm `crds/`
+# directory, which Helm installs UNCONDITIONALLY (values/conditions do not
+# apply to `crds/` dir files — this is why the earlier crds.gatewayAPI=false
+# values override was silently ineffective and the install kept failing the
+# v1.6.1 safe-upgrades admission policy). skip_crds=true is the only way to
+# stop the controller chart from touching them.
+resource "helm_release" "envoy_gateway_crds" {
+  count = local.multinode_serving ? 1 : 0
+
+  name             = "eg-crds"
+  namespace        = "envoy-gateway-system"
+  create_namespace = true
+  repository       = "oci://docker.io/envoyproxy"
+  chart            = "gateway-crds-helm"
+  version          = var.envoy_gateway_version
+
+  values = [yamlencode({
+    crds = {
+      gatewayAPI   = { enabled = false } # we own these at v1.6.1
+      envoyGateway = { enabled = true }  # Envoy's own CRDs — install here
+    }
+  })]
+
+  depends_on = [kubectl_manifest.gateway_api_crds]
+}
+
 resource "helm_release" "envoy_gateway" {
   count = local.multinode_serving ? 1 : 0
 
@@ -88,24 +121,15 @@ resource "helm_release" "envoy_gateway" {
   chart            = "gateway-helm"
   version          = var.envoy_gateway_version
 
-  # AI-Gateway integration values (inference-pool support, etc.), then our
-  # CRD overrides (later values win).
-  values = [
-    data.http.envoy_gateway_values[0].response_body,
-    yamlencode({
-      # Do NOT let the chart install the Gateway API CRDs — we manage those
-      # separately at v1.6.1 (kubectl_manifest.gateway_api_crds). The chart
-      # bundles an OLDER copy, and the v1.6.1 CRDs ship a ValidatingAdmission
-      # Policy (safe-upgrades.gateway.networking.k8s.io) that rejects any
-      # pre-v1.5.0 Gateway API CRD install — so letting the chart install its
-      # bundled copy fails the release. Envoy Gateway's OWN CRDs (EnvoyProxy,
-      # etc., which envoy_proxy_clusterip uses) still install.
-      crds = {
-        gatewayAPI   = { enabled = false }
-        envoyGateway = { enabled = true }
-      }
-    }),
-  ]
+  # Controller only — do NOT install the chart's bundled CRDs. They live in
+  # a raw `crds/` directory that Helm applies unconditionally (ignoring any
+  # values toggle), and they include an OLDER Gateway API set the v1.6.1
+  # safe-upgrades admission policy rejects. Gateway API CRDs come from
+  # kubectl_manifest.gateway_api_crds; Envoy's own from envoy_gateway_crds.
+  skip_crds = true
+
+  # AI-Gateway integration values (inference-pool support, etc.).
+  values = [data.http.envoy_gateway_values[0].response_body]
 
   wait    = true
   timeout = 600
@@ -113,6 +137,7 @@ resource "helm_release" "envoy_gateway" {
   depends_on = [
     kubectl_manifest.gateway_api_crds,
     kubectl_manifest.inference_extension_crds,
+    helm_release.envoy_gateway_crds,
   ]
 }
 

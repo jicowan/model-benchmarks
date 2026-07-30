@@ -21,6 +21,23 @@ module "eks" {
   # already exists outside Terraform.
   enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
 
+  # Operator-supplied cluster-admin access entries. Codifies the manual
+  # `aws eks create-access-entry` + `associate-access-policy` step that
+  # unblocked greenfield builds when enable_cluster_creator_admin_permissions
+  # alone left the apply principal without an entry. One entry per ARN,
+  # each with a cluster-scoped AmazonEKSClusterAdminPolicy association.
+  access_entries = {
+    for arn in var.cluster_admin_principal_arns : arn => {
+      principal_arn = arn
+      policy_associations = {
+        admin = {
+          policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          access_scope = { type = "cluster" }
+        }
+      }
+    }
+  }
+
   addons = {
     # vpc-cni and kube-proxy are DaemonSets — they register immediately and
     # run once nodes exist. Safe to wait on these.

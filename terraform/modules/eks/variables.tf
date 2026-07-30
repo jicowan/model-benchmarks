@@ -35,3 +35,9 @@ variable "enable_cluster_creator_admin_permissions" {
   type        = bool
   default     = true
 }
+
+variable "cluster_admin_principal_arns" {
+  description = "IAM principal ARNs to grant cluster-admin via an EKS access entry + AmazonEKSClusterAdminPolicy. Codifies the apply principal so the kube/helm/kubectl providers can authenticate."
+  type        = list(string)
+  default     = []
+}

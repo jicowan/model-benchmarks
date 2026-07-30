@@ -139,6 +139,23 @@ variable "enable_cluster_creator_admin_permissions" {
   default     = true
 }
 
+variable "cluster_admin_principal_arns" {
+  description = <<-EOT
+    IAM principal ARNs (users/roles) to grant cluster-admin via an EKS
+    access entry + AmazonEKSClusterAdminPolicy association. The operator
+    passes in the principal that runs `terraform apply` (and any others
+    that need kubectl/Helm access), e.g.
+      cluster_admin_principal_arns = ["arn:aws:iam::<acct>:user/kubernetes"]
+    Observed: enable_cluster_creator_admin_permissions alone did NOT create
+    an entry for the apply principal on greenfield builds, so the
+    kube/helm/kubectl providers failed to authenticate mid-apply. Setting
+    this codifies the manual access-entry step that unblocked those builds.
+    Empty (default) creates none — relies on the module's creator-admin.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "manage_cluster" {
   description = <<-EOT
     When true (default, greenfield), Terraform provisions the VPC, EKS
