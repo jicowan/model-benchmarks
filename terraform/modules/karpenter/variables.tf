@@ -86,6 +86,17 @@ variable "multinode_placement_groups" {
   default     = {}
 }
 
+variable "multinode_subnets" {
+  description = <<-EOT
+    Map of AZ name -> private subnet ID. Each multi-node NodeClass selects
+    its subnet by id (subnetSelectorTerms has no AZ field and the subnets
+    aren't zone-tagged), which pins the pool to that AZ. Keys must match
+    multinode_placement_groups.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "nvidia_dra_driver_version" {
   description = "nvidia-dra-driver-gpu Helm chart version (NGC: https://helm.ngc.nvidia.com/nvidia)."
   type        = string

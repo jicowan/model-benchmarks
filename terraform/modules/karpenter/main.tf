@@ -797,11 +797,11 @@ resource "kubectl_manifest" "multinode_node_class" {
       amiSelectorTerms:
         - id: ${data.aws_ssm_parameter.gpu_ami.value}
       role: ${module.karpenter.node_iam_role_name}
-      # Single AZ: select only this AZ's discovery-tagged private subnet.
+      # Single AZ: select this AZ's private subnet by ID. subnetSelectorTerms
+      # has no availability-zone field and the subnets aren't zone-tagged,
+      # so selecting the specific subnet id is what pins the pool to its AZ.
       subnetSelectorTerms:
-        - tags:
-            karpenter.sh/discovery: ${var.cluster_name}
-            "topology.kubernetes.io/zone": ${each.key}
+        - id: ${var.multinode_subnets[each.key]}
       securityGroupSelectorTerms:
         - tags:
             karpenter.sh/discovery: ${var.cluster_name}

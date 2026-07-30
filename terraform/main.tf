@@ -320,6 +320,10 @@ module "karpenter" {
   multinode_instance_type = var.multinode_instance_type
   # map AZ -> placement group name, consumed by the per-AZ NodeClasses.
   multinode_placement_groups = { for az, pg in aws_placement_group.multinode : az => pg.name }
+  # map AZ -> private subnet ID: NodeClasses select their subnet by id
+  # (subnetSelectorTerms has no AZ field, and the subnets aren't tagged by
+  # zone), which also pins each pool to its AZ.
+  multinode_subnets = var.manage_cluster && var.enable_multinode ? module.vpc[0].private_subnets_by_az : {}
 
   tags = local.tags
 }

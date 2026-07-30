@@ -8,6 +8,11 @@ output "azs" {
   value       = local.azs
 }
 
+output "private_subnets_by_az" {
+  description = "Map of AZ name -> private subnet ID (subnets are created in azs order)."
+  value       = { for i, az in local.azs : az => module.vpc.private_subnets[i] }
+}
+
 output "private_subnets" {
   description = "List of private subnet IDs"
   value       = module.vpc.private_subnets
