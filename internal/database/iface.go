@@ -34,6 +34,9 @@ type Repo interface {
 	PersistMetrics(ctx context.Context, runID string, m *BenchmarkMetrics) error
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
+	// PRD-59: per-node/per-role GPU breakdown for distributed runs (empty for
+	// single-instance).
+	GetShardMetrics(ctx context.Context, runID string) ([]ShardMetric, error)
 	ListCatalog(ctx context.Context, f CatalogFilter) ([]CatalogEntry, int, error)
 	// PRD-37: refresh the `catalog_rows` materialized view. Called by the
 	// per-pod refresh loop in cmd/server/catalog_refresh.go.

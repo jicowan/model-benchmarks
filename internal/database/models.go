@@ -128,6 +128,10 @@ type BenchmarkMetrics struct {
 	AcceleratorUtilizationPct    *float64 `json:"accelerator_utilization_pct,omitempty"`
 	AcceleratorUtilizationAvgPct *float64 `json:"accelerator_utilization_avg_pct,omitempty"`
 	AcceleratorMemoryPeakGiB    *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+	// PRD-59: honest group GPU memory total (sum of per-node peaks) for
+	// distributed runs. NULL on single-instance + historical rows — for those
+	// the existing peak column already answers "how much GPU memory".
+	AcceleratorMemoryTotalGiB *float64 `json:"accelerator_memory_total_gib,omitempty"`
 	WaitingRequestsMax          *int     `json:"waiting_requests_max,omitempty"`
 	SuccessfulRequests          *int     `json:"successful_requests,omitempty"`
 	FailedRequests           *int     `json:"failed_requests,omitempty"`
@@ -160,6 +164,32 @@ type BenchmarkMetrics struct {
 	DRAMActivePeakPct   *float64 `json:"dram_active_peak_pct,omitempty"`
 	// Average framebuffer usage across scrapes (GiB).
 	AcceleratorMemoryAvgGiB *float64 `json:"accelerator_memory_avg_gib,omitempty"`
+
+	// PRD-59: per-node/per-role GPU breakdown for distributed runs. Nil/empty
+	// for single-instance runs. Populated by the orchestrator from the keyed
+	// scraper; PersistMetrics writes these into benchmark_metrics_by_shard in
+	// the same transaction. Not a column on benchmark_metrics — a child table.
+	Shards []ShardMetric `json:"shards,omitempty"`
+}
+
+// ShardMetric is one serving shard's ({node, role}) GPU telemetry for a
+// distributed run (PRD-59, table benchmark_metrics_by_shard). Only written for
+// distributed/disaggregated runs; empty for single-instance runs.
+type ShardMetric struct {
+	RunID               string   `json:"run_id"`
+	Node                string   `json:"node"`
+	Role                string   `json:"role,omitempty"`
+	Samples             int      `json:"samples"`
+	UtilizationAvgPct   *float64 `json:"utilization_avg_pct,omitempty"`
+	UtilizationPeakPct  *float64 `json:"utilization_peak_pct,omitempty"`
+	MemoryAvgGiB        *float64 `json:"memory_avg_gib,omitempty"`
+	MemoryPeakGiB       *float64 `json:"memory_peak_gib,omitempty"`
+	SMActiveAvgPct      *float64 `json:"sm_active_avg_pct,omitempty"`
+	SMActivePeakPct     *float64 `json:"sm_active_peak_pct,omitempty"`
+	TensorActiveAvgPct  *float64 `json:"tensor_active_avg_pct,omitempty"`
+	TensorActivePeakPct *float64 `json:"tensor_active_peak_pct,omitempty"`
+	DRAMActiveAvgPct    *float64 `json:"dram_active_avg_pct,omitempty"`
+	DRAMActivePeakPct   *float64 `json:"dram_active_peak_pct,omitempty"`
 }
 
 type Pricing struct {

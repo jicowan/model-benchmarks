@@ -304,6 +304,15 @@ func (m *MockRepo) PersistMetrics(_ context.Context, runID string, bm *Benchmark
 	return nil
 }
 
+func (m *MockRepo) GetShardMetrics(_ context.Context, runID string) ([]ShardMetric, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if bm, ok := m.metrics[runID]; ok {
+		return bm.Shards, nil
+	}
+	return nil, nil
+}
+
 func (m *MockRepo) GetBenchmarkRun(_ context.Context, runID string) (*BenchmarkRun, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

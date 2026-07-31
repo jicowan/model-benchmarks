@@ -57,6 +57,22 @@ type GPUMetrics struct {
 	TensorActivePeakPct *float64
 	DRAMActiveAvgPct    *float64
 	DRAMActivePeakPct   *float64
+
+	// PRD-59: multi-node roll-up + per-node/per-role breakdown. Populated ONLY
+	// for distributed runs (the keyed scraper path); nil/zero for single-node.
+	// MemoryTotalGiB is the honest group total (sum of per-node peak memory),
+	// distinct from MemoryPeakGiB (hottest single node — unchanged meaning).
+	MemoryTotalGiB float64
+	Shards         []ShardMetrics
+}
+
+// dcgmTarget is one node's DCGM exporter endpoint plus its identity. Node/Role
+// are empty on the flat (single-node) path and set on the keyed (distributed)
+// path so samples can be bucketed per {node, role} (PRD-59 Layer 1).
+type dcgmTarget struct {
+	url  string
+	node string
+	role string
 }
 
 // GPUScraper periodically polls a vLLM Prometheus metrics endpoint and
@@ -64,9 +80,17 @@ type GPUMetrics struct {
 // DCGM exporter for actual GPU hardware metrics.
 type GPUScraper struct {
 	metricsURL     string
-	dcgmURLs       []string // DCGM exporter endpoints, one per serving node (optional; PRD-56 multi-node fans out across all)
+	dcgmTargets    []dcgmTarget // DCGM exporter endpoints (+identity); PRD-56 multi-node fans out across all
 	totalMemoryGiB float64
 	client         *http.Client
+
+	// PRD-59: keyed=true for distributed runs → DCGM samples are bucketed by
+	// {node, role} and reduced through the aggregation layer, producing a
+	// per-node/per-role breakdown. keyed=false is the pre-PRD-59 flat path,
+	// byte-for-byte unchanged — single-instance runs NEVER set this.
+	keyed        bool
+	keyedSamples map[gpuShardKey]*gpuShardSamples
+	shardOrder   []gpuShardKey
 
 	mu                sync.Mutex
 	utilizationSample []float64
@@ -122,16 +146,48 @@ func NewGPUScraperWithDCGM(serviceHost string, port int, totalMemoryGiB float64,
 // GPUs on every group node, so DCGM samples from all nodeIPs are aggregated
 // together into one GPUMetrics. Empty nodeIPs disables DCGM scraping.
 func NewGPUScraperMultiNode(serviceHost string, port int, totalMemoryGiB float64, nodeIPs []string) *GPUScraper {
-	dcgmURLs := make([]string, 0, len(nodeIPs))
+	targets := make([]dcgmTarget, 0, len(nodeIPs))
 	for _, ip := range nodeIPs {
 		if ip != "" {
-			dcgmURLs = append(dcgmURLs, fmt.Sprintf("http://%s:9400/metrics", ip))
+			targets = append(targets, dcgmTarget{url: fmt.Sprintf("http://%s:9400/metrics", ip)})
 		}
 	}
-	return &GPUScraper{
+	return newGPUScraper(serviceHost, port, totalMemoryGiB, targets, false)
+}
+
+// GPUNode identifies a serving node for the keyed scraper: its DCGM-reachable
+// IP and its role ("prefill"/"decode" for disaggregated, "" for co-located).
+type GPUNode struct {
+	IP   string
+	Role string
+}
+
+// NewGPUScraperKeyed creates a scraper that buckets DCGM samples by {node, role}
+// and reduces them through the PRD-59 aggregation layer, yielding a
+// per-node/per-role breakdown alongside the group roll-up. Used ONLY for
+// distributed runs — the roll-up it produces is identical to the flat path when
+// there is a single node, so co-located and disaggregated runs share this path
+// while single-instance runs keep NewGPUScraperWithDCGM.
+func NewGPUScraperKeyed(serviceHost string, port int, totalMemoryGiB float64, nodes []GPUNode) *GPUScraper {
+	targets := make([]dcgmTarget, 0, len(nodes))
+	for _, n := range nodes {
+		if n.IP != "" {
+			targets = append(targets, dcgmTarget{
+				url:  fmt.Sprintf("http://%s:9400/metrics", n.IP),
+				node: n.IP,
+				role: n.Role,
+			})
+		}
+	}
+	return newGPUScraper(serviceHost, port, totalMemoryGiB, targets, true)
+}
+
+func newGPUScraper(serviceHost string, port int, totalMemoryGiB float64, targets []dcgmTarget, keyed bool) *GPUScraper {
+	s := &GPUScraper{
 		metricsURL:     fmt.Sprintf("http://%s:%d/metrics", serviceHost, port),
-		dcgmURLs:       dcgmURLs,
+		dcgmTargets:    targets,
 		totalMemoryGiB: totalMemoryGiB,
+		keyed:          keyed,
 		client: &http.Client{
 			Timeout: scrapeTimeout,
 		},
@@ -142,6 +198,10 @@ func NewGPUScraperMultiNode(serviceHost string, port int, totalMemoryGiB float64
 		firstPrefixQueries: -1,
 		firstPreemptions:   -1,
 	}
+	if keyed {
+		s.keyedSamples = make(map[gpuShardKey]*gpuShardSamples)
+	}
+	return s
 }
 
 // Start begins scraping in a background goroutine. It is safe to call
@@ -164,7 +224,7 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.utilizationSample) == 0 && len(s.dcgmUtilSamples) == 0 {
+	if len(s.utilizationSample) == 0 && len(s.dcgmUtilSamples) == 0 && len(s.keyedSamples) == 0 {
 		return nil
 	}
 
@@ -232,36 +292,52 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 		preemptions = int(s.lastPreemptions - s.firstPreemptions)
 	}
 
-	// Compute DCGM GPU utilization stats
-	var dcgmUtilAvg, dcgmUtilPeak float64
-	if len(s.dcgmUtilSamples) > 0 {
-		var sum float64
-		for _, v := range s.dcgmUtilSamples {
-			sum += v
-			if v > dcgmUtilPeak {
-				dcgmUtilPeak = v
+	// DCGM reduction. PRD-59: the keyed (distributed) path reduces through the
+	// aggregation layer to get the group roll-up + per-node/per-role breakdown
+	// + honest memory total. The flat (single-node) path keeps the exact
+	// pre-PRD-59 inline reduction — single-instance numbers are unchanged.
+	var dcgmUtilAvg, dcgmUtilPeak, dcgmMemPeakGiB, dcgmMemAvgGiB, dcgmMemTotalGiB float64
+	var smAvg, smPeak, tensorAvg, tensorPeak, dramAvg, dramPeak *float64
+	var shards []ShardMetrics
+
+	if s.keyed {
+		agg := aggregateGPU(s.keyedSamples, s.shardOrder)
+		dcgmUtilAvg, dcgmUtilPeak = agg.UtilizationAvgPct, agg.UtilizationPeakPct
+		dcgmMemPeakGiB, dcgmMemAvgGiB, dcgmMemTotalGiB = agg.MemoryPeakGiB, agg.MemoryAvgGiB, agg.MemoryTotalGiB
+		smAvg, smPeak = agg.SMActiveAvgPct, agg.SMActivePeakPct
+		tensorAvg, tensorPeak = agg.TensorActiveAvgPct, agg.TensorActivePeakPct
+		dramAvg, dramPeak = agg.DRAMActiveAvgPct, agg.DRAMActivePeakPct
+		shards = agg.Shards
+	} else {
+		if len(s.dcgmUtilSamples) > 0 {
+			var sum float64
+			for _, v := range s.dcgmUtilSamples {
+				sum += v
+				if v > dcgmUtilPeak {
+					dcgmUtilPeak = v
+				}
 			}
+			dcgmUtilAvg = sum / float64(len(s.dcgmUtilSamples))
 		}
-		dcgmUtilAvg = sum / float64(len(s.dcgmUtilSamples))
-	}
-
-	// Compute DCGM memory peak and average (convert MB to GiB)
-	var dcgmMemPeakGiB, dcgmMemSum float64
-	for _, v := range s.dcgmMemSamples {
-		gib := v / 1024 // DCGM reports memory in MB
-		if gib > dcgmMemPeakGiB {
-			dcgmMemPeakGiB = gib
+		// Compute DCGM memory peak and average (convert MB to GiB)
+		var dcgmMemSum float64
+		for _, v := range s.dcgmMemSamples {
+			gib := v / 1024 // DCGM reports memory in MB
+			if gib > dcgmMemPeakGiB {
+				dcgmMemPeakGiB = gib
+			}
+			dcgmMemSum += gib
 		}
-		dcgmMemSum += gib
+		if len(s.dcgmMemSamples) > 0 {
+			dcgmMemAvgGiB = dcgmMemSum / float64(len(s.dcgmMemSamples))
+		}
+		// Single-node: total == peak (one node), preserving the honest-total
+		// invariant without changing the single-node peak's meaning.
+		dcgmMemTotalGiB = dcgmMemPeakGiB
+		smAvg, smPeak = aggregatePctSamples(s.dcgmSMActiveSamples)
+		tensorAvg, tensorPeak = aggregatePctSamples(s.dcgmTensorActiveSamples)
+		dramAvg, dramPeak = aggregatePctSamples(s.dcgmDRAMActiveSamples)
 	}
-	var dcgmMemAvgGiB float64
-	if len(s.dcgmMemSamples) > 0 {
-		dcgmMemAvgGiB = dcgmMemSum / float64(len(s.dcgmMemSamples))
-	}
-
-	smAvg, smPeak := aggregatePctSamples(s.dcgmSMActiveSamples)
-	tensorAvg, tensorPeak := aggregatePctSamples(s.dcgmTensorActiveSamples)
-	dramAvg, dramPeak := aggregatePctSamples(s.dcgmDRAMActiveSamples)
 
 	return &GPUMetrics{
 		// Primary metrics from DCGM (0 if unavailable)
@@ -269,6 +345,8 @@ func (s *GPUScraper) Stop() *GPUMetrics {
 		UtilizationAvgPct:  dcgmUtilAvg,
 		MemoryPeakGiB:      dcgmMemPeakGiB,
 		MemoryAvgGiB:       dcgmMemAvgGiB,
+		MemoryTotalGiB:     dcgmMemTotalGiB,
+		Shards:             shards,
 		// Request queue metrics from vLLM
 		WaitingRequestsMax: maxWaiting,
 		// Throughput from vLLM
@@ -316,7 +394,7 @@ func (s *GPUScraper) loop(ctx context.Context) {
 	// Wait for DCGM exporter to become reachable before entering the
 	// regular scrape loop. On freshly-provisioned GPU nodes, the DCGM
 	// daemonset pod takes 30-60s to start.
-	if len(s.dcgmURLs) > 0 {
+	if len(s.dcgmTargets) > 0 {
 		s.waitForDCGM(ctx)
 	}
 
@@ -343,8 +421,8 @@ func (s *GPUScraper) waitForDCGM(ctx context.Context) {
 	for time.Now().Before(deadline) {
 		// Ready as soon as the first exporter answers; the rest are polled
 		// best-effort each scrape (a slow node just contributes samples late).
-		for _, url := range s.dcgmURLs {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		for _, t := range s.dcgmTargets {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.url, nil)
 			if err != nil {
 				continue
 			}
@@ -352,7 +430,7 @@ func (s *GPUScraper) waitForDCGM(ctx context.Context) {
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
-					log.Printf("[gpuscraper] DCGM exporter ready (%d node(s))", len(s.dcgmURLs))
+					log.Printf("[gpuscraper] DCGM exporter ready (%d node(s))", len(s.dcgmTargets))
 					return
 				}
 			}
@@ -370,11 +448,11 @@ func (s *GPUScraper) scrape(ctx context.Context) {
 	// Scrape vLLM metrics
 	s.scrapeModelServer(ctx)
 
-	// Scrape DCGM metrics from every serving node if configured. Samples from
-	// all nodes are aggregated into the same slices (peak = hottest GPU across
-	// the group; avg = mean across all nodes' samples).
-	for _, url := range s.dcgmURLs {
-		s.scrapeDCGM(ctx, url)
+	// Scrape DCGM metrics from every serving node if configured. On the flat
+	// (single-node) path all readings land in the shared slices; on the keyed
+	// path each target's reading is bucketed by {node, role} (PRD-59).
+	for _, t := range s.dcgmTargets {
+		s.scrapeDCGM(ctx, t)
 	}
 }
 
@@ -445,8 +523,8 @@ func (s *GPUScraper) scrapeModelServer(ctx context.Context) {
 	s.samplesCollected++
 }
 
-func (s *GPUScraper) scrapeDCGM(ctx context.Context, dcgmURL string) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dcgmURL, nil)
+func (s *GPUScraper) scrapeDCGM(ctx context.Context, t dcgmTarget) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.url, nil)
 	if err != nil {
 		return
 	}
@@ -468,6 +546,36 @@ func (s *GPUScraper) scrapeDCGM(ctx context.Context, dcgmURL string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.keyed {
+		// PRD-59: bucket this node's reading by {node, role}. parseDCGMMetrics
+		// already reduces within a node (util=mean, mem=sum across the node's
+		// GPUs), which is exactly one shard's per-scrape reading.
+		key := gpuShardKey{Node: t.node, Role: t.role}
+		bucket := s.keyedSamples[key]
+		if bucket == nil {
+			bucket = &gpuShardSamples{}
+			s.keyedSamples[key] = bucket
+			s.shardOrder = append(s.shardOrder, key)
+		}
+		if dcgmMetrics.gpuUtil >= 0 {
+			bucket.util = append(bucket.util, dcgmMetrics.gpuUtil)
+		}
+		if dcgmMetrics.memUsed >= 0 {
+			bucket.memMiB = append(bucket.memMiB, dcgmMetrics.memUsed)
+		}
+		if dcgmMetrics.smActive >= 0 {
+			bucket.sm = append(bucket.sm, dcgmMetrics.smActive)
+		}
+		if dcgmMetrics.tensorActive >= 0 {
+			bucket.tensor = append(bucket.tensor, dcgmMetrics.tensorActive)
+		}
+		if dcgmMetrics.dramActive >= 0 {
+			bucket.dram = append(bucket.dram, dcgmMetrics.dramActive)
+		}
+		return
+	}
+
+	// Flat (single-node) path — unchanged from pre-PRD-59.
 	if dcgmMetrics.gpuUtil >= 0 {
 		s.dcgmUtilSamples = append(s.dcgmUtilSamples, dcgmMetrics.gpuUtil)
 	}

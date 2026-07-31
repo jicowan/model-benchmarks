@@ -1,8 +1,13 @@
 package orchestrator
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParsePrometheusMetricsExtended(t *testing.T) {
@@ -104,6 +109,79 @@ sglang:cache_hit_rate{} 0.35
 	}
 	if result.prefixQueries != 100 {
 		t.Errorf("prefixQueries = %v, want 100", result.prefixQueries)
+	}
+}
+
+// dcgmBody builds a minimal DCGM exporter response for one GPU.
+func dcgmBody(utilPct, fbUsedMiB float64) string {
+	return "DCGM_FI_DEV_GPU_UTIL{gpu=\"0\"} " + strconv.FormatFloat(utilPct, 'f', -1, 64) + "\n" +
+		"DCGM_FI_DEV_FB_USED{gpu=\"0\"} " + strconv.FormatFloat(fbUsedMiB, 'f', -1, 64) + "\n"
+}
+
+// TestGPUScraperKeyed_PerNodeRoleAttribution drives the keyed scraper against
+// two fake DCGM endpoints tagged prefill/decode and asserts the roll-up +
+// per-shard breakdown. This is PRD-59 Layer 1's attribution guarantee.
+func TestGPUScraperKeyed_PerNodeRoleAttribution(t *testing.T) {
+	// prefill node: util 80%, 20 GiB (20480 MiB). decode node: util 20%, 10 GiB.
+	prefillSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(dcgmBody(80, 20480)))
+	}))
+	defer prefillSrv.Close()
+	decodeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(dcgmBody(20, 10240)))
+	}))
+	defer decodeSrv.Close()
+
+	// Build a keyed scraper and point its two targets at the fake servers.
+	// (metricsURL points nowhere valid — vLLM scrape just no-ops.)
+	s := newGPUScraper("127.0.0.1", 1, 0, []dcgmTarget{
+		{url: prefillSrv.URL, node: "10.0.0.1", role: "prefill"},
+		{url: decodeSrv.URL, node: "10.0.0.2", role: "decode"},
+	}, true)
+
+	// Start the loop (waitForDCGM succeeds immediately — the fake servers 200),
+	// let it scrape at least once, then Stop() reduces via the aggregation layer.
+	s.Start(context.Background())
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		got := len(s.keyedSamples) >= 2
+		s.mu.Unlock()
+		if got {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	m := s.Stop()
+	if m == nil {
+		t.Fatal("expected metrics")
+	}
+
+	// Roll-up: util mean (80+20)/2=50, peak 80. Memory total = 20+10 = 30 GiB
+	// (sum of per-node peaks); memory peak = 20 (hottest node).
+	if !approx(m.UtilizationAvgPct, 50) || !approx(m.UtilizationPeakPct, 80) {
+		t.Errorf("util avg/peak = %.2f/%.2f, want 50/80", m.UtilizationAvgPct, m.UtilizationPeakPct)
+	}
+	if !approx(m.MemoryTotalGiB, 30) {
+		t.Errorf("mem total = %.2f, want 30", m.MemoryTotalGiB)
+	}
+	if !approx(m.MemoryPeakGiB, 20) {
+		t.Errorf("mem peak = %.2f, want 20 (hottest node, not summed)", m.MemoryPeakGiB)
+	}
+
+	// Breakdown: two shards, roles attributed correctly.
+	if len(m.Shards) != 2 {
+		t.Fatalf("want 2 shards, got %d", len(m.Shards))
+	}
+	byRole := map[string]ShardMetrics{}
+	for _, sh := range m.Shards {
+		byRole[sh.Role] = sh
+	}
+	if p, ok := byRole["prefill"]; !ok || !approx(p.MemoryPeakGiB, 20) || !approx(p.UtilizationAvgPct, 80) {
+		t.Errorf("prefill shard wrong: %+v", byRole["prefill"])
+	}
+	if d, ok := byRole["decode"]; !ok || !approx(d.MemoryPeakGiB, 10) || !approx(d.UtilizationAvgPct, 20) {
+		t.Errorf("decode shard wrong: %+v", byRole["decode"])
 	}
 }
 

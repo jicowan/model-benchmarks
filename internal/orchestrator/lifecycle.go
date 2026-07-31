@@ -349,10 +349,14 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 			if cfg.IsDisaggregated() {
 				metricsSvc = modelName + "-decode"
 			}
-			nodeIPs := o.llmdServingNodeIPs(ctx, ns, modelName)
-			log.Printf("[%s] DCGM scraping enabled across %d serving node(s)", cfg.RunID[:8], len(nodeIPs))
+			// PRD-59: keyed scraper — bucket DCGM samples per {node, role} so the
+			// distributed report can show per-node/per-role GPU telemetry and an
+			// honest group memory total. Role comes from the pod's llm-d.ai/role
+			// label (prefill/decode; empty for co-located).
+			nodes := o.llmdServingNodes(ctx, ns, modelName)
+			log.Printf("[%s] DCGM scraping enabled across %d serving node(s) (keyed)", cfg.RunID[:8], len(nodes))
 			// Total memory scales with the group: per-instance accel memory × nodes.
-			gpuScraper = NewGPUScraperMultiNode(metricsSvc, 8000, totalMemGiB*float64(cfg.NodeCount), nodeIPs)
+			gpuScraper = NewGPUScraperKeyed(metricsSvc, 8000, totalMemGiB*float64(cfg.NodeCount), nodes)
 		} else {
 			// Try to get node IP for DCGM metrics
 			nodeIP := o.getModelPodNodeIP(ctx, ns, modelName)
@@ -425,6 +429,15 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		computed.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
 		computed.AcceleratorMemoryAvgGiB = &gpuMetrics.MemoryAvgGiB
 		computed.WaitingRequestsMax = &gpuMetrics.WaitingRequestsMax
+
+		// PRD-59: distributed runs carry the honest group memory total + the
+		// per-node/per-role breakdown. Both are zero/empty on the single-node
+		// (flat) path, so single-instance rows are unchanged.
+		if cfg.IsDistributed() {
+			memTotal := gpuMetrics.MemoryTotalGiB
+			computed.AcceleratorMemoryTotalGiB = &memTotal
+			computed.Shards = shardMetricsToDB(cfg.RunID, gpuMetrics.Shards)
+		}
 
 		// Extended metrics (PRD-14)
 		computed.PromptThroughputTPS = &gpuMetrics.PromptThroughputTPS

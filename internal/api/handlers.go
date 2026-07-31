@@ -834,6 +834,14 @@ func (s *Server) fetchRunIncludes(ctx context.Context, resp *runDetailResponse, 
 				setErr("metrics", err.Error())
 				return nil
 			}
+			// PRD-59: attach the per-node/per-role GPU breakdown for distributed
+			// runs. Empty for single-instance runs (no shard rows), so the
+			// single-node response is unchanged.
+			if m != nil {
+				if shards, serr := s.repo.GetShardMetrics(ctx, resp.ID); serr == nil {
+					m.Shards = shards
+				}
+			}
 			mu.Lock()
 			resp.Metrics = m
 			mu.Unlock()

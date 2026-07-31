@@ -430,6 +430,34 @@ func (o *Orchestrator) llmdServingNodeIPs(ctx context.Context, ns, name string) 
 	return ips
 }
 
+// llmdServingNodes returns each running group pod's node HostIP tagged with its
+// role, for the PRD-59 keyed GPU scraper. Role comes from the "llm-d.ai/role"
+// pod label (prefill/decode for a disaggregated run); co-located pods don't
+// carry it, so role is "". Deduped by (HostIP, role) — a node runs one role.
+func (o *Orchestrator) llmdServingNodes(ctx context.Context, ns, name string) []GPUNode {
+	pods, err := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", name),
+	})
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var nodes []GPUNode
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodRunning || pod.Status.HostIP == "" {
+			continue
+		}
+		role := pod.Labels["llm-d.ai/role"]
+		k := pod.Status.HostIP + "|" + role
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		nodes = append(nodes, GPUNode{IP: pod.Status.HostIP, Role: role})
+	}
+	return nodes
+}
+
 // gatewayLoadgenTarget returns the (host, port) the loadgen should target for a
 // distributed run: the shared Envoy AI Gateway's Service by in-cluster DNS. The
 // gateway is ClusterIP; the OpenAI path is served through the HTTPRoute the

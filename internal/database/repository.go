@@ -391,9 +391,10 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		     running_requests_avg, running_requests_max, output_length_mean,
 		     sm_active_avg_pct, sm_active_peak_pct,
 		     tensor_active_avg_pct, tensor_active_peak_pct,
-		     dram_active_avg_pct, dram_active_peak_pct)
+		     dram_active_avg_pct, dram_active_peak_pct,
+		     accelerator_memory_total_gib)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
+		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46)
 		 RETURNING id`,
 		runID,
 		m.TTFTP50Ms, m.TTFTP90Ms, m.TTFTP95Ms, m.TTFTP99Ms,
@@ -413,9 +414,33 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		m.SMActiveAvgPct, m.SMActivePeakPct,
 		m.TensorActiveAvgPct, m.TensorActivePeakPct,
 		m.DRAMActiveAvgPct, m.DRAMActivePeakPct,
+		m.AcceleratorMemoryTotalGiB,
 	).Scan(&metricsID)
 	if err != nil {
 		return fmt.Errorf("insert metrics: %w", err)
+	}
+
+	// PRD-59: persist the per-node/per-role GPU breakdown (distributed runs
+	// only; Shards is empty for single-instance runs, so this is a no-op there).
+	for _, sh := range m.Shards {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO benchmark_metrics_by_shard
+			    (run_id, node, role, samples,
+			     utilization_avg_pct, utilization_peak_pct,
+			     memory_avg_gib, memory_peak_gib,
+			     sm_active_avg_pct, sm_active_peak_pct,
+			     tensor_active_avg_pct, tensor_active_peak_pct,
+			     dram_active_avg_pct, dram_active_peak_pct)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			runID, sh.Node, sh.Role, sh.Samples,
+			sh.UtilizationAvgPct, sh.UtilizationPeakPct,
+			sh.MemoryAvgGiB, sh.MemoryPeakGiB,
+			sh.SMActiveAvgPct, sh.SMActivePeakPct,
+			sh.TensorActiveAvgPct, sh.TensorActivePeakPct,
+			sh.DRAMActiveAvgPct, sh.DRAMActivePeakPct,
+		); err != nil {
+			return fmt.Errorf("insert shard metric (%s/%s): %w", sh.Node, sh.Role, err)
+		}
 	}
 
 	// Verify the write by reading it back.
@@ -544,7 +569,8 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		        running_requests_avg, running_requests_max, output_length_mean,
 		        sm_active_avg_pct, sm_active_peak_pct,
 		        tensor_active_avg_pct, tensor_active_peak_pct,
-		        dram_active_avg_pct, dram_active_peak_pct
+		        dram_active_avg_pct, dram_active_peak_pct,
+		        accelerator_memory_total_gib
 		 FROM benchmark_metrics WHERE run_id = $1`, runID,
 	).Scan(&m.ID, &m.RunID,
 		&m.TTFTP50Ms, &m.TTFTP90Ms, &m.TTFTP95Ms, &m.TTFTP99Ms,
@@ -563,7 +589,8 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		&m.RunningRequestsAvg, &m.RunningRequestsMax, &m.OutputLengthMean,
 		&m.SMActiveAvgPct, &m.SMActivePeakPct,
 		&m.TensorActiveAvgPct, &m.TensorActivePeakPct,
-		&m.DRAMActiveAvgPct, &m.DRAMActivePeakPct)
+		&m.DRAMActiveAvgPct, &m.DRAMActivePeakPct,
+		&m.AcceleratorMemoryTotalGiB)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -571,4 +598,37 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		return nil, fmt.Errorf("query metrics: %w", err)
 	}
 	return &m, nil
+}
+
+// GetShardMetrics returns the per-node/per-role GPU breakdown for a run
+// (PRD-59). Empty for single-instance runs (which write no shard rows). Ordered
+// by insertion (id) so prefill precedes decode as applied.
+func (r *Repository) GetShardMetrics(ctx context.Context, runID string) ([]ShardMetric, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT run_id, node, role, samples,
+		        utilization_avg_pct, utilization_peak_pct,
+		        memory_avg_gib, memory_peak_gib,
+		        sm_active_avg_pct, sm_active_peak_pct,
+		        tensor_active_avg_pct, tensor_active_peak_pct,
+		        dram_active_avg_pct, dram_active_peak_pct
+		 FROM benchmark_metrics_by_shard WHERE run_id = $1 ORDER BY id`, runID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query shard metrics: %w", err)
+	}
+	defer rows.Close()
+	var out []ShardMetric
+	for rows.Next() {
+		var s ShardMetric
+		if err := rows.Scan(&s.RunID, &s.Node, &s.Role, &s.Samples,
+			&s.UtilizationAvgPct, &s.UtilizationPeakPct,
+			&s.MemoryAvgGiB, &s.MemoryPeakGiB,
+			&s.SMActiveAvgPct, &s.SMActivePeakPct,
+			&s.TensorActiveAvgPct, &s.TensorActivePeakPct,
+			&s.DRAMActiveAvgPct, &s.DRAMActivePeakPct); err != nil {
+			return nil, fmt.Errorf("scan shard metric: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
