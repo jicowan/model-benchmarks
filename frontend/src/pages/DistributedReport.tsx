@@ -1,31 +1,43 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import {
-  getRunDetail,
-  getRunCSVUrl,
-  getExportManifestUrl,
-} from "../api";
+import { useParams } from "react-router-dom";
+import { getRun, getRunDetail, getRunCSVUrl, getExportManifestUrl } from "../api";
 import type {
   BenchmarkRun,
   BenchmarkMetrics,
   InstanceType,
   PricingRow,
+  PricingTier,
   ShardMetric,
 } from "../types";
-import { hourlyRate, totalSpent, costPer1MTokens } from "../lib/cost";
+import MetricCard from "../components/MetricCard";
+import LatencyDistribution from "../components/LatencyDistribution";
+import HeroBlock from "../components/HeroBlock";
+import ConfigPanel from "../components/ConfigPanel";
+import PricingToggle from "../components/PricingToggle";
 import PrintButton from "../components/PrintButton";
+import { hourlyRate, costPerRequest, costPer1MTokens, totalSpent } from "../lib/cost";
 
-// PRD-59: dedicated report for a distributed / disaggregated run — topology,
-// the honest N-node cost breakdown, per-node/per-role GPU telemetry, and the
-// loadgen result, with print/CSV/manifest export parity with ResultDetail
-// (PRD-41). Single-instance runs keep using ResultDetail; this page is reached
-// only from a distributed run.
+function SectionHeader({ index, label }: { index: string; label: string }) {
+  return (
+    <div className="flex items-baseline gap-3 mb-3">
+      <span className="font-mono text-[11px] tracking-widemech text-ink-2">[ {index} ]</span>
+      <h2 className="font-sans text-[15px] font-medium tracking-mech text-ink-0">{label}</h2>
+    </div>
+  );
+}
+
+// PRD-59: the complete report for a distributed / disaggregated run. Mirrors the
+// standard single-node report's layout (HeroBlock + lettered card sections +
+// latency distribution + pricing toggle) and ADDS the distributed-specific
+// pieces: topology, the N-node cost breakdown, and per-node/per-role DCGM
+// telemetry. Distributed runs redirect here from /results/:id (ResultDetail).
 export default function DistributedReport() {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<BenchmarkRun | null>(null);
   const [metrics, setMetrics] = useState<BenchmarkMetrics | null>(null);
-  const [instance, setInstance] = useState<InstanceType | null>(null);
-  const [pricing, setPricing] = useState<PricingRow | null>(null);
+  const [instanceType, setInstanceType] = useState<InstanceType | null>(null);
+  const [pricingRow, setPricingRow] = useState<PricingRow | null>(null);
+  const [pricingTier, setPricingTier] = useState<PricingTier>("on_demand");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -34,174 +46,316 @@ export default function DistributedReport() {
       .then((d) => {
         setRun(d);
         setMetrics(d.metrics ?? null);
-        setInstance(d.instance ?? null);
-        setPricing(d.pricing ?? null);
+        setInstanceType(d.instance ?? null);
+        setPricingRow(d.pricing ?? null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load run."));
   }, [id]);
 
+  // Poll while the run is in flight, same as ResultDetail.
+  useEffect(() => {
+    if (!run || run.status === "completed" || run.status === "failed") return;
+    const interval = setInterval(() => {
+      getRun(run.id).then((updated) => {
+        setRun(updated);
+        if (updated.status === "completed") {
+          getRunDetail(updated.id, ["metrics", "instance", "pricing"]).then((d) => {
+            setRun(d);
+            setMetrics(d.metrics ?? null);
+            setInstanceType(d.instance ?? null);
+            setPricingRow(d.pricing ?? null);
+          });
+          clearInterval(interval);
+        }
+        if (updated.status === "failed") clearInterval(interval);
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [run]);
+
   if (error) {
-    return <div className="p-6 font-mono text-[12px] text-danger">{error}</div>;
+    return (
+      <div className="p-6">
+        <p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">{error}</p>
+      </div>
+    );
   }
-  if (!run) {
-    return <div className="p-6 font-mono text-[12px] text-ink-2">Loading…</div>;
-  }
+  if (!run) return <div className="p-6 caption">LOADING…</div>;
 
   const disaggregated = run.deployment_mode === "disaggregated";
   const nodeCount = run.node_count ?? 1;
 
-  // N-node cost: per-node hourly × node_count. computeRunCost already scaled the
-  // persisted total; here we show the derivation from the per-node rate.
-  const perNodeHourly = hourlyRate(pricing ?? undefined, "on_demand");
+  const succeeded = metrics?.successful_requests ?? 0;
+  const failed = metrics?.failed_requests ?? 0;
+  const totalReqs = succeeded + failed;
+  const successRate = totalReqs > 0 ? (succeeded / totalReqs) * 100 : undefined;
+
+  const aggregateTps = metrics?.throughput_aggregate_tps ?? metrics?.generation_throughput_tps;
+
+  // Cost is the GROUP cost: per-node hourly × node_count (PRD-57 computeRunCost
+  // scaled the persisted total the same way; here we show the derivation).
+  const perNodeHourly = hourlyRate(pricingRow ?? undefined, pricingTier);
   const groupHourly = perNodeHourly != null ? perNodeHourly * nodeCount : null;
-  const totalCost =
-    run.total_cost_usd ??
-    totalSpent(groupHourly, metrics?.total_duration_seconds) ??
-    undefined;
-  const per1M = costPer1MTokens(groupHourly, metrics?.throughput_aggregate_tps);
+  const perRequestCost = costPerRequest(groupHourly, metrics?.requests_per_second);
+  const per1MCost = costPer1MTokens(groupHourly, aggregateTps);
+  const spent = run.total_cost_usd ?? totalSpent(groupHourly, metrics?.total_duration_seconds);
 
   const shards: ShardMetric[] = metrics?.shards ?? [];
 
-  const topology = disaggregated
-    ? `${run.prefill_replicas ?? "?"}P${run.decode_replicas ?? "?"}D · prefill TP=${run.prefill_tp ?? "?"} · decode TP=${run.decode_tp ?? "?"}`
+  const instanceSummary = instanceType
+    ? `${instanceType.name} · ${instanceType.accelerator_count}×${instanceType.accelerator_name} · ${nodeCount} nodes`
+    : `${nodeCount} nodes`;
+
+  const topologyValue = disaggregated
+    ? `${run.prefill_replicas ?? "?"}P${run.decode_replicas ?? "?"}D · prefill TP=${run.prefill_tp ?? "?"} · decode TP=${run.decode_tp ?? "?"} · ${nodeCount} nodes`
     : `${nodeCount} nodes · TP=${run.tensor_parallel_degree} · PP=${run.pipeline_parallel_degree ?? "?"}`;
 
-  const fmt = (n?: number | null, d = 1) =>
-    n == null ? "—" : n.toFixed(d);
-  const usd = (n?: number | null) => (n == null ? "—" : `$${n.toFixed(4)}`);
+  const statusBadge = (
+    <span className="flex items-center gap-2 font-mono text-[11px] tracking-widemech uppercase">
+      <span className={`status-dot status-${run.status === "pending" ? "pending" : run.status}`} />
+      {run.status}
+    </span>
+  );
+  const runningCaption =
+    run.status === "running" || run.status === "pending" ? "RESULTS WILL APPEAR WHEN COMPLETE" : null;
+
+  const roleLabel = (r?: string) => (r ? r : "node");
 
   return (
-    <div className="flex flex-col">
-      <div className="h-14 border-b border-line flex items-center justify-between px-6 bg-surface-0 sticky top-0 z-20 no-print">
+    <>
+      <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
         <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
-          <span className="text-ink-0">DISTRIBUTED REPORT</span>
-          <span className="text-ink-2">— {disaggregated ? "prefill/decode" : "co-located"} · {run.model_hf_id ?? run.model_id}</span>
+          <span className="text-ink-1">accelbench</span>
+          <span className="text-ink-2">/</span>
+          <a href="/runs" className="text-ink-1 hover:text-ink-0">runs</a>
+          <span className="text-ink-2">/</span>
+          <span className="text-ink-0">{run.id.slice(0, 8)}</span>
+          <span className="text-ink-2">· {disaggregated ? "disaggregated" : "distributed"}</span>
         </div>
-        <Link to={`/results/${run.id}`} className="font-mono text-[11px] text-ink-2 hover:text-ink-0">
-          ← standard view
-        </Link>
       </div>
 
-      <div className="p-6 max-w-4xl flex flex-col gap-6">
-        {/* Topology header */}
-        <section className="border border-line bg-surface-1 p-4">
-          <div className="eyebrow text-ink-2 mb-2">[ TOPOLOGY ]</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-[12px]">
-            <Field label="Deployment" value={run.deployment_mode ?? "distributed"} />
-            <Field label="Topology" value={topology} />
-            <Field label="Nodes" value={String(nodeCount)} />
-            <Field label="Fabric" value={run.network_mode ?? "—"} />
-            {disaggregated && (
-              <>
-                <Field label="KV connector" value={run.kv_connector ?? "—"} />
-                <Field label="KV transfer" value={run.kv_transfer_backend ?? "—"} />
-              </>
-            )}
-            <Field label="Instance" value={instance?.name ?? "—"} />
-            <Field label="Framework" value={`${run.framework} ${run.framework_version ?? ""}`.trim()} />
-          </div>
-        </section>
+      <div className="sticky top-14 z-10 bg-surface-0 border-b border-line no-print">
+        <div className="px-6 py-3 flex items-center gap-3">
+          <div className="flex-1" />
+          <span className="eyebrow">PRICING</span>
+          <PricingToggle value={pricingTier} onChange={setPricingTier} />
+        </div>
+      </div>
 
-        {/* Cost breakdown */}
-        <section className="border border-line bg-surface-1 p-4">
-          <div className="eyebrow text-ink-2 mb-2">[ COST (N-NODE) ]</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-[12px]">
-            <Field label="Per-node / hr" value={usd(perNodeHourly)} />
-            <Field label={`Group / hr (×${nodeCount})`} value={usd(groupHourly)} />
-            <Field label="Total (run)" value={usd(totalCost)} />
-            <Field label="$ / 1M tokens" value={per1M == null ? "—" : `$${per1M.toFixed(4)}`} />
-          </div>
-          <div className="mt-2 font-mono text-[10.5px] text-ink-2">
-            Total = per-node hourly × {nodeCount} nodes × run lifetime. $/1M tokens uses the group hourly over aggregate throughput.
-          </div>
-        </section>
+      <div className="p-6 max-w-6xl mx-auto animate-enter">
+        <HeroBlock
+          eyebrow={disaggregated ? "[ DISAGGREGATED RUN ]" : "[ DISTRIBUTED RUN ]"}
+          heading={run.model_hf_id || "(model)"}
+          subheading={instanceSummary}
+          meta={`${run.id.slice(0, 8)} · ${run.id}`}
+          statusBadge={statusBadge}
+          metrics={
+            metrics
+              ? [
+                  { label: "TTFT p99", value: metrics.ttft_p99_ms, unit: "ms", precision: 0 },
+                  { label: "Throughput", value: aggregateTps, unit: "tok/s", precision: 0 },
+                  {
+                    label: "Success Rate",
+                    value: successRate,
+                    unit: "%",
+                    precision: 1,
+                    accent: successRate !== undefined && successRate < 99 ? "warn" : "signal",
+                  },
+                  { label: "Cost / 1M tok", value: per1MCost ?? undefined, unit: "$", precision: 2 },
+                  { label: "Total Cost", value: run.total_cost_usd ?? undefined, unit: "$", precision: 2 },
+                ]
+              : undefined
+          }
+        />
 
-        {/* Loadgen result */}
-        <section className="border border-line bg-surface-1 p-4">
-          <div className="eyebrow text-ink-2 mb-2">[ LOADGEN RESULT ]</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-[12px]">
-            <Field label="Requests OK" value={`${metrics?.successful_requests ?? "—"} / ${(metrics?.successful_requests ?? 0) + (metrics?.failed_requests ?? 0)}`} />
-            <Field label="Req/s" value={fmt(metrics?.requests_per_second, 2)} />
-            <Field label="Output tok/s" value={fmt(metrics?.generation_throughput_tps, 0)} />
-            <Field label="Aggregate tok/s" value={fmt(metrics?.throughput_aggregate_tps, 0)} />
-            <Field label="TTFT p50 (ms)" value={fmt(metrics?.ttft_p50_ms, 0)} />
-            <Field label="TTFT p90 (ms)" value={fmt(metrics?.ttft_p90_ms, 0)} />
-            <Field label="E2E p50 (ms)" value={fmt(metrics?.e2e_latency_p50_ms, 0)} />
-            <Field label="E2E p90 (ms)" value={fmt(metrics?.e2e_latency_p90_ms, 0)} />
-          </div>
-        </section>
+        {runningCaption && <p className="mb-6 meta text-info">{runningCaption}</p>}
 
-        {/* Per-node / per-role GPU telemetry — the marquee view */}
-        <section className="border border-line bg-surface-1 p-4">
-          <div className="eyebrow text-ink-2 mb-2">[ GPU TELEMETRY — PER NODE / ROLE ]</div>
-          {shards.length === 0 ? (
-            <div className="font-mono text-[11.5px] text-ink-2">
-              No per-node breakdown recorded (GPU metrics may not have been collected for this run).
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full font-mono text-[11.5px]">
-                <thead>
-                  <tr className="text-ink-2 text-left border-b border-line">
-                    <th className="py-1 pr-3">Node</th>
-                    <th className="py-1 pr-3">Role</th>
-                    <th className="py-1 pr-3">Util avg/peak %</th>
-                    <th className="py-1 pr-3">Mem avg/peak GiB</th>
-                    <th className="py-1 pr-3">SM %</th>
-                    <th className="py-1 pr-3">Tensor %</th>
-                    <th className="py-1 pr-3">DRAM %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shards.map((s, i) => (
-                    <tr key={i} className="border-b border-line/50 text-ink-0">
-                      <td className="py-1 pr-3">{s.node}</td>
-                      <td className="py-1 pr-3">{s.role || "—"}</td>
-                      <td className="py-1 pr-3">{fmt(s.utilization_avg_pct)}/{fmt(s.utilization_peak_pct)}</td>
-                      <td className="py-1 pr-3">{fmt(s.memory_avg_gib, 2)}/{fmt(s.memory_peak_gib, 2)}</td>
-                      <td className="py-1 pr-3">{fmt(s.sm_active_avg_pct)}</td>
-                      <td className="py-1 pr-3">{fmt(s.tensor_active_avg_pct)}</td>
-                      <td className="py-1 pr-3">{fmt(s.dram_active_avg_pct)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="mt-3 font-mono text-[11px] text-ink-1">
-                Group total GPU memory:{" "}
-                <span className="text-ink-0">{fmt(metrics?.accelerator_memory_total_gib, 2)} GiB</span>
-                <span className="text-ink-2"> (sum of per-node peaks) · </span>
-                peak single node:{" "}
-                <span className="text-ink-0">{fmt(metrics?.accelerator_memory_peak_gib, 2)} GiB</span>
+        {run.status === "failed" && run.error_message && (
+          <div className="border border-danger/40 bg-danger/5 p-4 mb-6">
+            <p className="eyebrow text-danger mb-1.5">[ RUN FAILED ]</p>
+            <p className="font-mono text-[12.5px] text-danger">{run.error_message}</p>
+          </div>
+        )}
+
+        <ConfigPanel
+          headline={[
+            { label: "Topology", value: topologyValue },
+            { label: "Network Fabric", value: run.network_mode ?? null },
+            { label: "Framework", value: `${run.framework ?? ""} ${run.framework_version ?? ""}`.trim() || null },
+            { label: "Max Model Len", value: run.max_model_len ?? null },
+          ]}
+          details={[
+            {
+              label: "Deployment",
+              value: disaggregated ? "disaggregated (prefill/decode, llm-d)" : "distributed (multi-node llm-d)",
+            },
+            { label: "Node Count", value: nodeCount },
+            ...(disaggregated
+              ? [
+                  { label: "Prefill", value: `${run.prefill_replicas ?? "?"} × TP=${run.prefill_tp ?? "?"}` },
+                  { label: "Decode", value: `${run.decode_replicas ?? "?"} × TP=${run.decode_tp ?? "?"}` },
+                  { label: "KV Connector", value: run.kv_connector ?? null },
+                  { label: "KV Transfer", value: run.kv_transfer_backend ?? null },
+                ]
+              : [
+                  { label: "Tensor Parallel", value: run.tensor_parallel_degree },
+                  { label: "Pipeline Parallel", value: run.pipeline_parallel_degree ?? null },
+                ]),
+            { label: "Concurrency", value: run.concurrency },
+            { label: "Dataset", value: run.dataset_name },
+            { label: "Scenario", value: run.scenario_id ?? null },
+            { label: "Input Seq", value: run.input_sequence_length },
+            { label: "Output Seq", value: run.output_sequence_length },
+            { label: "Quantization", value: run.quantization ?? "default" },
+          ]}
+        />
+
+        {metrics && (
+          <>
+            {/* A. LATENCY */}
+            <section className="mb-8">
+              <SectionHeader index="A" label="Latency distribution" />
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                <LatencyDistribution label="TTFT" p50={metrics.ttft_p50_ms} p90={metrics.ttft_p90_ms} p95={metrics.ttft_p95_ms} p99={metrics.ttft_p99_ms} />
+                <LatencyDistribution label="E2E" p50={metrics.e2e_latency_p50_ms} p90={metrics.e2e_latency_p90_ms} p95={metrics.e2e_latency_p95_ms} p99={metrics.e2e_latency_p99_ms} />
+                <LatencyDistribution label="ITL" p50={metrics.itl_p50_ms} p90={metrics.itl_p90_ms} p95={metrics.itl_p95_ms} p99={metrics.itl_p99_ms} />
+                <LatencyDistribution label="TPOT" p50={metrics.tpot_p50_ms} p90={metrics.tpot_p90_ms} p99={metrics.tpot_p99_ms} />
               </div>
-            </div>
-          )}
-        </section>
+            </section>
 
-        {/* Export controls — parity with the standard report (PRD-41). */}
-        <div className="pt-2 hairline no-print">
-          <div className="flex items-center gap-3 pt-4">
-            <PrintButton />
-            <a href={getRunCSVUrl(run.id)} download className="btn">
-              Export CSV
-            </a>
-            <a href={getExportManifestUrl(run.id)} download className="btn">
-              Export K8s Manifest
-            </a>
-          </div>
-          <div className="mt-2 font-mono text-[11px] text-ink-2">
-            Print for sharing (PDF), CSV includes the per-node/per-role breakdown, or K8s manifest to redeploy this topology.
-          </div>
-        </div>
+            {/* B. THROUGHPUT */}
+            <section className="mb-8">
+              <SectionHeader index="B" label="Throughput" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Aggregate" value={aggregateTps} unit="tok/s" precision={0} />
+                <MetricCard label="Requests/sec" value={metrics.requests_per_second} unit="rps" precision={2} />
+                <MetricCard label="Success Rate" value={successRate} unit="%" precision={1} />
+                <MetricCard label="Prompt" value={metrics.prompt_throughput_tps} unit="tok/s" precision={0} />
+                <MetricCard label="Generation" value={metrics.generation_throughput_tps} unit="tok/s" precision={0} />
+                <MetricCard label="Avg Output" value={metrics.output_length_mean} unit="tokens" precision={0} />
+                <MetricCard label="Duration" value={metrics.total_duration_seconds} unit="s" precision={0} />
+              </div>
+            </section>
+
+            {/* C. HARDWARE — group roll-up */}
+            <section className="mb-8">
+              <SectionHeader index="C" label="Hardware utilization (group)" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="GPU Busy (avg)" value={metrics.accelerator_utilization_avg_pct ?? metrics.accelerator_utilization_pct} unit="%" precision={0} />
+                <MetricCard label="SM Active (avg)" value={metrics.sm_active_avg_pct} unit="%" precision={0} />
+                <MetricCard label="Tensor Active (avg)" value={metrics.tensor_active_avg_pct} unit="%" precision={0} />
+                <MetricCard label="DRAM Active (avg)" value={metrics.dram_active_avg_pct} unit="%" precision={0} />
+              </div>
+            </section>
+
+            {/* D. MEMORY — group */}
+            <section className="mb-8">
+              <SectionHeader index="D" label="Memory (group)" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Memory Total" value={metrics.accelerator_memory_total_gib} unit="GiB" precision={1} />
+                <MetricCard label="Memory Peak (node)" value={metrics.accelerator_memory_peak_gib} unit="GiB" precision={1} />
+                <MetricCard label="KV Cache (avg)" value={metrics.kv_cache_utilization_avg_pct} unit="%" precision={1} />
+                <MetricCard label="Prefix Hit" value={metrics.prefix_cache_hit_rate} unit="%" precision={1} />
+              </div>
+              <p className="mt-2 caption">
+                Memory Total sums each node&apos;s peak (honest group footprint); Memory Peak is the hottest single node.
+              </p>
+            </section>
+
+            {/* E. PER-NODE / PER-ROLE — the distributed-specific view.
+                Collapsible so the report stays scannable with many nodes;
+                open by default (and <details open> prints expanded). */}
+            <section className="mb-8">
+              {shards.length === 0 ? (
+                <>
+                  <SectionHeader index="E" label="Per-node / per-role GPU telemetry" />
+                  <p className="caption">No per-node breakdown recorded (GPU metrics may not have been collected).</p>
+                </>
+              ) : (
+                <details open className="panel">
+                  <summary className="cursor-pointer list-none px-4 py-3 flex items-baseline gap-3 select-none">
+                    <span className="font-mono text-[11px] tracking-widemech text-ink-2">[ E ]</span>
+                    <h2 className="font-sans text-[15px] font-medium tracking-mech text-ink-0">
+                      Per-node / per-role GPU telemetry
+                    </h2>
+                    <span className="ml-auto font-mono text-[11px] text-ink-2">
+                      {shards.length} {shards.length === 1 ? "shard" : "shards"}
+                    </span>
+                  </summary>
+                  <div className="overflow-x-auto border-t border-line">
+                    <table className="w-full font-mono text-[12px]">
+                      <thead>
+                        <tr className="text-ink-2 text-left border-b border-line">
+                          <th className="py-2 px-3">Node</th>
+                          <th className="py-2 px-3">Role</th>
+                          <th className="py-2 px-3">Util avg/peak</th>
+                          <th className="py-2 px-3">Mem avg/peak (GiB)</th>
+                          <th className="py-2 px-3">SM %</th>
+                          <th className="py-2 px-3">Tensor %</th>
+                          <th className="py-2 px-3">DRAM %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shards.map((s, i) => (
+                          <tr key={i} className="border-b border-line/40 text-ink-0">
+                            <td className="py-2 px-3">{s.node}</td>
+                            <td className="py-2 px-3 uppercase tracking-mech">{roleLabel(s.role)}</td>
+                            <td className="py-2 px-3">{fmt(s.utilization_avg_pct, 0)}/{fmt(s.utilization_peak_pct, 0)}%</td>
+                            <td className="py-2 px-3">{fmt(s.memory_avg_gib, 1)}/{fmt(s.memory_peak_gib, 1)}</td>
+                            <td className="py-2 px-3">{fmt(s.sm_active_avg_pct, 0)}</td>
+                            <td className="py-2 px-3">{fmt(s.tensor_active_avg_pct, 0)}</td>
+                            <td className="py-2 px-3">{fmt(s.dram_active_avg_pct, 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
+            </section>
+
+            {/* F. REQUEST FLOW */}
+            <section className="mb-8">
+              <SectionHeader index="F" label="Request flow" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Successful" value={succeeded} unit="" precision={0} />
+                <MetricCard label="Failed" value={failed} unit="" precision={0} />
+                <MetricCard label="Queue Max" value={metrics.waiting_requests_max} unit="req" precision={0} />
+                <MetricCard label="Running (max)" value={metrics.running_requests_max} unit="req" precision={0} />
+                <MetricCard label="Preemptions" value={metrics.preemption_count} unit="" precision={0} />
+              </div>
+            </section>
+
+            {/* G. COST — N-node */}
+            <section className="mb-8">
+              <SectionHeader index="G" label="Cost (N-node)" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Per-node Hourly" value={perNodeHourly ?? undefined} unit="$" precision={2} />
+                <MetricCard label={`Group Hourly (×${nodeCount})`} value={groupHourly ?? undefined} unit="$" precision={2} />
+                <MetricCard label="Per Request" value={perRequestCost ?? undefined} unit="$" precision={6} />
+                <MetricCard label="Per 1M Tokens" value={per1MCost ?? undefined} unit="$" precision={2} />
+                <MetricCard label="Total Spent" value={spent ?? undefined} unit="$" precision={2} />
+              </div>
+            </section>
+
+            {/* Exports — parity with the standard report (PRD-41). */}
+            <div className="mt-8 pt-6 hairline no-print">
+              <div className="flex gap-4 flex-wrap">
+                <PrintButton />
+                <a href={getRunCSVUrl(run.id)} download className="btn">Export CSV</a>
+                <a href={getExportManifestUrl(run.id)} download className="btn">Export K8s Manifest</a>
+              </div>
+              <p className="mt-2 caption">
+                Print for sharing (PDF); CSV includes the per-node/per-role breakdown; K8s manifest redeploys this topology.
+              </p>
+            </div>
+          </>
+        )}
       </div>
-    </div>
+    </>
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-ink-2 text-[10.5px] uppercase tracking-mech">{label}</span>
-      <span className="text-ink-0">{value}</span>
-    </div>
-  );
+function fmt(n?: number | null, d = 1): string {
+  return n == null ? "—" : n.toFixed(d);
 }

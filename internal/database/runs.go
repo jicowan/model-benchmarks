@@ -141,6 +141,17 @@ type RunExportDetails struct {
 	AcceleratorMemoryGiB int
 	VCPUs                int
 	MemoryGiB            int
+	// PRD-59: distributed topology so the exported manifest reproduces a
+	// multi-node / disaggregated run correctly (not a wrong single-node
+	// Deployment). Null on single-instance runs → the single-node manifest path.
+	DeploymentMode         *string
+	NodeCount              *int
+	PipelineParallelDegree *int
+	NetworkMode            *string
+	PrefillReplicas        *int
+	PrefillTP              *int
+	DecodeReplicas         *int
+	DecodeTP               *int
 }
 
 // GetRunExportDetails returns the information needed to export a run's
@@ -156,7 +167,9 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 			br.max_num_batched_tokens, br.kv_cache_dtype, br.concurrency,
 			br.streamer_mode, br.streamer_concurrency, br.streamer_memory_limit_gib,
 			it.accelerator_type, it.accelerator_name, it.accelerator_count, it.accelerator_memory_gib,
-			it.vcpus, it.memory_gib
+			it.vcpus, it.memory_gib,
+			br.deployment_mode, br.node_count, br.pipeline_parallel_degree, br.network_mode,
+			br.prefill_replicas, br.prefill_tp, br.decode_replicas, br.decode_tp
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
 		JOIN instance_types it ON br.instance_type_id = it.id
@@ -169,6 +182,8 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 		&d.StreamerMode, &d.StreamerConcurrency, &d.StreamerMemoryLimitGiB,
 		&d.AcceleratorType, &d.AcceleratorName, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
 		&d.VCPUs, &d.MemoryGiB,
+		&d.DeploymentMode, &d.NodeCount, &d.PipelineParallelDegree, &d.NetworkMode,
+		&d.PrefillReplicas, &d.PrefillTP, &d.DecodeReplicas, &d.DecodeTP,
 	)
 	if err != nil {
 		if err.Error() == "no rows in result set" {

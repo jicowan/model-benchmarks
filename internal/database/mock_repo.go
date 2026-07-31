@@ -586,6 +586,15 @@ func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExp
 		AcceleratorMemoryGiB:   inst.AcceleratorMemoryGiB,
 		VCPUs:                  inst.VCPUs,
 		MemoryGiB:              inst.MemoryGiB,
+		// PRD-59: distributed topology for the manifest export.
+		DeploymentMode:         run.DeploymentMode,
+		NodeCount:              run.NodeCount,
+		PipelineParallelDegree: run.PipelineParallelDegree,
+		NetworkMode:            run.NetworkMode,
+		PrefillReplicas:        run.PrefillReplicas,
+		PrefillTP:              run.PrefillTP,
+		DecodeReplicas:         run.DecodeReplicas,
+		DecodeTP:               run.DecodeTP,
 	}
 	// Resolve the streamer-on decision, same as Repository.GetRunExportDetails.
 	mode := ""

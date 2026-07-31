@@ -9,10 +9,147 @@ import (
 	"text/template"
 
 	"github.com/accelbench/accelbench/internal/database"
+	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/report"
 	"github.com/accelbench/accelbench/internal/scenario"
 	"github.com/accelbench/accelbench/internal/testsuite"
 )
+
+// PRD-59: export-side mirrors of the orchestrator's distributed deploy
+// constants (unexported there). Kept in sync so an exported manifest matches
+// what a fresh distributed run would deploy. If these drift, the export is
+// still apply-able — it just may name a different gateway/pool.
+const (
+	exportGatewayName      = "accelbench-gateway"
+	exportGatewayNamespace = "envoy-gateway-system"
+	exportGPUDeviceClass   = "gpu.nvidia.com"
+	exportEFADeviceClass   = "efa.networking.k8s.aws"
+	exportMultiNodeTaintK  = "accelbench.io/multinode"
+	exportMultiNodeTaintV  = "true"
+	exportDRASelectorK     = "accelbench.io/dra"
+	exportDRASelectorV     = "true"
+	exportLLMDImage        = "ghcr.io/llm-d/llm-d-aws:v0.8.1"
+	exportPDModelImage     = "vllm/vllm-openai:v0.25.0"
+	exportPDSidecarImage   = "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0"
+	exportPDEPPImage       = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
+	exportPDNixlModuleDir  = "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
+	exportPDNonCachedToken = 16
+)
+
+// exportServeArgs builds the model positional + static tuning flags that both
+// llm-d render paths append coordination/TP flags onto — mirroring the llm-d
+// runtime's BuildArgs (model id + --trust-remote-code + optional knobs).
+func exportServeArgs(d *database.RunExportDetails) []string {
+	args := []string{d.ModelHfID, "--trust-remote-code"}
+	if d.MaxModelLen > 0 {
+		args = append(args, "--max-model-len", fmt.Sprintf("%d", d.MaxModelLen))
+	}
+	if d.MaxNumBatchedTokens != nil && *d.MaxNumBatchedTokens > 0 {
+		args = append(args, "--max-num-batched-tokens", fmt.Sprintf("%d", *d.MaxNumBatchedTokens))
+	}
+	if d.KVCacheDtype != nil && *d.KVCacheDtype != "" {
+		args = append(args, "--kv-cache-dtype", *d.KVCacheDtype)
+	}
+	return args
+}
+
+func exportNetworkMode(d *database.RunExportDetails) string {
+	if d.NetworkMode != nil && *d.NetworkMode == "tcp" {
+		return "tcp"
+	}
+	return "efa"
+}
+
+// generateDistributedManifest renders the co-located multi-node llm-d object
+// graph (LeaderWorkerSet + Service + HTTPRoute + DRA claims) for a distributed
+// run (PRD-56 shape), reusing the orchestrator's renderer (PRD-59 fix — the old
+// path wrongly emitted a single-node Deployment for these runs).
+func generateDistributedManifest(d *database.RunExportDetails) (string, error) {
+	name := "llmd-" + sanitizeFilename(d.ModelHfID)
+	nodeCount := 2
+	if d.NodeCount != nil && *d.NodeCount > 0 {
+		nodeCount = *d.NodeCount
+	}
+	pp := nodeCount
+	if d.PipelineParallelDegree != nil && *d.PipelineParallelDegree > 0 {
+		pp = *d.PipelineParallelDegree
+	}
+	gpusPerNode := d.AcceleratorCount
+	tp := d.TensorParallelDegree
+	if tp < 1 {
+		tp = 1
+	}
+	netMode := exportNetworkMode(d)
+	efaPerNode := gpusPerNode
+	if netMode == "tcp" {
+		efaPerNode = 0
+	}
+	return manifest.RenderLLMDDeployment(manifest.LLMDDeploymentParams{
+		Name:                   name,
+		Namespace:              "accelbench",
+		Image:                  exportLLMDImage,
+		ServeArgs:              exportServeArgs(d),
+		ContainerName:          "vllm",
+		ModelHfID:              d.ModelHfID,
+		HfToken:                "",
+		NodeCount:              nodeCount,
+		TensorParallelDegree:   tp,
+		PipelineParallelDegree: pp,
+		GPUsPerNode:            gpusPerNode,
+		CPURequest:             fmt.Sprintf("%d", max(d.VCPUs*3/4, 1)),
+		MemoryRequest:          fmt.Sprintf("%dGi", max(d.MemoryGiB*85/100, 1)),
+		NetworkMode:            netMode,
+		GPUDeviceClass:         exportGPUDeviceClass,
+		EFADeviceClass:         exportEFADeviceClass,
+		EFAPerNode:             efaPerNode,
+		GatewayName:            exportGatewayName,
+		GatewayNamespace:       exportGatewayNamespace,
+		MultiNodeTaintKey:      exportMultiNodeTaintK,
+		MultiNodeTaintValue:    exportMultiNodeTaintV,
+		DRANodeSelectorKey:     exportDRASelectorK,
+		DRANodeSelectorVal:     exportDRASelectorV,
+	})
+}
+
+// generateDisaggregatedManifest renders the prefill/decode object graph (two
+// Deployments + InferencePool + EPP) for a disaggregated run (PRD-58 shape).
+func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error) {
+	name := "pd-" + sanitizeFilename(d.ModelHfID)
+	deref := func(p *int, def int) int {
+		if p != nil && *p > 0 {
+			return *p
+		}
+		return def
+	}
+	return manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
+		Name:                name,
+		Namespace:           "accelbench",
+		Image:               exportPDModelImage,
+		ServeArgs:           exportServeArgs(d),
+		ContainerName:       "vllm",
+		ModelHfID:           d.ModelHfID,
+		ModelLabel:          sanitizeFilename(d.ModelHfID),
+		HfToken:             "",
+		PrefillReplicas:     deref(d.PrefillReplicas, 1),
+		PrefillTP:           deref(d.PrefillTP, 1),
+		DecodeReplicas:      deref(d.DecodeReplicas, 1),
+		DecodeTP:            deref(d.DecodeTP, 1),
+		CPURequest:          fmt.Sprintf("%d", max(d.VCPUs*3/4, 1)),
+		MemoryRequest:       fmt.Sprintf("%dGi", max(d.MemoryGiB*85/100, 1)),
+		NetworkMode:         exportNetworkMode(d),
+		NixlModuleDir:       exportPDNixlModuleDir,
+		EPPImage:            exportPDEPPImage,
+		SidecarImage:        exportPDSidecarImage,
+		NonCachedTokens:     exportPDNonCachedToken,
+		GPUDeviceClass:      exportGPUDeviceClass,
+		GatewayName:         exportGatewayName,
+		GatewayNamespace:    exportGatewayNamespace,
+		MultiNodeTaintKey:   exportMultiNodeTaintK,
+		MultiNodeTaintValue: exportMultiNodeTaintV,
+		DRANodeSelectorKey:  exportDRASelectorK,
+		DRANodeSelectorVal:  exportDRASelectorV,
+	})
+}
 
 // handleExportManifest generates a Kubernetes manifest YAML for deploying
 // the model configuration from a completed benchmark run.
@@ -105,6 +242,19 @@ type manifestData struct {
 }
 
 func generateManifest(d *database.RunExportDetails) (string, error) {
+	// PRD-59: distributed / disaggregated runs export the llm-d object graph
+	// (LeaderWorkerSet or prefill/decode Deployments + InferencePool/EPP), NOT a
+	// single-node vLLM Deployment. Reuse the same renderers the orchestrator
+	// uses so a re-apply matches what a fresh distributed run would deploy.
+	if d.DeploymentMode != nil {
+		switch *d.DeploymentMode {
+		case "distributed":
+			return generateDistributedManifest(d)
+		case "disaggregated":
+			return generateDisaggregatedManifest(d)
+		}
+	}
+
 	data := manifestData{
 		Name:                 "vllm-" + sanitizeFilename(d.ModelHfID),
 		ModelHfID:            d.ModelHfID,
