@@ -20,11 +20,12 @@ import (
 // instead of a single Deployment.
 type LLMD struct{}
 
-// defaultLLMDImage is the AWS-optimized llm-d image (vLLM + EFA + libfabric),
-// pinned to the version PRD-55 validated by hand. Overridable via LLMD_IMAGE
-// (and, for parity with the vLLM runtime's PRD-49 override, VLLM_IMAGE as a
-// fallback).
-const defaultLLMDImage = "ghcr.io/llm-d/llm-d-aws:0.2.0"
+// defaultLLMDImage is the AWS-optimized llm-d image (vLLM + EFA + libfabric).
+// Overridable via LLMD_IMAGE. NOTE: llm-d releases version INDEPENDENTLY of
+// the vLLM engine bundled inside — so the tag is NOT derived from the run's
+// vLLM FrameworkVersion (that would ask GHCR for e.g. v0.19.0, which doesn't
+// exist). Pinned to a known-good llm-d-aws release; bump deliberately.
+const defaultLLMDImage = "ghcr.io/llm-d/llm-d-aws:v0.8.1"
 
 func (l *LLMD) Name() string                    { return "llm-d" }
 func (l *LLMD) ContainerName() string           { return "vllm" }
@@ -44,11 +45,11 @@ func (l *LLMD) ResolveImageOverride() string {
 }
 
 func (l *LLMD) DefaultImage(version, pullThroughRegistry string) string {
-	// llm-d ships from GHCR, not Docker Hub, so the Docker Hub pull-through
-	// cache doesn't apply. Honor an explicit version tag when provided.
-	if version != "" {
-		return fmt.Sprintf("ghcr.io/llm-d/llm-d-aws:%s", version)
-	}
+	// `version` is the run's vLLM FrameworkVersion — deliberately IGNORED here:
+	// llm-d-aws has its own release cadence and GHCR has no tag matching a vLLM
+	// version. Use LLMD_IMAGE to pin a specific llm-d release; otherwise the
+	// known-good default. (llm-d ships from GHCR, so the Docker Hub
+	// pull-through cache doesn't apply either.)
 	return defaultLLMDImage
 }
 
@@ -56,33 +57,23 @@ func (l *LLMD) ResolveVersion(tv ToolVersions) string {
 	return tv.FrameworkVersion
 }
 
-// BuildArgs returns the vLLM serve args for one llm-d worker/leader pod. Both
-// the tensor-parallel degree (within a node) and the pipeline-parallel degree
-// (across nodes) are emitted; the LWS leader coordinates the workers over the
-// EFA fabric using the NCCL/libfabric env the manifest wires in (see
-// internal/manifest/templates/llmd-deployment.yaml.tmpl).
+// BuildArgs returns the MODEL positional arg plus static tuning flags for the
+// vLLM serve line. It deliberately does NOT emit the multi-node coordination
+// flags (--data-parallel-*, --tensor-parallel-size): those depend on the LWS
+// runtime env (LWS_LEADER_ADDRESS / LWS_WORKER_INDEX / LWS_GROUP_SIZE) and are
+// assembled by the deployment template's shell script, mirroring the canonical
+// llm-d launch (guides/wide-ep-lws — vLLM's data-parallel supervisor, NOT Ray).
+// `command` is nil here; the template wraps everything in /bin/bash -c.
 func (l *LLMD) BuildArgs(p ContainerParams) (command []string, args []string) {
-	tp := p.TensorParallelDegree
-	if tp < 1 {
-		tp = 1
-	}
-	pp := p.PipelineParallelDegree
-	if pp < 1 {
-		pp = 1
-	}
-
 	if p.UseRunaiStreamer {
-		args = append(args, "--model", p.ModelS3URI)
+		args = append(args, p.ModelS3URI)
 		args = append(args, "--load-format", "runai_streamer")
 		args = append(args, "--model-loader-extra-config",
 			fmt.Sprintf(`{"concurrency":%d}`, streamerConcurrencyOrDefault(p.StreamerConcurrency)))
 	} else {
-		args = append(args, "--model", p.ModelHfID)
+		args = append(args, p.ModelHfID)
 	}
 
-	args = append(args, "--port", "8000")
-	args = append(args, "--tensor-parallel-size", strconv.Itoa(tp))
-	args = append(args, "--pipeline-parallel-size", strconv.Itoa(pp))
 	args = append(args, "--trust-remote-code")
 
 	if !p.UseRunaiStreamer {
@@ -101,7 +92,7 @@ func (l *LLMD) BuildArgs(p ContainerParams) (command []string, args []string) {
 		args = append(args, "--kv-cache-dtype", p.KVCacheDtype)
 	}
 
-	return nil, args
+	return command, args
 }
 
 // MapQuantization mirrors the vLLM GPU runtime — llm-d runs vLLM underneath.

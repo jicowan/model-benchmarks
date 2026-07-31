@@ -9,9 +9,8 @@ func sampleLLMDParams() LLMDDeploymentParams {
 	return LLMDDeploymentParams{
 		Name:                   "bench-abc12345",
 		Namespace:              "accelbench",
-		Image:                  "ghcr.io/llm-d/llm-d-aws:0.2.0",
-		Command:                nil,
-		Args:                   []string{"--model", "meta-llama/Llama-3.1-70B", "--tensor-parallel-size", "8", "--pipeline-parallel-size", "2"},
+		Image:                  "ghcr.io/llm-d/llm-d-aws:v0.8.1",
+		ServeArgs:              []string{"meta-llama/Llama-3.1-70B", "--trust-remote-code"},
 		ContainerName:          "vllm",
 		ModelHfID:              "meta-llama/Llama-3.1-70B",
 		HfToken:                "hf_test",
@@ -55,12 +54,13 @@ func TestRenderLLMDDeployment_ObjectGraph(t *testing.T) {
 	if strings.Contains(out, "kind: InferencePool") {
 		t.Error("InferencePool should be deferred to PRD-58, not rendered")
 	}
-	// HTTPRoute backends the leader Service directly.
-	if !strings.Contains(out, "kind: Service\n          name: bench-abc12345") {
-		// tolerant check: the backendRef names the Service
-		if !strings.Contains(out, "port: 8000") {
-			t.Error("HTTPRoute should backendRef the leader Service on port 8000")
-		}
+	// HTTPRoute backends the "-svc" Service (NOT "<name>", which is the LWS
+	// controller's own headless Service).
+	if !strings.Contains(out, "name: bench-abc12345-svc") {
+		t.Error("HTTPRoute/Service should use the -svc name to avoid the LWS headless-Service collision")
+	}
+	if !strings.Contains(out, "port: 8000") {
+		t.Error("HTTPRoute should backendRef the Service on port 8000")
 	}
 
 	// LWS group size == node count.
@@ -94,6 +94,42 @@ func TestRenderLLMDDeployment_ObjectGraph(t *testing.T) {
 	}
 	if !strings.Contains(out, `accelbench.io/dra: "true"`) {
 		t.Error("pods should nodeSelect the DRA label")
+	}
+}
+
+func TestRenderLLMDDeployment_PipelineParallelLaunch(t *testing.T) {
+	out, err := RenderLLMDDeployment(sampleLLMDParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// vLLM multi-node MultiProcessing backend (no Ray) — pipeline-parallel
+	// SPLITS layers across nodes. --node-rank/--master-addr/--nnodes from LWS.
+	if strings.Contains(out, "ray start") {
+		t.Error("must NOT use Ray — vLLM MultiProcessing backend")
+	}
+	if strings.Contains(out, "--data-parallel") {
+		t.Error("must NOT use data-parallel — DP replicates the model, doesn't split layers")
+	}
+	for _, want := range []string{
+		"exec vllm serve",
+		"meta-llama/Llama-3.1-70B",
+		"--pipeline-parallel-size ${PP_SIZE}",
+		"--tensor-parallel-size ${TP_SIZE}",
+		"--nnodes ${NNODES}",
+		"--node-rank ${NODE_RANK}",
+		"--master-addr ${LWS_LEADER_ADDRESS}",
+		"NODE_RANK=${LWS_WORKER_INDEX:-0}",
+		"NNODES=${LWS_GROUP_SIZE:-2}",
+		// Head (node-rank 0) serves; secondaries go headless.
+		`HEADLESS="--headless"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("PP launch missing %q", want)
+		}
+	}
+	// Same launch on BOTH leader and worker templates → serve appears twice.
+	if n := strings.Count(out, "exec vllm serve"); n != 2 {
+		t.Errorf("every pod runs vllm serve (leader+worker) → expect 2, got %d", n)
 	}
 }
 

@@ -312,11 +312,13 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		totalMemGiB := float64(cfg.InstanceType.AcceleratorMemoryGiB)
 		if cfg.IsDistributed() {
 			// PRD-56: GPUs live on every group node — fan DCGM out across all.
-			// The model metrics endpoint is the leader Service (modelName:8000).
+			// vLLM metrics come from the leader via our serving Service
+			// "<name>-svc" (NOT "<name>", which is the LWS controller's own
+			// headless Service).
 			nodeIPs := o.llmdServingNodeIPs(ctx, ns, modelName)
 			log.Printf("[%s] DCGM scraping enabled across %d serving node(s)", cfg.RunID[:8], len(nodeIPs))
 			// Total memory scales with the group: per-instance accel memory × nodes.
-			gpuScraper = NewGPUScraperMultiNode(modelName, 8000, totalMemGiB*float64(cfg.NodeCount), nodeIPs)
+			gpuScraper = NewGPUScraperMultiNode(modelName+"-svc", 8000, totalMemGiB*float64(cfg.NodeCount), nodeIPs)
 		} else {
 			// Try to get node IP for DCGM metrics
 			nodeIP := o.getModelPodNodeIP(ctx, ns, modelName)

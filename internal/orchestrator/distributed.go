@@ -223,7 +223,10 @@ func (o *Orchestrator) deployLLMD(ctx context.Context, ns, name string, cfg RunC
 		image = rt.DefaultImage(cfg.Request.FrameworkVersion, "")
 	}
 
-	command, args := rt.BuildArgs(runtime.ContainerParams{
+	// ServeArgs = model positional + static tuning flags. The multi-node
+	// coordination flags (--data-parallel-*, --tensor-parallel-size) are added
+	// by the template from LWS runtime env, per the llm-d launch pattern.
+	_, serveArgs := rt.BuildArgs(runtime.ContainerParams{
 		ModelHfID:              cfg.Request.ModelHfID,
 		ModelS3URI:             modelS3URI,
 		UseRunaiStreamer:       useRunai,
@@ -260,8 +263,7 @@ func (o *Orchestrator) deployLLMD(ctx context.Context, ns, name string, cfg RunC
 		Name:                   name,
 		Namespace:              ns,
 		Image:                  image,
-		Command:                command,
-		Args:                   args,
+		ServeArgs:              serveArgs,
 		ContainerName:          rt.ContainerName(),
 		ModelHfID:              cfg.Request.ModelHfID,
 		HfToken:                o.resolveHFToken(ctx, cfg.Request.HfToken),

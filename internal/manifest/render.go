@@ -168,12 +168,15 @@ type LLMDDeploymentParams struct {
 	Name      string
 	Namespace string
 
-	// Container image + command. Resolved by the caller via the llm-d
-	// Runtime (image override → default GHCR image; args from BuildArgs).
-	Image            string
-	Command          []string // nil = use image entrypoint
-	Args             []string
-	ContainerName    string // k8s container name (e.g. "vllm")
+	// Container image + serve args. ServeArgs is the model positional arg plus
+	// static tuning flags (from the llm-d Runtime's BuildArgs) — WITHOUT the
+	// multi-node coordination flags, which the template appends from LWS
+	// runtime env. EVERY pod (leader + workers) runs the same `vllm serve`; the
+	// data-parallel supervisor coordinates them via --data-parallel-address,
+	// mirroring llm-d's guides/wide-ep-lws launch (NOT Ray).
+	Image         string
+	ServeArgs     []string // shell-quoted and appended after the DP flags
+	ContainerName string   // k8s container name (e.g. "vllm")
 	ModelHfID        string
 	HfToken          string
 	ModelServiceAccount string // K8s service account for S3 access (empty = default SA)

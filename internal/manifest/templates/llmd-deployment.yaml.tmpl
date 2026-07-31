@@ -74,10 +74,15 @@ spec:
       spec:
 {{- template "llmdPodSpec" (dict "p" . "role" "worker") }}
 ---
+# Our serving Service is named "<name>-svc", NOT "<name>": the LeaderWorkerSet
+# controller auto-creates its OWN headless Service named exactly "<name>" for
+# pod-to-pod (leader<->worker) addressing. Reusing that name collides with the
+# controller-owned object. This Service is the routable OpenAI endpoint the
+# gateway backendRefs; it selects only the leader (the pod serving the API).
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Name }}
+  name: {{ .Name }}-svc
   namespace: {{ .Namespace }}
   labels:
     app.kubernetes.io/name: {{ .Name }}
@@ -114,7 +119,7 @@ spec:
     - backendRefs:
         - group: ""
           kind: Service
-          name: {{ .Name }}
+          name: {{ .Name }}-svc
           port: 8000
       matches:
         - path:
@@ -176,13 +181,45 @@ spec:
               - name: NCCL_PROTO
                 value: "simple"
 {{- end }}
-{{- if $p.Command }}
-            command: {{ toYAMLStringList $p.Command }}
-{{- end }}
+            # Multi-node PIPELINE-PARALLEL launch per the vLLM multi-node docs
+            # (MultiProcessing backend — no Ray). Pipeline-parallel SPLITS the
+            # model's layers across nodes (node 0 gets the first block, node 1
+            # the next), so each GPU holds only its share — unlike data-parallel
+            # which replicates the whole model. Doc rule: tensor-parallel-size =
+            # GPUs per node, pipeline-parallel-size = number of nodes.
+            #
+            # Every pod runs the SAME `vllm serve`; the HEAD (node-rank 0) serves
+            # the API, SECONDARY nodes add --headless. LWS injects
+            # LWS_LEADER_ADDRESS (--master-addr), LWS_WORKER_INDEX (--node-rank,
+            # 0=head), and LWS_GROUP_SIZE (--nnodes).
+            command: ["/bin/bash", "-c"]
             args:
-{{- range $p.Args }}
-              - {{ . | yamlQuote }}
+              - |
+                set -e
+                # Clear /dev/shm on start to avoid space exhaustion after a crash
+                # (llm-d/llm-d#352).
+                find /dev/shm -type f -delete 2>/dev/null || true
+                TP_SIZE={{ $p.TensorParallelDegree }}
+                PP_SIZE={{ $p.PipelineParallelDegree }}
+                NODE_RANK=${LWS_WORKER_INDEX:-0}
+                NNODES=${LWS_GROUP_SIZE:-{{ $p.NodeCount }}}
+                echo "llm-d node: node_rank=${NODE_RANK} nnodes=${NNODES} master=${LWS_LEADER_ADDRESS} tp=${TP_SIZE} pp=${PP_SIZE}"
+                # HEAD (node-rank 0) runs the API server; secondaries run headless.
+                HEADLESS=""
+                if [ "${NODE_RANK}" != "0" ]; then
+                  HEADLESS="--headless"
+                fi
+                exec vllm serve \
+{{- range $p.ServeArgs }}
+                  {{ . | yamlQuote }} \
 {{- end }}
+                  --port 8000 \
+                  --tensor-parallel-size ${TP_SIZE} \
+                  --pipeline-parallel-size ${PP_SIZE} \
+                  --nnodes ${NNODES} \
+                  --node-rank ${NODE_RANK} \
+                  --master-addr ${LWS_LEADER_ADDRESS} \
+                  ${HEADLESS}
             resources:
               requests:
                 cpu: {{ $p.CPURequest }}

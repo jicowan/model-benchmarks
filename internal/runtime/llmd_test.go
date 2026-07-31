@@ -35,35 +35,40 @@ func TestSingleNodeRuntimes_NotMultiNode(t *testing.T) {
 
 func TestLLMD_BuildArgs_EmitsTPAndPP(t *testing.T) {
 	rt := &LLMD{}
-	_, args := rt.BuildArgs(ContainerParams{
+	command, args := rt.BuildArgs(ContainerParams{
 		ModelHfID:              "meta-llama/Llama-3.1-70B",
 		TensorParallelDegree:   8,
 		PipelineParallelDegree: 2,
 		NodeCount:              2,
 		GPUsPerNode:            8,
 	})
+	// BuildArgs returns only model + static tuning flags; command is nil (the
+	// deployment template wraps everything in /bin/bash -c and appends the
+	// multi-node coordination flags from LWS env).
+	if command != nil {
+		t.Errorf("command should be nil (template supplies it), got %v", command)
+	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{
-		"--model meta-llama/Llama-3.1-70B",
-		"--tensor-parallel-size 8",
-		"--pipeline-parallel-size 2",
-		"--trust-remote-code",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("args missing %q; got: %s", want, joined)
+	if !strings.HasPrefix(joined, "meta-llama/Llama-3.1-70B ") {
+		t.Errorf("model should be the first (positional) arg; got: %s", joined)
+	}
+	if !strings.Contains(joined, "--trust-remote-code") {
+		t.Errorf("args missing --trust-remote-code; got: %s", joined)
+	}
+	// TP/PP and DP flags are NOT emitted by BuildArgs — they come from the
+	// template (they depend on LWS runtime env).
+	for _, notWant := range []string{"--tensor-parallel-size", "--pipeline-parallel-size", "--data-parallel", "--model "} {
+		if strings.Contains(joined, notWant) {
+			t.Errorf("BuildArgs should NOT emit %q (template does); got: %s", notWant, joined)
 		}
 	}
 }
 
-func TestLLMD_BuildArgs_DefaultsDegreesToOne(t *testing.T) {
+func TestLLMD_BuildArgs_ModelIsPositional(t *testing.T) {
 	rt := &LLMD{}
 	_, args := rt.BuildArgs(ContainerParams{ModelHfID: "m"})
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--tensor-parallel-size 1") {
-		t.Errorf("TP should default to 1; got: %s", joined)
-	}
-	if !strings.Contains(joined, "--pipeline-parallel-size 1") {
-		t.Errorf("PP should default to 1; got: %s", joined)
+	if len(args) == 0 || args[0] != "m" {
+		t.Errorf("model should be the leading positional arg; got: %v", args)
 	}
 }
 

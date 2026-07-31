@@ -576,6 +576,13 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			Model:        model,
 			InstanceType: instType,
 			Request:      req,
+			// PRD-56: distributed topology rides on the request (transient,
+			// not persisted until PRD-57). Zero/empty ⇒ single-node path.
+			NodeCount:              req.NodeCount,
+			PipelineParallelDegree: req.PipelineParallelDegree,
+			GPUsPerNode:            req.GPUsPerNode,
+			NetworkMode:            req.NetworkMode,
+			NodePoolOverride:       req.NodePoolOverride,
 		}
 		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)

@@ -190,6 +190,17 @@ type RunRequest struct {
 	// override GPU-memory, TP, or pipeline-tag checks — those are
 	// architectural, not statistical.
 	AllowHostMemOverride bool `json:"allow_host_mem_override,omitempty"`
+
+	// PRD-56: distributed (multi-node) topology. TRANSIENT — carried on the
+	// request and threaded into orchestrator.RunConfig, but NOT persisted to
+	// benchmark_runs (CreateBenchmarkRun writes an explicit column list that
+	// omits these). PRD-57 adds the columns + UI. Zero/empty ⇒ single-node.
+	// A distributed run needs Framework="llm-d" and NodeCount>1.
+	NodeCount              int    `json:"node_count,omitempty"`
+	PipelineParallelDegree int    `json:"pipeline_parallel_degree,omitempty"`
+	GPUsPerNode            int    `json:"gpus_per_node,omitempty"`
+	NetworkMode            string `json:"network_mode,omitempty"`       // "efa" (default) | "tcp"
+	NodePoolOverride       string `json:"node_pool_override,omitempty"` // pin a specific multinode-<az>/test pool
 }
 
 // TestSuiteRun represents a test suite execution.
