@@ -171,6 +171,28 @@ spec:
                 value: "{{ $p.HfToken }}"
               - name: NCCL_DEBUG
                 value: "INFO"
+              # Cross-node socket-interface pinning. GLOO is the CPU-side
+              # collective vLLM uses to coordinate pipeline stages (relaying
+              # tokens between the head and secondary nodes); without pinning
+              # its interface it can bind to the wrong NIC and the engine's
+              # cross-stage path HANGS while the API server still answers
+              # /health (observed: PP requests connect but never process).
+              # Matches llm-d's guides/wide-ep-lws env. eth0 = the pod's primary
+              # (ENA) interface.
+              - name: GLOO_SOCKET_IFNAME
+                value: "eth0"
+              # Pin vLLM's advertised host IP to the pod IP so distributed init
+              # and the DP/PP RPC bind to the right address (vLLM troubleshooting
+              # guide: wrong auto-detected IP is a common multi-node hang cause).
+              - name: VLLM_HOST_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              # Long engine-ready + keep-alive budgets for slow multi-node load.
+              - name: VLLM_ENGINE_READY_TIMEOUT_S
+                value: "3000"
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
 {{- if eq $p.NetworkMode "tcp" }}
               # TCP-sockets fabric (no EFA). NCCL falls back to plain sockets
               # over the standard ENA interface — functionally correct, slower
@@ -189,6 +211,8 @@ spec:
                 value: "1"
               - name: NCCL_PROTO
                 value: "simple"
+              - name: NCCL_SOCKET_IFNAME
+                value: "eth0"
 {{- end }}
             # Multi-node PIPELINE-PARALLEL launch per the vLLM multi-node docs
             # (MultiProcessing backend — no Ray). Pipeline-parallel SPLITS the

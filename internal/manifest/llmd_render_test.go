@@ -90,6 +90,13 @@ func TestRenderLLMDDeployment_ObjectGraph(t *testing.T) {
 			t.Errorf("missing EFA env %q", want)
 		}
 	}
+	// Cross-node socket pinning: GLOO_SOCKET_IFNAME (PP CPU-side coordination)
+	// + VLLM_HOST_IP from the pod IP — required so multi-node PP doesn't hang.
+	for _, want := range []string{"GLOO_SOCKET_IFNAME", "VLLM_HOST_IP", "fieldPath: status.podIP"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing multi-node network env %q", want)
+		}
+	}
 	// Gateway parentRef binds to the shared gateway.
 	if !strings.Contains(out, "name: accelbench-gateway") {
 		t.Error("HTTPRoute should parentRef the shared gateway")
