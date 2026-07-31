@@ -194,8 +194,12 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		     model_s3_uri, max_num_batched_tokens, kv_cache_dtype,
 		     chunked_prefill_size, mem_fraction_static,
 		     streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
-		     deployment_mode, node_count, pipeline_parallel_degree, network_mode)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+		     deployment_mode, node_count, pipeline_parallel_degree, network_mode,
+		     prefill_replicas, prefill_tp, prefill_pp,
+		     decode_replicas, decode_tp, decode_pp,
+		     kv_connector, kv_transfer_backend)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
+		         $27,$28,$29,$30,$31,$32,$33,$34)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
@@ -214,6 +218,14 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		run.NodeCount,
 		run.PipelineParallelDegree,
 		run.NetworkMode,
+		run.PrefillReplicas,
+		run.PrefillTP,
+		run.PrefillPP,
+		run.DecodeReplicas,
+		run.DecodeTP,
+		run.DecodePP,
+		run.KVConnector,
+		run.KVTransferBackend,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
@@ -447,7 +459,10 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        max_num_batched_tokens, scenario_id, kv_cache_dtype,
 		        host_memory_peak_gib,
 		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
-		        deployment_mode, node_count, pipeline_parallel_degree, network_mode
+		        deployment_mode, node_count, pipeline_parallel_degree, network_mode,
+		        prefill_replicas, prefill_tp, prefill_pp,
+		        decode_replicas, decode_tp, decode_pp,
+		        kv_connector, kv_transfer_backend
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
@@ -458,7 +473,10 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.MaxNumBatchedTokens, &run.ScenarioID, &run.KVCacheDtype,
 		&run.HostMemoryPeakGiB,
 		&run.StreamerMode, &run.StreamerConcurrency, &run.StreamerMemoryLimitGiB,
-		&run.DeploymentMode, &run.NodeCount, &run.PipelineParallelDegree, &run.NetworkMode)
+		&run.DeploymentMode, &run.NodeCount, &run.PipelineParallelDegree, &run.NetworkMode,
+		&run.PrefillReplicas, &run.PrefillTP, &run.PrefillPP,
+		&run.DecodeReplicas, &run.DecodeTP, &run.DecodePP,
+		&run.KVConnector, &run.KVTransferBackend)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

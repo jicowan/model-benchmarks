@@ -73,7 +73,25 @@ type RunConfig struct {
 	// benchmark multi-node on GPU instances that lack EFA (or when EFA
 	// capacity is unavailable), at a throughput cost. Empty ⇒ EFA.
 	NetworkMode string
+
+	// PRD-58: prefill/decode disaggregation. Set only when the run is
+	// disaggregated (Request.DeploymentMode == "disaggregated"). Per-role
+	// replica counts (the xPyD ratio) + within-node TP. Each pod occupies one
+	// node (TP is within-node, per-role PP is fixed at 1), so the run's total
+	// node count is PrefillReplicas + DecodeReplicas — set into NodeCount by the
+	// caller so the shared pool-acquire / scale / teardown / cost / DCGM paths
+	// (which key on NodeCount) work unchanged.
+	PrefillReplicas int
+	PrefillTP       int
+	DecodeReplicas  int
+	DecodeTP        int
 }
+
+// Deployment sub-modes (PRD-57/58). Request.DeploymentMode carries these.
+const (
+	DeploymentModeDistributed   = "distributed"   // co-located multi-node (PRD-56/57)
+	DeploymentModeDisaggregated = "disaggregated" // prefill/decode split (PRD-58)
+)
 
 // Cross-node fabric modes for distributed runs (PRD-56).
 const (
@@ -91,12 +109,22 @@ func (c RunConfig) networkMode() string {
 
 // IsDistributed reports whether this run uses the multi-node deploy path:
 // the framework is a multi-node runtime AND a node count > 1 was requested.
+// True for BOTH co-located distributed and disaggregated runs — both need the
+// pool-acquire / scale / teardown / multi-node-DCGM machinery.
 func (c RunConfig) IsDistributed() bool {
 	rt, err := runtime.Get(c.Request.Framework)
 	if err != nil {
 		return false
 	}
 	return runtime.IsMultiNode(rt) && c.NodeCount > 1
+}
+
+// IsDisaggregated reports whether this run splits prefill and decode into
+// separate pod groups (PRD-58). A subset of IsDistributed: it additionally
+// routes deployModel/waitForReady to the PD object graph (two Deployments +
+// InferencePool + EPP) instead of the co-located LeaderWorkerSet.
+func (c RunConfig) IsDisaggregated() bool {
+	return c.IsDistributed() && c.Request.DeploymentMode == DeploymentModeDisaggregated
 }
 
 // Orchestrator manages the benchmark lifecycle.
@@ -311,14 +339,20 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	if strings.EqualFold(cfg.InstanceType.AcceleratorType, "gpu") {
 		totalMemGiB := float64(cfg.InstanceType.AcceleratorMemoryGiB)
 		if cfg.IsDistributed() {
-			// PRD-56: GPUs live on every group node — fan DCGM out across all.
-			// vLLM metrics come from the leader via our serving Service
-			// "<name>-svc" (NOT "<name>", which is the LWS controller's own
-			// headless Service).
+			// PRD-56/58: GPUs live on every group node — fan DCGM out across all.
+			// vLLM metrics come from the serving Service: "<name>-svc" (co-located
+			// LWS leader) or, for a disaggregated run, "<name>-decode" (decode does
+			// the token generation, so its serving metrics are the relevant ones;
+			// per-role metric attribution is PRD-59). The DCGM node fan-out below
+			// covers BOTH roles' nodes via the shared app.kubernetes.io/name label.
+			metricsSvc := modelName + "-svc"
+			if cfg.IsDisaggregated() {
+				metricsSvc = modelName + "-decode"
+			}
 			nodeIPs := o.llmdServingNodeIPs(ctx, ns, modelName)
 			log.Printf("[%s] DCGM scraping enabled across %d serving node(s)", cfg.RunID[:8], len(nodeIPs))
 			// Total memory scales with the group: per-instance accel memory × nodes.
-			gpuScraper = NewGPUScraperMultiNode(modelName+"-svc", 8000, totalMemGiB*float64(cfg.NodeCount), nodeIPs)
+			gpuScraper = NewGPUScraperMultiNode(metricsSvc, 8000, totalMemGiB*float64(cfg.NodeCount), nodeIPs)
 		} else {
 			// Try to get node IP for DCGM metrics
 			nodeIP := o.getModelPodNodeIP(ctx, ns, modelName)
@@ -434,9 +468,13 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 }
 
 func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg RunConfig) error {
-	// PRD-56: multi-node runs render the llm-d object graph (LWS + gateway +
-	// DRA claims) and apply it via the dynamic client. Single-node runs take
-	// the unchanged typed-Deployment path below.
+	// PRD-58: disaggregated runs render the prefill/decode object graph
+	// (two Deployments + InferencePool + EPP). PRD-56: co-located multi-node
+	// runs render the llm-d LWS object graph. Both apply via the dynamic
+	// client. Single-node runs take the unchanged typed-Deployment path below.
+	if cfg.IsDisaggregated() {
+		return o.deployLLMDDisaggregated(ctx, ns, name, cfg)
+	}
 	if cfg.IsDistributed() {
 		return o.deployLLMD(ctx, ns, name, cfg)
 	}
@@ -567,8 +605,13 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 }
 
 func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg RunConfig) error {
-	// PRD-56: multi-node runs poll the LeaderWorkerSet group status instead of
-	// a Deployment's ReadyReplicas.
+	// PRD-58: disaggregated runs wait on BOTH the prefill and decode
+	// Deployments + the EPP before the loadgen can route.
+	if cfg.IsDisaggregated() {
+		return o.waitForDisaggregatedReady(ctx, ns, name, cfg)
+	}
+	// PRD-56: co-located multi-node runs poll the LeaderWorkerSet group status
+	// instead of a Deployment's ReadyReplicas.
 	if cfg.IsDistributed() {
 		return o.waitForLWSReady(ctx, ns, name, cfg)
 	}

@@ -1,0 +1,581 @@
+{{- /*
+PRD-58: prefill/decode (PD) DISAGGREGATED llm-d object graph. Rendered as one
+multi-document YAML and applied together by the orchestrator via the dynamic
+client. Mirrors the hand-validated reference
+(terraform/manifests/pd-layer1-epp-reference.yaml), proven on g6/TCP 2026-07-31.
+
+Documents:
+  1. ResourceClaimTemplate (prefill)  — GPUs for a prefill pod (DRA)
+  2. ResourceClaimTemplate (decode)   — GPUs for a decode pod (DRA)
+  3. Deployment (prefill)             — PrefillReplicas pods, TP=PrefillTP
+  4. Deployment (decode)              — DecodeReplicas pods, TP=DecodeTP, + sidecar
+  5. Service (prefill)                — role endpoint (vLLM :8000)
+  6. Service (decode)                 — role endpoint (sidecar :8000)
+  7. InferencePool                    — spans BOTH roles; EPP splits by role label
+  8. ConfigMap (EPP EndpointPickerConfig)
+  9. ServiceAccount + Role + RoleBinding + ClusterRole + ClusterRoleBinding (EPP)
+ 10. Deployment (EPP) + Service (EPP)
+ 11. HTTPRoute → InferencePool
+
+Prefill and decode are separate pod groups, each independently scaled
+(PrefillReplicas × DecodeReplicas = the xPyD ratio) and parallelized (TP within
+node; PP>1 per role is a follow-on and is not rendered here — a Deployment can't
+express multi-node --nnodes coordination). vLLM transfers the KV cache
+prefill→decode over NIXL; the decode sidecar executes the hand-off, the EPP
+decides which prefill/decode endpoints to use. GPUs are claimed via DRA.
+*/ -}}
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: {{ .Name }}-prefill-devices
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    accelbench/role: prefill
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: {{ .GPUDeviceClass }}
+            count: {{ .PrefillTP }}
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: {{ .Name }}-decode-devices
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    accelbench/role: decode
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: {{ .GPUDeviceClass }}
+            count: {{ .DecodeTP }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}-prefill
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+    llm-d.ai/role: prefill
+spec:
+  replicas: {{ .PrefillReplicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Name }}
+      llm-d.ai/role: prefill
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: model-server
+        llm-d.ai/role: prefill
+        llm-d.ai/inference-serving: "true"
+        llm-d.ai/model: {{ .ModelLabel }}
+    spec:
+{{- template "pdPodSpec" (dict "p" . "role" "prefill") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}-decode
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+    llm-d.ai/role: decode
+spec:
+  replicas: {{ .DecodeReplicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Name }}
+      llm-d.ai/role: decode
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: model-server
+        llm-d.ai/role: decode
+        llm-d.ai/inference-serving: "true"
+        llm-d.ai/model: {{ .ModelLabel }}
+    spec:
+{{- template "pdPodSpec" (dict "p" . "role" "decode") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}-prefill
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Name }}
+    llm-d.ai/role: prefill
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}-decode
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Name }}
+    llm-d.ai/role: decode
+  ports:
+    - name: http
+      port: 8000        # sidecar entrypoint on the decode pod
+      targetPort: 8000
+      protocol: TCP
+---
+# One InferencePool spans BOTH roles; the EPP splits prefill vs decode
+# internally via prefill-filter/decode-filter keyed on the llm-d.ai/role label
+# (docs-grounded — llm-d-inference-scheduler v0.9.0). GA v1 API requires an
+# endpointPickerRef (the EPP Service). failureMode FailOpen per the llm-d charts.
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: {{ .Name }}-pool
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+spec:
+  targetPorts:
+    - number: 8000
+  selector:
+    matchLabels:
+      llm-d.ai/inference-serving: "true"
+      llm-d.ai/model: {{ .ModelLabel }}
+  endpointPickerRef:
+    name: {{ .Name }}-epp
+    kind: Service
+    port:
+      number: 9002
+    failureMode: FailOpen
+---
+# EPP scheduling config — threshold-gated PD (deploy/config/pd-epp-config.yaml @
+# v0.9.0). nonCachedTokens gates disaggregation on the uncached prompt-suffix
+# length. Avoids the guide's always-disagg config, which needs a
+# hardware-specific peakPrefillThroughput calibration.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Name }}-epp
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+data:
+  pd-config.yaml: |
+    apiVersion: llm-d.ai/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+    - type: approx-prefix-cache-producer
+      parameters:
+        maxPrefixBlocksToMatch: 256
+        lruCapacityPerServer: 31250
+    - type: prefix-cache-scorer
+    - type: queue-scorer
+    - type: prefill-filter
+    - type: decode-filter
+    - type: max-score-picker
+    - type: prefix-based-pd-decider
+      parameters:
+        nonCachedTokens: {{ .NonCachedTokens }}
+    - type: disagg-profile-handler
+      parameters:
+        deciders:
+          prefill: prefix-based-pd-decider
+    schedulingProfiles:
+    - name: prefill
+      plugins:
+      - pluginRef: prefill-filter
+      - pluginRef: max-score-picker
+      - pluginRef: prefix-cache-scorer
+        weight: 2
+      - pluginRef: queue-scorer
+        weight: 1
+    - name: decode
+      plugins:
+      - pluginRef: decode-filter
+      - pluginRef: max-score-picker
+      - pluginRef: prefix-cache-scorer
+        weight: 2
+      - pluginRef: queue-scorer
+        weight: 1
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Name }}-epp
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Name }}-epp
+  namespace: {{ .Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["inference.networking.k8s.io"]
+    resources: ["inferencepools"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["inference.networking.x-k8s.io"]
+    resources: ["inferenceobjectives", "inferencemodelrewrites"]
+    verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Name }}-epp
+  namespace: {{ .Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Name }}-epp
+    namespace: {{ .Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Name }}-epp
+---
+# Cluster-scoped auth reviews for metrics scraping (rl-rbac.yaml @ v0.9.0).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Name }}-epp-auth
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Name }}-epp-auth
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Name }}-epp
+    namespace: {{ .Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Name }}-epp-auth
+---
+# EPP Deployment — v0.9.0 args (routerlib _deployment.yaml). Single replica
+# (prefix-cache/load state is process-local), Recreate strategy. CPU-only —
+# schedules on a general node, no GPU/multinode tolerations.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}-epp
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: epp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Name }}
+      app.kubernetes.io/component: epp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: epp
+    spec:
+      serviceAccountName: {{ .Name }}-epp
+      terminationGracePeriodSeconds: 130
+      containers:
+        - name: epp
+          image: {{ .EPPImage }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --pool-name
+            - {{ .Name }}-pool
+            - --pool-namespace
+            - {{ .Namespace }}
+            - --pool-group
+            - inference.networking.k8s.io
+            - --zap-encoder
+            - json
+            - --config-file
+            - /config/pd-config.yaml
+            - --grpc-health-port
+            - "9003"
+            - --tracing=false
+            - --metrics-endpoint-auth=false
+          ports:
+            - name: grpc
+              containerPort: 9002
+            - name: grpc-health
+              containerPort: 9003
+            - name: metrics
+              containerPort: 9090
+          livenessProbe:
+            grpc:
+              port: 9003
+              service: inference-extension
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            grpc:
+              port: 9003
+              service: inference-extension
+            periodSeconds: 2
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: plugins-config-volume
+              mountPath: /config
+      volumes:
+        - name: plugins-config-volume
+          configMap:
+            name: {{ .Name }}-epp
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}-epp
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: epp
+  ports:
+    - protocol: TCP
+      port: 9002
+      targetPort: 9002
+      appProtocol: http2
+---
+# Gateway → InferencePool. Requires the EnvoyGateway config to register
+# inference.networking.k8s.io/InferencePool as a backend kind
+# (extensionManager.backendResources) — a gateway/Terraform prerequisite, not
+# rendered here. The EPP ext-proc is wired automatically from the pool's
+# endpointPickerRef. Envoy's default 15s request timeout is raised to 3600s.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .GatewayName }}
+      namespace: {{ .GatewayNamespace }}
+  rules:
+    - backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: {{ .Name }}-pool
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+      timeouts:
+        request: "3600s"
+        backendRequest: "3600s"
+{{- define "pdPodSpec" }}
+{{- $p := .p }}
+{{- $role := .role }}
+        terminationGracePeriodSeconds: 60
+{{- if $p.ModelServiceAccount }}
+        serviceAccountName: {{ $p.ModelServiceAccount }}
+{{- end }}
+        # Prefill and decode pods land on SEPARATE nodes (KV crosses the
+        # network — the whole point of disaggregation).
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ $p.Name }}
+                    llm-d.ai/role: {{ if eq $role "prefill" }}decode{{ else }}prefill{{ end }}
+                topologyKey: kubernetes.io/hostname
+        tolerations:
+          - key: {{ $p.MultiNodeTaintKey }}
+            operator: Equal
+            value: "{{ $p.MultiNodeTaintValue }}"
+            effect: NoSchedule
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: accelbench.io/dedicated
+            operator: Equal
+            value: "true"
+            effect: NoSchedule
+        nodeSelector:
+          {{ $p.DRANodeSelectorKey }}: "{{ $p.DRANodeSelectorVal }}"
+        resourceClaims:
+          - name: gpu
+            resourceClaimTemplateName: {{ $p.Name }}-{{ $role }}-devices
+{{- if eq $role "decode" }}
+        # Native sidecar (initContainer, restartPolicy:Always): fronts vLLM on
+        # :8000, proxies to vLLM :8200, and executes the KV pull from the
+        # prefiller the EPP selected (x-prefiller-host-port header).
+        initContainers:
+          - name: routing-proxy
+            image: {{ $p.SidecarImage }}
+            restartPolicy: Always
+            args:
+              - "--port=8000"
+              - "--vllm-port=8200"
+              - "--kv-connector=nixlv2"
+              - "--zap-log-level=1"
+              - "--secure-proxy=false"
+            ports:
+              - name: sidecar
+                containerPort: 8000
+                protocol: TCP
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+{{- end }}
+        containers:
+          - name: {{ $p.ContainerName }}
+            image: {{ $p.Image }}
+            command: ["vllm", "serve"]
+            args:
+{{- range $p.ServeArgs }}
+              - {{ . | yamlQuote }}
+{{- end }}
+              - "--tensor-parallel-size={{ if eq $role "prefill" }}{{ $p.PrefillTP }}{{ else }}{{ $p.DecodeTP }}{{ end }}"
+              - "--block-size=128"
+              - "--kv-transfer-config"
+              - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
+              - "--no-disable-hybrid-kv-cache-manager"
+              - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
+{{- if eq $role "decode" }}
+              - "--port=8200"
+{{- else }}
+              - "--port=8000"
+{{- end }}
+            env:
+              - name: HF_TOKEN
+                value: "{{ $p.HfToken }}"
+              # NIXL side channel MUST advertise the pod IP (localhost default
+              # breaks cross-pod discovery → 120s timeouts, vLLM #30153).
+              - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+                value: "5600"
+{{- if eq $p.NetworkMode "tcp" }}
+              # TCP NIXL (no EFA). cuda_copy/cuda_ipc are REQUIRED to register
+              # GPU buffers — bare tcp fails with NIXL_ERR_BACKEND.
+              - name: UCX_TLS
+                value: "tcp,cuda_copy,cuda_ipc"
+              - name: UCX_NET_DEVICES
+                value: "all"
+{{- else }}
+              # EFA/RDMA NIXL (preferred). libfabric provider over the EFA NIC.
+              - name: UCX_TLS
+                value: "rc,cuda_copy,cuda_ipc"
+              - name: FI_PROVIDER
+                value: "efa"
+{{- end }}
+              # The vLLM image ships both nixl_cu12 and cu13 UCX modules; pin
+              # the cu13 set (empirically required — NIXL_ERR_BACKEND otherwise).
+              - name: UCX_MODULE_DIR
+                value: "{{ $p.NixlModuleDir }}"
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
+              # DEBUG logging is the documented workaround for vLLM #29369 (a GIL
+              # hot-loop starves NIXL add_remote_agent; DEBUG I/O releases the GIL).
+              - name: VLLM_LOGGING_LEVEL
+                value: "DEBUG"
+            ports:
+{{- if eq $role "decode" }}
+              - name: modelserver
+                containerPort: 8200
+                protocol: TCP
+{{- else }}
+              - name: modelserver
+                containerPort: 8000
+                protocol: TCP
+{{- end }}
+              - name: nixl
+                containerPort: 5600
+                protocol: TCP
+            resources:
+              requests:
+                cpu: {{ $p.CPURequest }}
+                memory: {{ $p.MemoryRequest }}
+              limits:
+                memory: {{ $p.MemoryRequest }}
+              claims:
+                - name: gpu
+            volumeMounts:
+              - name: shm
+                mountPath: /dev/shm
+            readinessProbe:
+              httpGet:
+                path: /v1/models
+                port: {{ if eq $role "decode" }}8200{{ else }}8000{{ end }}
+              periodSeconds: 10
+              failureThreshold: 60
+            startupProbe:
+              httpGet:
+                path: /v1/models
+                port: {{ if eq $role "decode" }}8200{{ else }}8000{{ end }}
+              initialDelaySeconds: 30
+              periodSeconds: 15
+              failureThreshold: 80
+        volumes:
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 8Gi
+{{- end }}

@@ -204,9 +204,14 @@ export default function ResultDetail() {
 
         <ConfigPanel
           headline={[
-            // PRD-57: distributed runs show the topology up front; single runs
-            // are unchanged (deployment_mode null → this entry is omitted).
-            ...(run.deployment_mode === "distributed"
+            // PRD-57/58: distributed + disaggregated runs show the topology up
+            // front; single runs are unchanged (deployment_mode null → omitted).
+            ...(run.deployment_mode === "disaggregated"
+              ? [{
+                  label: "Topology",
+                  value: `${run.prefill_replicas ?? "?"}P${run.decode_replicas ?? "?"}D · prefill TP=${run.prefill_tp ?? "?"} · decode TP=${run.decode_tp ?? "?"} · ${run.node_count ?? "?"} nodes`,
+                }]
+              : run.deployment_mode === "distributed"
               ? [{
                   label: "Topology",
                   value: `${run.node_count ?? "?"} nodes · TP=${run.tensor_parallel_degree} · PP=${run.pipeline_parallel_degree ?? "?"}`,
@@ -220,7 +225,17 @@ export default function ResultDetail() {
             },
           ]}
           details={[
-            ...(run.deployment_mode === "distributed"
+            ...(run.deployment_mode === "disaggregated"
+              ? [
+                  { label: "Deployment", value: "disaggregated (prefill/decode, llm-d)" },
+                  { label: "Prefill", value: `${run.prefill_replicas ?? "?"} × TP=${run.prefill_tp ?? "?"}` },
+                  { label: "Decode", value: `${run.decode_replicas ?? "?"} × TP=${run.decode_tp ?? "?"}` },
+                  { label: "Node Count", value: run.node_count ?? null },
+                  { label: "KV Connector", value: run.kv_connector ?? null },
+                  { label: "KV Transfer", value: run.kv_transfer_backend ?? null },
+                  { label: "Network Fabric", value: run.network_mode ?? null },
+                ]
+              : run.deployment_mode === "distributed"
               ? [
                   { label: "Deployment", value: "distributed (multi-node llm-d)" },
                   { label: "Node Count", value: run.node_count ?? null },

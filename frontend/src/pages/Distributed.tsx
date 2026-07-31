@@ -16,6 +16,9 @@ export default function Distributed() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // PRD-58: co-located (PRD-57) vs disaggregated (prefill/decode split).
+  const [mode, setMode] = useState<"distributed" | "disaggregated">("distributed");
+
   const [form, setForm] = useState({
     model_hf_id: "",
     model_hf_revision: "main",
@@ -31,6 +34,11 @@ export default function Distributed() {
     output_sequence_length: 256,
     scenario_id: "chatbot",
     hf_token: "",
+    // PRD-58 disaggregated per-role shape (the xPyD ratio + within-node TP).
+    prefill_replicas: 1,
+    prefill_tp: 1,
+    decode_replicas: 1,
+    decode_tp: 1,
   });
 
   useEffect(() => {
@@ -54,6 +62,13 @@ export default function Distributed() {
   const pp = form.node_count; // across-node pipeline parallel
   const totalGPUs = tp * form.node_count;
 
+  // PRD-58 disaggregated: each role pod is one node (TP within-node, PP=1), so
+  // the node total is prefill + decode replicas. GPUs = Σ replicas × role TP.
+  const pTP = Math.min(form.prefill_tp, gpusPerNode || form.prefill_tp);
+  const dTP = Math.min(form.decode_tp, gpusPerNode || form.decode_tp);
+  const disaggNodes = form.prefill_replicas + form.decode_replicas;
+  const disaggGPUs = form.prefill_replicas * pTP + form.decode_replicas * dTP;
+
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -61,12 +76,9 @@ export default function Distributed() {
     setError("");
     if (!form.model_hf_id) return setError("Select a model.");
     if (!form.instance_type_name) return setError("Select a GPU instance type.");
-    if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
     if (gpusPerNode < 1) return setError("Selected instance has no GPUs.");
-    if (form.tensor_parallel_degree < 1 || form.tensor_parallel_degree > gpusPerNode)
-      return setError(`Tensor-parallel must be between 1 and ${gpusPerNode} (GPUs per node).`);
 
-    const req: RunRequest = {
+    const base: RunRequest = {
       model_hf_id: form.model_hf_id,
       model_hf_revision: form.model_hf_revision,
       instance_type_name: form.instance_type_name,
@@ -79,11 +91,38 @@ export default function Distributed() {
       scenario_id: form.scenario_id,
       run_type: "on_demand",
       hf_token: form.hf_token || undefined,
-      deployment_mode: "distributed",
-      node_count: form.node_count,
-      pipeline_parallel_degree: pp,
       network_mode: form.network_mode,
     };
+
+    let req: RunRequest;
+    if (mode === "disaggregated") {
+      if (form.prefill_replicas < 1 || form.decode_replicas < 1)
+        return setError("Prefill and decode each need at least 1 replica.");
+      if (form.prefill_replicas + form.decode_replicas < 2)
+        return setError("Disaggregated runs need at least 2 nodes (prefill + decode).");
+      if (form.prefill_tp < 1 || form.prefill_tp > gpusPerNode)
+        return setError(`Prefill TP must be between 1 and ${gpusPerNode} (GPUs per node).`);
+      if (form.decode_tp < 1 || form.decode_tp > gpusPerNode)
+        return setError(`Decode TP must be between 1 and ${gpusPerNode} (GPUs per node).`);
+      req = {
+        ...base,
+        deployment_mode: "disaggregated",
+        prefill_replicas: form.prefill_replicas,
+        prefill_tp: pTP,
+        decode_replicas: form.decode_replicas,
+        decode_tp: dTP,
+      };
+    } else {
+      if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
+      if (form.tensor_parallel_degree < 1 || form.tensor_parallel_degree > gpusPerNode)
+        return setError(`Tensor-parallel must be between 1 and ${gpusPerNode} (GPUs per node).`);
+      req = {
+        ...base,
+        deployment_mode: "distributed",
+        node_count: form.node_count,
+        pipeline_parallel_degree: pp,
+      };
+    }
 
     setSubmitting(true);
     try {
@@ -100,7 +139,7 @@ export default function Distributed() {
       <div className="h-14 border-b border-line flex items-center px-6 bg-surface-0 sticky top-0 z-20">
         <div className="flex items-center gap-2 font-mono text-[12px] tracking-mech">
           <span className="text-ink-0">DISTRIBUTED BENCHMARK</span>
-          <span className="text-ink-2">— multi-node llm-d</span>
+          <span className="text-ink-2">— multi-node llm-d {mode === "disaggregated" ? "· prefill/decode" : "· co-located"}</span>
         </div>
       </div>
 
@@ -119,6 +158,31 @@ export default function Distributed() {
             onChange={(v) => set("model_hf_id", v)}
           />
         </label>
+
+        {/* PRD-58: deployment-mode toggle — co-located vs disaggregated. */}
+        <div className="flex flex-col gap-1.5">
+          <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">Deployment mode</span>
+          <div className="flex gap-2">
+            {([
+              ["distributed", "Co-located", "One serving group split across nodes (PP)"],
+              ["disaggregated", "Disaggregated", "Separate prefill + decode groups (KV transfer)"],
+            ] as const).map(([val, label, desc]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setMode(val)}
+                className={`flex-1 border px-3 py-2 text-left font-mono text-[11.5px] transition-colors ${
+                  mode === val
+                    ? "border-accent bg-accent/10 text-ink-0"
+                    : "border-line bg-surface-1 text-ink-2 hover:text-ink-1"
+                }`}
+              >
+                <div className="tracking-mech uppercase text-[11px]">{label}</div>
+                <div className="text-[10px] text-ink-2 mt-0.5">{desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Instance type (GPU only) */}
         <label className="flex flex-col gap-1.5">
@@ -139,60 +203,136 @@ export default function Distributed() {
           </select>
         </label>
 
-        {/* Node count + network mode */}
-        <div className="grid grid-cols-2 gap-4">
-          <label className="flex flex-col gap-1.5">
-            <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">Node count</span>
-            <input
-              type="number"
-              min={2}
-              className="input w-full"
-              value={form.node_count}
-              onChange={(e) => set("node_count", Math.max(2, Number(e.target.value) || 2))}
-            />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">Network fabric</span>
-            <select
-              className="input w-full"
-              value={form.network_mode}
-              onChange={(e) => set("network_mode", e.target.value as "efa" | "tcp")}
-            >
-              <option value="efa">EFA / RDMA (preferred)</option>
-              <option value="tcp">TCP sockets (no EFA)</option>
-            </select>
-          </label>
-        </div>
-
-        {/* Tensor-parallel (within node) — independent knob, 1 = PP-only */}
+        {/* Network fabric (shared by both modes) */}
         <label className="flex flex-col gap-1.5">
-          <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">
-            Tensor-parallel (GPUs per node used)
-          </span>
-          <input
-            type="number"
-            min={1}
-            max={gpusPerNode || undefined}
+          <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">Network fabric</span>
+          <select
             className="input w-full"
-            value={form.tensor_parallel_degree}
-            onChange={(e) => set("tensor_parallel_degree", Math.max(1, Number(e.target.value) || 1))}
-          />
-          <span className="font-mono text-[10.5px] text-ink-2">
-            1 = pipeline-parallel only (no tensor sharding). Max {gpusPerNode || "?"} (GPUs per node).
-          </span>
+            value={form.network_mode}
+            onChange={(e) => set("network_mode", e.target.value as "efa" | "tcp")}
+          >
+            <option value="efa">EFA / RDMA (preferred)</option>
+            <option value="tcp">TCP sockets (no EFA)</option>
+          </select>
         </label>
 
-        {/* Derived topology summary */}
-        <div className="border border-line bg-surface-1 px-3 py-2.5 font-mono text-[11.5px] text-ink-1">
-          <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology</div>
-          {gpusPerNode > 0 ? (
-            <span className="text-ink-0">
-              {form.node_count} nodes · TP={tp} (within node) · PP={pp} (across nodes) · {totalGPUs} GPUs serving
-            </span>
-          ) : (
-            <span className="text-ink-2">Select an instance type to compute the topology.</span>
-          )}
-        </div>
+        {mode === "distributed" ? (
+          <>
+            {/* Co-located: node count + within-node TP (PP == node count). */}
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">Node count</span>
+              <input
+                type="number"
+                min={2}
+                className="input w-full"
+                value={form.node_count}
+                onChange={(e) => set("node_count", Math.max(2, Number(e.target.value) || 2))}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">
+                Tensor-parallel (GPUs per node used)
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={gpusPerNode || undefined}
+                className="input w-full"
+                value={form.tensor_parallel_degree}
+                onChange={(e) => set("tensor_parallel_degree", Math.max(1, Number(e.target.value) || 1))}
+              />
+              <span className="font-mono text-[10.5px] text-ink-2">
+                1 = pipeline-parallel only (no tensor sharding). Max {gpusPerNode || "?"} (GPUs per node).
+              </span>
+            </label>
+
+            {/* Derived topology summary */}
+            <div className="border border-line bg-surface-1 px-3 py-2.5 font-mono text-[11.5px] text-ink-1">
+              <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology</div>
+              {gpusPerNode > 0 ? (
+                <span className="text-ink-0">
+                  {form.node_count} nodes · TP={tp} (within node) · PP={pp} (across nodes) · {totalGPUs} GPUs serving
+                </span>
+              ) : (
+                <span className="text-ink-2">Select an instance type to compute the topology.</span>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Disaggregated: prefill + decode sub-sections (the xPyD ratio). */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
+                <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">Prefill</div>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Replicas</span>
+                  <input
+                    type="number"
+                    min={1}
+                    className="input w-full"
+                    value={form.prefill_replicas}
+                    onChange={(e) => set("prefill_replicas", Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Tensor-parallel</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={gpusPerNode || undefined}
+                    className="input w-full"
+                    value={form.prefill_tp}
+                    onChange={(e) => set("prefill_tp", Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </label>
+              </div>
+              <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
+                <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">Decode</div>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Replicas</span>
+                  <input
+                    type="number"
+                    min={1}
+                    className="input w-full"
+                    value={form.decode_replicas}
+                    onChange={(e) => set("decode_replicas", Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Tensor-parallel</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={gpusPerNode || undefined}
+                    className="input w-full"
+                    value={form.decode_tp}
+                    onChange={(e) => set("decode_tp", Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* KV connector (fixed) + guidance */}
+            <div className="font-mono text-[10.5px] text-ink-2">
+              KV connector: NIXL over {form.network_mode === "tcp" ? "TCP" : "EFA/libfabric"} · routed via the
+              InferencePool + Endpoint Picker (KV/role/load-aware). Tune the prefill:decode ratio to your
+              input:output sequence-length ratio.
+            </div>
+
+            {/* Derived xPyD summary */}
+            <div className="border border-line bg-surface-1 px-3 py-2.5 font-mono text-[11.5px] text-ink-1">
+              <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology (xPyD)</div>
+              {gpusPerNode > 0 ? (
+                <span className="text-ink-0">
+                  {form.prefill_replicas}P{form.decode_replicas}D · prefill {form.prefill_replicas}× TP={pTP} ·
+                  decode {form.decode_replicas}× TP={dTP} · {disaggNodes} nodes · {disaggGPUs} GPUs serving
+                </span>
+              ) : (
+                <span className="text-ink-2">Select an instance type to compute the topology.</span>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Scenario + load knobs */}
         <div className="grid grid-cols-2 gap-4">

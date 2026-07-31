@@ -49,10 +49,21 @@ export interface BenchmarkRun {
   framework_version: string;
   tensor_parallel_degree: number;
   // PRD-57: distributed-run topology (null on single-instance runs).
-  deployment_mode?: string | null;          // "single" | "distributed"
+  deployment_mode?: string | null;          // "single" | "distributed" | "disaggregated"
   node_count?: number | null;
   pipeline_parallel_degree?: number | null;  // PP across nodes
   network_mode?: string | null;              // "efa" | "tcp"
+  // PRD-58: prefill/decode disaggregation (null unless deployment_mode is
+  // "disaggregated"). Per-role replica counts + within-node TP; KV describes
+  // the transfer connector/backend.
+  prefill_replicas?: number | null;
+  prefill_tp?: number | null;
+  prefill_pp?: number | null;
+  decode_replicas?: number | null;
+  decode_tp?: number | null;
+  decode_pp?: number | null;
+  kv_connector?: string | null;
+  kv_transfer_backend?: string | null;
   quantization?: string;
   concurrency: number;
   input_sequence_length: number;
@@ -170,10 +181,18 @@ export interface RunRequest {
   streamer_concurrency?: number;     // 0 = default (16)
   streamer_memory_limit_gib?: number; // 0 = auto-sized
   // PRD-57: distributed (multi-node) topology. Omit / "single" = single-instance.
-  deployment_mode?: string;          // "" | "single" | "distributed"
+  deployment_mode?: string;          // "" | "single" | "distributed" | "disaggregated"
   node_count?: number;               // LWS group size (distributed)
   pipeline_parallel_degree?: number; // PP across nodes (== node_count)
   network_mode?: string;             // "efa" (default) | "tcp"
+  // PRD-58: prefill/decode disaggregation (set only when deployment_mode is
+  // "disaggregated"). Per-role replica counts (the xPyD ratio) + within-node TP.
+  prefill_replicas?: number;
+  prefill_tp?: number;
+  prefill_pp?: number;
+  decode_replicas?: number;
+  decode_tp?: number;
+  decode_pp?: number;
 }
 
 export interface RunListItem {

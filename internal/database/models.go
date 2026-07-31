@@ -45,6 +45,19 @@ type BenchmarkRun struct {
 	NodeCount              *int    `json:"node_count,omitempty"`
 	PipelineParallelDegree *int    `json:"pipeline_parallel_degree,omitempty"`
 	NetworkMode            *string `json:"network_mode,omitempty"`
+	// PRD-58: prefill/decode disaggregation (migration 036). Non-null only when
+	// DeploymentMode == "disaggregated". Per-role replica counts + parallelism
+	// (TP within-node, PP across-node, independent knobs); KV describes the
+	// transfer connector/backend. Null on single, co-located distributed, and
+	// historical rows.
+	PrefillReplicas   *int    `json:"prefill_replicas,omitempty"`
+	PrefillTP         *int    `json:"prefill_tp,omitempty"`
+	PrefillPP         *int    `json:"prefill_pp,omitempty"`
+	DecodeReplicas    *int    `json:"decode_replicas,omitempty"`
+	DecodeTP          *int    `json:"decode_tp,omitempty"`
+	DecodePP          *int    `json:"decode_pp,omitempty"`
+	KVConnector       *string `json:"kv_connector,omitempty"`
+	KVTransferBackend *string `json:"kv_transfer_backend,omitempty"`
 	Quantization          *string    `json:"quantization,omitempty"`
 	Concurrency           int        `json:"concurrency"`
 	InputSequenceLength   int        `json:"input_sequence_length"`
@@ -209,12 +222,24 @@ type RunRequest struct {
 	//     RunConfig but not written to benchmark_runs (GPUsPerNode defaults
 	//     to the instance's accelerator count; NodePoolOverride is an
 	//     operational knob, not a run property).
-	DeploymentMode         string `json:"deployment_mode,omitempty"` // "" | "single" | "distributed"
+	DeploymentMode         string `json:"deployment_mode,omitempty"` // "" | "single" | "distributed" | "disaggregated"
 	NodeCount              int    `json:"node_count,omitempty"`
 	PipelineParallelDegree int    `json:"pipeline_parallel_degree,omitempty"`
 	GPUsPerNode            int    `json:"gpus_per_node,omitempty"`
 	NetworkMode            string `json:"network_mode,omitempty"`       // "efa" (default) | "tcp"
 	NodePoolOverride       string `json:"node_pool_override,omitempty"` // pin a specific multinode-<az>/test pool
+
+	// PRD-58: prefill/decode disaggregation. Consulted only when
+	// DeploymentMode == "disaggregated". Per-role replica count + parallelism
+	// (TP within-node, PP across-node — independent knobs, TP=1 allowed).
+	// PERSISTED (migration 036). The KV connector/backend are derived from
+	// NetworkMode by the orchestrator (nixl + tcp|libfabric), not user-set.
+	PrefillReplicas int `json:"prefill_replicas,omitempty"`
+	PrefillTP       int `json:"prefill_tp,omitempty"`
+	PrefillPP       int `json:"prefill_pp,omitempty"`
+	DecodeReplicas  int `json:"decode_replicas,omitempty"`
+	DecodeTP        int `json:"decode_tp,omitempty"`
+	DecodePP        int `json:"decode_pp,omitempty"`
 }
 
 // TestSuiteRun represents a test suite execution.

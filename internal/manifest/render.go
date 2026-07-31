@@ -225,6 +225,75 @@ func RenderLLMDDeployment(params LLMDDeploymentParams) (string, error) {
 	return renderTemplate("llmd-deployment.yaml.tmpl", params)
 }
 
+// LLMDDisaggregatedParams holds values for rendering a PREFILL/DECODE
+// disaggregated llm-d object graph (PRD-58): two independently-scaled pod
+// groups (prefill + decode) wired for NIXL KV transfer, fronted by the Gateway
+// API InferencePool + Endpoint Picker (EPP) for KV/role/load-aware routing.
+// Mirrors the hand-validated reference
+// (terraform/manifests/pd-layer1-epp-reference.yaml).
+type LLMDDisaggregatedParams struct {
+	Name      string
+	Namespace string
+
+	// Model container image (PD uses the upstream vllm/vllm-openai image, which
+	// ships the cu13 NIXL modules — NOT the llm-d-aws image) + serve args (model
+	// positional + static tuning flags; per-role TP/port are appended by the
+	// template). ModelLabel is a DNS-safe form of the model id used for the
+	// InferencePool selector (llm-d.ai/model).
+	Image         string
+	ServeArgs     []string
+	ContainerName string
+	ModelHfID     string
+	ModelLabel    string
+	HfToken       string
+	ModelServiceAccount string
+
+	// Per-role topology. TP is within-node GPUs per pod (drives the per-role
+	// DRA GPU count); replica counts are the xPyD ratio. PP>1 per role is a
+	// follow-on (a Deployment can't express multi-node coordination) and is not
+	// rendered — the orchestrator/API constrain per-role PP to 1.
+	PrefillReplicas int
+	PrefillTP       int
+	DecodeReplicas  int
+	DecodeTP        int
+
+	// Per-pod CPU/memory requests (GPUs come via the DRA claim).
+	CPURequest    string
+	MemoryRequest string
+
+	// NetworkMode selects the NIXL transport: "tcp" (UCX_TLS=tcp,... — no EFA)
+	// or "efa" (libfabric/RDMA). Follows the same axis as co-located NCCL.
+	NetworkMode string
+
+	// NixlModuleDir pins the UCX module set inside the vLLM image (the image
+	// ships both cu12 and cu13; the cu13 set is empirically required).
+	NixlModuleDir string
+
+	// EPP + sidecar images (llm-d router components). NonCachedTokens gates
+	// disaggregation on the uncached prompt-suffix length (EPP decider).
+	EPPImage        string
+	SidecarImage    string
+	NonCachedTokens int
+
+	// DRA GPU device class + scheduling (same as the co-located path).
+	GPUDeviceClass      string
+	GatewayName         string
+	GatewayNamespace    string
+	MultiNodeTaintKey   string
+	MultiNodeTaintValue string
+	DRANodeSelectorKey  string
+	DRANodeSelectorVal  string
+}
+
+// RenderLLMDDisaggregated renders the PD-disaggregated llm-d object graph as a
+// multi-document YAML string (PRD-58). Documents: per-role ResourceClaimTemplates,
+// prefill + decode Deployments (decode carries the routing sidecar), per-role
+// Services, InferencePool, EPP ConfigMap/SA/RBAC/Deployment/Service, and the
+// InferencePool-backed HTTPRoute.
+func RenderLLMDDisaggregated(params LLMDDisaggregatedParams) (string, error) {
+	return renderTemplate("llmd-disaggregated.yaml.tmpl", params)
+}
+
 // RenderCacheJob renders the model cache Job manifest.
 func RenderCacheJob(params CacheJobParams) (string, error) {
 	return renderTemplate("cache-job.yaml.tmpl", params)

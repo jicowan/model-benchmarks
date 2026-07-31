@@ -538,12 +538,96 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		streamerMemLimitPtr = &n
 	}
 
-	// PRD-57: distributed-run validation + persisted topology. Only "distributed"
-	// triggers the multi-node path; "" / "single" take the existing single-
-	// instance flow untouched.
+	// PRD-57/58: distributed-run validation + persisted topology. "distributed"
+	// (co-located multi-node) and "disaggregated" (prefill/decode split) trigger
+	// the multi-node path; "" / "single" take the existing single-instance flow
+	// untouched. Per-role fields (prefill_*/decode_*/kv_*) are populated only for
+	// the disaggregated branch.
 	var deploymentModePtr, networkModePtr *string
 	var nodeCountPtr, ppPtr *int
-	if req.DeploymentMode == "distributed" {
+	var prefillReplicasPtr, prefillTPPtr, prefillPPPtr *int
+	var decodeReplicasPtr, decodeTPPtr, decodePPPtr *int
+	var kvConnectorPtr, kvBackendPtr *string
+	if req.DeploymentMode == "disaggregated" {
+		if req.Framework != "llm-d" {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require framework=llm-d"}
+		}
+		if instType.AcceleratorType != "gpu" {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require a GPU instance type"}
+		}
+		gpn := instType.AcceleratorCount
+		// Per-role replica counts (the xPyD ratio) — each >= 1.
+		if req.PrefillReplicas < 1 {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require prefill_replicas >= 1"}
+		}
+		if req.DecodeReplicas < 1 {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require decode_replicas >= 1"}
+		}
+		// Per-role TP is within-node: default 1 (no tensor sharding), bounded by
+		// the node's GPU count. Independent knobs per role (AWS reference:
+		// prefill TP=1, decode TP=4).
+		pTP, dTP := req.PrefillTP, req.DecodeTP
+		if pTP < 1 {
+			pTP = 1
+		}
+		if dTP < 1 {
+			dTP = 1
+		}
+		if gpn > 0 && pTP > gpn {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("prefill_tp (%d) exceeds the instance's GPUs per node (%d)", pTP, gpn)}
+		}
+		if gpn > 0 && dTP > gpn {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("decode_tp (%d) exceeds the instance's GPUs per node (%d)", dTP, gpn)}
+		}
+		// Per-role PP > 1 (multi-node-per-role) is a documented follow-on: a
+		// Deployment can't express multi-node --nnodes coordination. Constrain
+		// to 1 (each role pod is single-node; scale via replicas).
+		pPP, dPP := req.PrefillPP, req.DecodePP
+		if pPP < 1 {
+			pPP = 1
+		}
+		if dPP < 1 {
+			dPP = 1
+		}
+		if pPP != 1 || dPP != 1 {
+			return "", &createRunError{http.StatusBadRequest, "per-role pipeline-parallel > 1 is not yet supported for disaggregated runs (scale via replicas)"}
+		}
+		if req.NetworkMode != "" && req.NetworkMode != "efa" && req.NetworkMode != "tcp" {
+			return "", &createRunError{http.StatusBadRequest, "network_mode must be 'efa' or 'tcp'"}
+		}
+		// A disaggregated run holds prefill + decode nodes simultaneously; each
+		// pod is one node (TP within-node, PP=1). The total must be >= 2
+		// (prefill and decode land on separate nodes — the whole point).
+		totalNodes := req.PrefillReplicas*pPP + req.DecodeReplicas*dPP
+		if totalNodes < 2 {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs need at least 2 nodes (prefill + decode on separate nodes)"}
+		}
+
+		dm := "disaggregated"
+		deploymentModePtr = &dm
+		nc := totalNodes
+		nodeCountPtr = &nc
+		nm := req.NetworkMode
+		if nm == "" {
+			nm = "efa"
+		}
+		networkModePtr = &nm
+		req.NetworkMode = nm
+		req.PrefillTP, req.DecodeTP, req.PrefillPP, req.DecodePP = pTP, dTP, pPP, dPP
+		pr, pt, pp := req.PrefillReplicas, pTP, pPP
+		dr, dt, dp := req.DecodeReplicas, dTP, dPP
+		prefillReplicasPtr, prefillTPPtr, prefillPPPtr = &pr, &pt, &pp
+		decodeReplicasPtr, decodeTPPtr, decodePPPtr = &dr, &dt, &dp
+		// KV connector/backend are derived from the fabric (nixl over tcp|libfabric),
+		// surfaced in results so a disaggregated run is self-describing.
+		kvc := "nixl"
+		kvConnectorPtr = &kvc
+		kvb := "libfabric"
+		if nm == "tcp" {
+			kvb = "tcp"
+		}
+		kvBackendPtr = &kvb
+	} else if req.DeploymentMode == "distributed" {
 		if req.Framework != "llm-d" {
 			return "", &createRunError{http.StatusBadRequest, "distributed runs require framework=llm-d"}
 		}
@@ -617,6 +701,14 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		NodeCount:              nodeCountPtr,
 		PipelineParallelDegree: ppPtr,
 		NetworkMode:            networkModePtr,
+		PrefillReplicas:        prefillReplicasPtr,
+		PrefillTP:              prefillTPPtr,
+		PrefillPP:              prefillPPPtr,
+		DecodeReplicas:         decodeReplicasPtr,
+		DecodeTP:               decodeTPPtr,
+		DecodePP:               decodePPPtr,
+		KVConnector:            kvConnectorPtr,
+		KVTransferBackend:      kvBackendPtr,
 		Status:                 "pending",
 	}
 
@@ -633,13 +725,26 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			Model:        model,
 			InstanceType: instType,
 			Request:      req,
-			// PRD-56: distributed topology rides on the request (transient,
-			// not persisted until PRD-57). Zero/empty ⇒ single-node path.
+			// PRD-56/57: distributed topology. Zero/empty ⇒ single-node path.
 			NodeCount:              req.NodeCount,
 			PipelineParallelDegree: req.PipelineParallelDegree,
 			GPUsPerNode:            req.GPUsPerNode,
 			NetworkMode:            req.NetworkMode,
 			NodePoolOverride:       req.NodePoolOverride,
+		}
+		// PRD-58: for a disaggregated run the node total is the sum of the
+		// prefill + decode groups (each pod is one node). Set NodeCount from
+		// that sum (nodeCountPtr, computed + validated above) so the shared
+		// pool-acquire / scale / teardown / cost paths key on the right count,
+		// and thread the per-role shape into the config.
+		if req.DeploymentMode == "disaggregated" {
+			if nodeCountPtr != nil {
+				cfg.NodeCount = *nodeCountPtr
+			}
+			cfg.PrefillReplicas = req.PrefillReplicas
+			cfg.PrefillTP = req.PrefillTP
+			cfg.DecodeReplicas = req.DecodeReplicas
+			cfg.DecodeTP = req.DecodeTP
 		}
 		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)

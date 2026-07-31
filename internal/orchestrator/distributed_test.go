@@ -26,6 +26,15 @@ func newFakeDyn(objs ...runtime.Object) *dynfake.FakeDynamicClient {
 		crdGVRTable["gateway.networking.k8s.io/v1|HTTPRoute"]:      "HTTPRouteList",
 		crdGVRTable["resource.k8s.io/v1|ResourceClaimTemplate"]:    "ResourceClaimTemplateList",
 		crdGVRTable["v1|Service"]:                                  "ServiceList",
+		// PRD-58 disaggregated graph kinds.
+		crdGVRTable["inference.networking.k8s.io/v1|InferencePool"]:      "InferencePoolList",
+		crdGVRTable["apps/v1|Deployment"]:                               "DeploymentList",
+		crdGVRTable["v1|ConfigMap"]:                                     "ConfigMapList",
+		crdGVRTable["v1|ServiceAccount"]:                                "ServiceAccountList",
+		crdGVRTable["rbac.authorization.k8s.io/v1|Role"]:                "RoleList",
+		crdGVRTable["rbac.authorization.k8s.io/v1|RoleBinding"]:         "RoleBindingList",
+		crdGVRTable["rbac.authorization.k8s.io/v1|ClusterRole"]:         "ClusterRoleList",
+		crdGVRTable["rbac.authorization.k8s.io/v1|ClusterRoleBinding"]:  "ClusterRoleBindingList",
 	}
 	return dynfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToList, objs...)
 }
@@ -88,6 +97,50 @@ func TestIsDistributed(t *testing.T) {
 	cfg.Request.Framework = "vllm"
 	if cfg.IsDistributed() {
 		t.Error("vllm should never be distributed")
+	}
+}
+
+func TestIsDisaggregated(t *testing.T) {
+	// PRD-58: a disaggregated run is a subset of distributed — needs
+	// DeploymentMode "disaggregated" AND multi-node (NodeCount>1).
+	cfg := distributedRunConfig("run-1", 3)
+	cfg.Request.DeploymentMode = "disaggregated"
+	cfg.PrefillReplicas, cfg.DecodeReplicas = 2, 1
+	if !cfg.IsDisaggregated() {
+		t.Error("llm-d disaggregated with NodeCount=3 should be disaggregated")
+	}
+	if !cfg.IsDistributed() {
+		t.Error("disaggregated implies distributed")
+	}
+	// Co-located distributed is NOT disaggregated.
+	cfg.Request.DeploymentMode = "distributed"
+	if cfg.IsDisaggregated() {
+		t.Error("distributed (co-located) is not disaggregated")
+	}
+	// Single-node disaggregated is not distributed → not disaggregated.
+	cfg.Request.DeploymentMode = "disaggregated"
+	cfg.NodeCount = 1
+	if cfg.IsDisaggregated() {
+		t.Error("NodeCount=1 should not be disaggregated")
+	}
+}
+
+func TestModelLabelValue(t *testing.T) {
+	cases := map[string]string{
+		"Qwen/Qwen2.5-1.5B-Instruct":  "qwen-qwen2-5-1-5b-instruct",
+		"meta-llama/Llama-3.1-70B":    "meta-llama-llama-3-1-70b",
+		"":                            "model",
+		"___":                         "model",
+	}
+	for in, want := range cases {
+		if got := modelLabelValue(in); got != want {
+			t.Errorf("modelLabelValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// DNS-1123 label bounds: <=63 chars, lowercase alnum + '-', no leading/trailing '-'.
+	long := modelLabelValue("Org/" + string(make([]byte, 200)))
+	if len(long) > 63 {
+		t.Errorf("label too long: %d", len(long))
 	}
 }
 
