@@ -36,6 +36,35 @@ const (
 	exportPDNonCachedToken = 16
 )
 
+// sanitizeDNS1123 turns a model id into a DNS-1123-label-safe name (lowercase
+// alnum + '-', no dots, no leading/trailing dashes, <=63 chars) for use as a
+// Kubernetes resource name / label value. sanitizeFilename is NOT sufficient —
+// it leaves dots (e.g. "qwen2.5"), which k8s object names reject.
+func sanitizeDNS1123(modelID string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(modelID) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if len(s) > 55 { // leave headroom for suffixes like "-prefill-devices"
+		s = strings.Trim(s[:55], "-")
+	}
+	if s == "" {
+		s = "model"
+	}
+	return s
+}
+
 // exportServeArgs builds the model positional + static tuning flags that both
 // llm-d render paths append coordination/TP flags onto — mirroring the llm-d
 // runtime's BuildArgs (model id + --trust-remote-code + optional knobs).
@@ -65,7 +94,7 @@ func exportNetworkMode(d *database.RunExportDetails) string {
 // run (PRD-56 shape), reusing the orchestrator's renderer (PRD-59 fix — the old
 // path wrongly emitted a single-node Deployment for these runs).
 func generateDistributedManifest(d *database.RunExportDetails) (string, error) {
-	name := "llmd-" + sanitizeFilename(d.ModelHfID)
+	name := "llmd-" + sanitizeDNS1123(d.ModelHfID)
 	nodeCount := 2
 	if d.NodeCount != nil && *d.NodeCount > 0 {
 		nodeCount = *d.NodeCount
@@ -114,7 +143,7 @@ func generateDistributedManifest(d *database.RunExportDetails) (string, error) {
 // generateDisaggregatedManifest renders the prefill/decode object graph (two
 // Deployments + InferencePool + EPP) for a disaggregated run (PRD-58 shape).
 func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error) {
-	name := "pd-" + sanitizeFilename(d.ModelHfID)
+	name := "pd-" + sanitizeDNS1123(d.ModelHfID)
 	deref := func(p *int, def int) int {
 		if p != nil && *p > 0 {
 			return *p
@@ -128,7 +157,7 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		ServeArgs:           exportServeArgs(d),
 		ContainerName:       "vllm",
 		ModelHfID:           d.ModelHfID,
-		ModelLabel:          sanitizeFilename(d.ModelHfID),
+		ModelLabel:          sanitizeDNS1123(d.ModelHfID),
 		HfToken:             "",
 		PrefillReplicas:     deref(d.PrefillReplicas, 1),
 		PrefillTP:           deref(d.PrefillTP, 1),

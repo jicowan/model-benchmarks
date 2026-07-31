@@ -55,6 +55,15 @@ func TestGenerateManifest_Disaggregated(t *testing.T) {
 			t.Errorf("disaggregated export missing %q", want)
 		}
 	}
+	// Resource names must be DNS-1123 safe — the model id "Qwen/Qwen2.5-1.5B"
+	// has a dot that k8s object names reject; sanitizeDNS1123 must strip it.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "name:") && strings.Contains(line, "pd-") {
+			if strings.Contains(line, ".") {
+				t.Errorf("resource name contains a dot (invalid k8s name): %q", strings.TrimSpace(line))
+			}
+		}
+	}
 }
 
 // TestGenerateManifest_SingleNode: a normal single-instance run still exports
