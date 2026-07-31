@@ -41,6 +41,26 @@ rules:
   - apiGroups: ["karpenter.sh"]
     resources: ["nodepools"]
     verbs: ["get", "list", "patch"]
+  # PRD-58: a disaggregated run renders the Endpoint Picker's cluster-scoped
+  # auth RBAC (a ClusterRole + ClusterRoleBinding granting the EPP SA
+  # tokenreviews/subjectaccessreviews for metrics scraping). The orchestrator
+  # creates + deletes them per run, so it needs create/delete here. Scoped to
+  # get/list/create/delete (NOT bind/escalate/*) to limit the privilege-
+  # escalation surface of granting an app pod ClusterRole write.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "create", "delete"]
+  # The K8s privilege-escalation guard requires the orchestrator to HOLD the
+  # verbs it delegates: the EPP ClusterRole it renders grants tokenreviews +
+  # subjectaccessreviews (create) and /metrics (get), so grant those here too.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -97,6 +117,30 @@ rules:
     verbs: ["get", "list", "create", "delete"]
   - apiGroups: ["resource.k8s.io"]
     resources: ["resourceclaimtemplates"]
+    verbs: ["get", "list", "create", "delete"]
+  # PRD-58: prefill/decode disaggregation adds the Gateway API InferencePool
+  # (the KV/role/load-aware routing pool) and the Endpoint Picker's namespaced
+  # RBAC (a ServiceAccount + Role + RoleBinding). deployments/services/
+  # configmaps (the EPP Deployment/Service/config) are already granted above.
+  #
+  # NOTE: Kubernetes' privilege-escalation guard requires that to CREATE a Role
+  # granting verbs V on resource R, the creator must itself HOLD V on R. The EPP
+  # Role the orchestrator renders grants pods (get/watch/list), inferencepools
+  # (get/watch/list), and inference.networking.x-k8s.io inferenceobjectives/
+  # inferencemodelrewrites (get/watch/list) — so the orchestrator must hold all
+  # of those verbs here, hence the full get/list/watch on inferencepools and the
+  # x-k8s.io reads below (pods get/list/watch is already granted above).
+  - apiGroups: ["inference.networking.k8s.io"]
+    resources: ["inferencepools"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["inference.networking.x-k8s.io"]
+    resources: ["inferenceobjectives", "inferencemodelrewrites"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
     verbs: ["get", "list", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
