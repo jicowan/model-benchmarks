@@ -100,6 +100,30 @@ func GenerateRunCSV(
 	writeRow("total_cost_usd", fmtPtr(run.TotalCostUSD, 4))
 	writeRow("loadgen_cost_usd", fmtPtr(run.LoadgenCostUSD, 4))
 
+	// PRD-59: distributed-run additions. Emitted ONLY when the run carries a
+	// per-node/per-role breakdown — a single-instance run has no shards, so its
+	// CSV is byte-for-byte unchanged. The group memory TOTAL (sum of per-node
+	// peaks) is the honest multi-node memory figure; then one section per shard.
+	if metrics != nil && len(metrics.Shards) > 0 {
+		writeRow("accelerator_memory_total_gib", fmtPtr(metrics.AcceleratorMemoryTotalGiB, 2))
+		w.Write(nil)
+		w.Write([]string{"# per-node / per-role GPU breakdown"})
+		w.Write([]string{
+			"node", "role", "samples",
+			"utilization_avg_pct", "utilization_peak_pct",
+			"memory_avg_gib", "memory_peak_gib",
+			"sm_active_avg_pct", "tensor_active_avg_pct", "dram_active_avg_pct",
+		})
+		for _, sh := range metrics.Shards {
+			w.Write([]string{
+				sh.Node, sh.Role, fmt.Sprintf("%d", sh.Samples),
+				fmtPtr(sh.UtilizationAvgPct, 1), fmtPtr(sh.UtilizationPeakPct, 1),
+				fmtPtr(sh.MemoryAvgGiB, 2), fmtPtr(sh.MemoryPeakGiB, 2),
+				fmtPtr(sh.SMActiveAvgPct, 1), fmtPtr(sh.TensorActiveAvgPct, 1), fmtPtr(sh.DRAMActiveAvgPct, 1),
+			})
+		}
+	}
+
 	w.Flush()
 	if err := w.Error(); err != nil {
 		return nil, err

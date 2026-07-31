@@ -152,6 +152,30 @@ export interface BenchmarkMetrics {
   dram_active_peak_pct?: number;
   // Average framebuffer usage (GiB) across scrapes.
   accelerator_memory_avg_gib?: number;
+  // PRD-59: honest group GPU memory total (sum of per-node peaks) for
+  // distributed runs; undefined on single-instance runs.
+  accelerator_memory_total_gib?: number;
+  // PRD-59: per-node/per-role GPU breakdown for distributed runs; empty/absent
+  // for single-instance runs.
+  shards?: ShardMetric[];
+}
+
+// PRD-59: one serving shard's ({node, role}) GPU telemetry (distributed runs).
+export interface ShardMetric {
+  run_id: string;
+  node: string;
+  role?: string; // "" co-located | "prefill" | "decode"
+  samples: number;
+  utilization_avg_pct?: number;
+  utilization_peak_pct?: number;
+  memory_avg_gib?: number;
+  memory_peak_gib?: number;
+  sm_active_avg_pct?: number;
+  sm_active_peak_pct?: number;
+  tensor_active_avg_pct?: number;
+  tensor_active_peak_pct?: number;
+  dram_active_avg_pct?: number;
+  dram_active_peak_pct?: number;
 }
 
 export interface RunRequest {

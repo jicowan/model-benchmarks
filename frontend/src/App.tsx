@@ -12,6 +12,7 @@ import Estimate from "./pages/Estimate";
 import Run from "./pages/Run";
 import Distributed from "./pages/Distributed";
 import ResultDetail from "./pages/ResultDetail";
+import DistributedReport from "./pages/DistributedReport";
 import SuiteResults from "./pages/SuiteResults";
 import Runs from "./pages/Runs";
 import ModelCachePage from "./pages/ModelCache";
@@ -91,6 +92,8 @@ export default function App() {
             {/* Contextual routes */}
             <Route path="/compare" element={<Compare />} />
             <Route path="/results/:id" element={<ResultDetail />} />
+            {/* PRD-59: dedicated distributed / disaggregated run report. */}
+            <Route path="/results/:id/distributed" element={<DistributedReport />} />
             <Route path="/suite-runs/:id" element={<SuiteResults />} />
 
             {/* Back-compat redirects for old paths */}

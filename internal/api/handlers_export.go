@@ -454,6 +454,13 @@ func (s *Server) handleExportRunCSV(w http.ResponseWriter, r *http.Request) {
 
 	metrics, _ := s.repo.GetMetricsByRunID(r.Context(), runID)     // nil-safe inside generator
 	details, _ := s.repo.GetRunExportDetails(r.Context(), runID)    // nil-safe inside generator
+	// PRD-59: attach the per-node/per-role breakdown so a distributed run's CSV
+	// carries the shard rows. Empty for single-node runs → CSV byte-unchanged.
+	if metrics != nil {
+		if shards, serr := s.repo.GetShardMetrics(r.Context(), runID); serr == nil {
+			metrics.Shards = shards
+		}
+	}
 
 	// Best-effort pricing lookup.
 	var hourlyRate *float64

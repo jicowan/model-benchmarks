@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import {
   getRun,
   getRunDetail,
@@ -489,6 +489,19 @@ export default function ResultDetail() {
                 />
               </div>
             </section>
+
+            {/* PRD-59: distributed / disaggregated runs get a purpose-built
+                report (topology, N-node cost, per-node/role GPU telemetry). */}
+            {(run.deployment_mode === "distributed" || run.deployment_mode === "disaggregated") && (
+              <div className="mt-8 pt-6 hairline no-print">
+                <Link to={`/results/${run.id}/distributed`} className="btn-primary">
+                  View distributed report →
+                </Link>
+                <p className="mt-2 caption">
+                  Per-node / per-role GPU telemetry, N-node cost breakdown, and topology.
+                </p>
+              </div>
+            )}
 
             {/* PRD-41: Print to PDF, CSV, and K8s manifest exports. */}
             <div className="mt-8 pt-6 hairline no-print">
