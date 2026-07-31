@@ -37,6 +37,14 @@ type BenchmarkRun struct {
 	Framework             string     `json:"framework"`
 	FrameworkVersion      string     `json:"framework_version"`
 	TensorParallelDegree  int        `json:"tensor_parallel_degree"`
+	// PRD-57: distributed-run topology (migration 035). Null on single-instance
+	// and historical rows. DeploymentMode distinguishes single vs distributed;
+	// NodeCount + PipelineParallelDegree describe the multi-node shape (TP reuses
+	// TensorParallelDegree as within-node TP); NetworkMode is the fabric.
+	DeploymentMode         *string `json:"deployment_mode,omitempty"`
+	NodeCount              *int    `json:"node_count,omitempty"`
+	PipelineParallelDegree *int    `json:"pipeline_parallel_degree,omitempty"`
+	NetworkMode            *string `json:"network_mode,omitempty"`
 	Quantization          *string    `json:"quantization,omitempty"`
 	Concurrency           int        `json:"concurrency"`
 	InputSequenceLength   int        `json:"input_sequence_length"`
@@ -191,11 +199,17 @@ type RunRequest struct {
 	// architectural, not statistical.
 	AllowHostMemOverride bool `json:"allow_host_mem_override,omitempty"`
 
-	// PRD-56: distributed (multi-node) topology. TRANSIENT — carried on the
-	// request and threaded into orchestrator.RunConfig, but NOT persisted to
-	// benchmark_runs (CreateBenchmarkRun writes an explicit column list that
-	// omits these). PRD-57 adds the columns + UI. Zero/empty ⇒ single-node.
-	// A distributed run needs Framework="llm-d" and NodeCount>1.
+	// PRD-56/57: distributed (multi-node) topology.
+	//   DeploymentMode "" / "single" (default) ⇒ single-instance path,
+	//     unchanged. "distributed" ⇒ multi-node llm-d run.
+	//   NodeCount / PipelineParallelDegree / NetworkMode are PERSISTED
+	//     (PRD-57, migration 035); TP reuses the existing
+	//     TensorParallelDegree field (within-node TP for distributed runs).
+	//   GPUsPerNode / NodePoolOverride stay TRANSIENT — threaded into
+	//     RunConfig but not written to benchmark_runs (GPUsPerNode defaults
+	//     to the instance's accelerator count; NodePoolOverride is an
+	//     operational knob, not a run property).
+	DeploymentMode         string `json:"deployment_mode,omitempty"` // "" | "single" | "distributed"
 	NodeCount              int    `json:"node_count,omitempty"`
 	PipelineParallelDegree int    `json:"pipeline_parallel_degree,omitempty"`
 	GPUsPerNode            int    `json:"gpus_per_node,omitempty"`

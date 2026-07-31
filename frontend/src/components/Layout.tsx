@@ -80,6 +80,20 @@ const navItems: NavItem[] = [
     ),
   },
   {
+    // PRD-57: dedicated page to compose + launch a multi-node distributed run.
+    to: "/distributed",
+    label: "Distributed",
+    shortcut: "I",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="square" className={iconCls}>
+        <rect x="3" y="4" width="7" height="7" />
+        <rect x="14" y="4" width="7" height="7" />
+        <rect x="8.5" y="14" width="7" height="6" />
+        <path d="M6.5 11v3h11v-3" />
+      </svg>
+    ),
+  },
+  {
     to: "/runs",
     label: "Runs",
     shortcut: "R",

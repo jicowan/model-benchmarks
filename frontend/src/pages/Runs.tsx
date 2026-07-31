@@ -337,9 +337,25 @@ export default function Runs() {
       {
         accessorKey: "instance_type_name",
         header: "INSTANCE",
-        cell: ({ getValue }) => (
-          <span className="text-ink-1">{getValue<string>()}</span>
-        ),
+        // PRD-57: for distributed runs, show the multi-node topology
+        // (e.g. "g6.xlarge ×2" + a badge) where a single instance shows today.
+        cell: ({ row }) => {
+          const j = row.original;
+          const distributed = j.deployment_mode === "distributed";
+          return (
+            <span className="text-ink-1 inline-flex items-center gap-1.5">
+              {j.instance_type_name}
+              {distributed && j.node_count ? (
+                <span className="num text-ink-2">×{j.node_count}</span>
+              ) : null}
+              {distributed ? (
+                <span className="font-mono text-[9.5px] tracking-widemech uppercase px-1 py-0.5 border border-signal/50 text-signal bg-signal/5">
+                  dist
+                </span>
+              ) : null}
+            </span>
+          );
+        },
       },
       {
         id: "duration",

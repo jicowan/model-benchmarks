@@ -48,6 +48,11 @@ export interface BenchmarkRun {
   framework: string;
   framework_version: string;
   tensor_parallel_degree: number;
+  // PRD-57: distributed-run topology (null on single-instance runs).
+  deployment_mode?: string | null;          // "single" | "distributed"
+  node_count?: number | null;
+  pipeline_parallel_degree?: number | null;  // PP across nodes
+  network_mode?: string | null;              // "efa" | "tcp"
   quantization?: string;
   concurrency: number;
   input_sequence_length: number;
@@ -164,6 +169,11 @@ export interface RunRequest {
   streamer_mode?: string;            // "" | "auto" | "off"
   streamer_concurrency?: number;     // 0 = default (16)
   streamer_memory_limit_gib?: number; // 0 = auto-sized
+  // PRD-57: distributed (multi-node) topology. Omit / "single" = single-instance.
+  deployment_mode?: string;          // "" | "single" | "distributed"
+  node_count?: number;               // LWS group size (distributed)
+  pipeline_parallel_degree?: number; // PP across nodes (== node_count)
+  network_mode?: string;             // "efa" (default) | "tcp"
 }
 
 export interface RunListItem {
@@ -194,6 +204,9 @@ export interface Job {
   created_at: string;
   started_at?: string;
   completed_at?: string;
+  // PRD-57: distributed-run topology for the Runs list. Null on single-instance.
+  deployment_mode?: string; // "" | "single" | "distributed"
+  node_count?: number;
 }
 
 export interface JobFilter {

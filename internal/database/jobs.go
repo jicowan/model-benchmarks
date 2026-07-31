@@ -23,6 +23,11 @@ type Job struct {
 	CreatedAt        time.Time  `json:"created_at"`
 	StartedAt        *time.Time `json:"started_at,omitempty"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	// PRD-57: distributed-run topology for the Runs list badge. Null on
+	// single-instance runs and (currently) all suites. NodeCount lets the UI
+	// render e.g. "g6.xlarge ×2" without a detail fetch.
+	DeploymentMode *string `json:"deployment_mode,omitempty"`
+	NodeCount      *int    `json:"node_count,omitempty"`
 }
 
 // JobFilter is the superset of RunFilter and SuiteRun listing options. The
@@ -118,7 +123,9 @@ func (r *Repository) ListJobs(ctx context.Context, f JobFilter) ([]Job, int, err
 				br.error_message                AS error_message,
 				br.created_at                   AS created_at,
 				br.started_at                   AS started_at,
-				br.completed_at                 AS completed_at
+				br.completed_at                 AS completed_at,
+				br.deployment_mode              AS deployment_mode,
+				br.node_count                   AS node_count
 			FROM benchmark_runs br
 			JOIN models         m  ON br.model_id         = m.id
 			JOIN instance_types it ON br.instance_type_id = it.id
@@ -135,13 +142,16 @@ func (r *Repository) ListJobs(ctx context.Context, f JobFilter) ([]Job, int, err
 				NULL::text                      AS error_message,
 				tsr.created_at                  AS created_at,
 				tsr.started_at                  AS started_at,
-				tsr.completed_at                AS completed_at
+				tsr.completed_at                AS completed_at,
+				tsr.deployment_mode             AS deployment_mode,
+				tsr.node_count                  AS node_count
 			FROM test_suite_runs tsr
 			JOIN models         m  ON tsr.model_id         = m.id
 			JOIN instance_types it ON tsr.instance_type_id = it.id
 		)
 		SELECT id, type, model_hf_id, instance_type_name, framework_or_suite,
 		       status, error_message, created_at, started_at, completed_at,
+		       deployment_mode, node_count,
 		       COUNT(*) OVER () AS total_count
 		FROM jobs
 		%s
@@ -164,6 +174,7 @@ func (r *Repository) ListJobs(ctx context.Context, f JobFilter) ([]Job, int, err
 		if err := rows.Scan(
 			&j.ID, &j.Type, &j.ModelHfID, &j.InstanceTypeName, &j.FrameworkOrSuite,
 			&j.Status, &j.ErrorMessage, &j.CreatedAt, &j.StartedAt, &j.CompletedAt,
+			&j.DeploymentMode, &j.NodeCount,
 			&total,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan job row: %w", err)

@@ -204,7 +204,14 @@ export default function ResultDetail() {
 
         <ConfigPanel
           headline={[
-            { label: "TP Degree", value: run.tensor_parallel_degree },
+            // PRD-57: distributed runs show the topology up front; single runs
+            // are unchanged (deployment_mode null → this entry is omitted).
+            ...(run.deployment_mode === "distributed"
+              ? [{
+                  label: "Topology",
+                  value: `${run.node_count ?? "?"} nodes · TP=${run.tensor_parallel_degree} · PP=${run.pipeline_parallel_degree ?? "?"}`,
+                }]
+              : [{ label: "TP Degree", value: run.tensor_parallel_degree }]),
             { label: "Quantization", value: run.quantization ?? "default" },
             { label: "Max Model Len", value: run.max_model_len ?? null },
             {
@@ -213,6 +220,14 @@ export default function ResultDetail() {
             },
           ]}
           details={[
+            ...(run.deployment_mode === "distributed"
+              ? [
+                  { label: "Deployment", value: "distributed (multi-node llm-d)" },
+                  { label: "Node Count", value: run.node_count ?? null },
+                  { label: "Pipeline Parallel", value: run.pipeline_parallel_degree ?? null },
+                  { label: "Network Fabric", value: run.network_mode ?? null },
+                ]
+              : []),
             { label: "Concurrency", value: run.concurrency },
             { label: "Dataset", value: run.dataset_name },
             { label: "Scenario", value: run.scenario_id ?? null },

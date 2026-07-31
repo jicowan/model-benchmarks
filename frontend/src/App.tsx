@@ -10,6 +10,7 @@ import Catalog from "./pages/Catalog";
 import Compare from "./pages/Compare";
 import Estimate from "./pages/Estimate";
 import Run from "./pages/Run";
+import Distributed from "./pages/Distributed";
 import ResultDetail from "./pages/ResultDetail";
 import SuiteResults from "./pages/SuiteResults";
 import Runs from "./pages/Runs";
@@ -33,6 +34,15 @@ export default function App() {
               element={
                 <NonViewerRoute>
                   <Run />
+                </NonViewerRoute>
+              }
+            />
+            {/* PRD-57: multi-node distributed run composer. */}
+            <Route
+              path="/distributed"
+              element={
+                <NonViewerRoute>
+                  <Distributed />
                 </NonViewerRoute>
               }
             />

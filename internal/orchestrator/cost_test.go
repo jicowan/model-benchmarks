@@ -67,6 +67,29 @@ func TestComputeRunCost_HappyPath(t *testing.T) {
 	}
 }
 
+// PRD-57: a distributed run bills for N nodes over its lifetime, so total +
+// loadgen cost must scale by node_count.
+func TestComputeRunCost_DistributedScalesByNodeCount(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-east-2")
+	loadgen := 1800.0 // 30min
+	repo, runID := seedRunForCost(t, 3600.0, &loadgen, true) // 1hr @ $1/hr/node
+
+	// Mark the seeded run distributed with 2 nodes.
+	run, _ := repo.GetBenchmarkRun(context.Background(), runID)
+	nc := 2
+	run.NodeCount = &nc
+
+	o := New(fake.NewSimpleClientset(), repo, "test-pod")
+	total, loadgenCost := o.computeRunCost(context.Background(), runID)
+
+	if total == nil || *total < 1.99 || *total > 2.01 {
+		t.Errorf("total = %v, want ~$2.00 (2 nodes × 1hr × $1)", total)
+	}
+	if loadgenCost == nil || *loadgenCost < 0.99 || *loadgenCost > 1.01 {
+		t.Errorf("loadgen = %v, want ~$1.00 (2 nodes × 30min × $1)", loadgenCost)
+	}
+}
+
 func TestComputeRunCost_MissingPricing(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-2")
 	loadgen := 60.0

@@ -42,11 +42,20 @@ func (o *Orchestrator) computeRunCost(ctx context.Context, runID string) (*float
 	}
 	hourly := p.OnDemandHourlyUSD
 
+	// PRD-57: a distributed run holds N nodes for its lifetime, so it bills
+	// per-node × node_count, not for a single instance. Single-instance runs
+	// have node_count NULL/≤1 → factor 1 (unchanged).
+	nodeFactor := 1
+	if run.NodeCount != nil && *run.NodeCount > 1 {
+		nodeFactor = *run.NodeCount
+	}
+	effHourly := hourly * float64(nodeFactor)
+
 	nodeSec := run.CompletedAt.Sub(*run.StartedAt).Seconds()
 	if nodeSec < 0 {
 		nodeSec = 0
 	}
-	totalUSD := hourly * nodeSec / 3600
+	totalUSD := effHourly * nodeSec / 3600
 	totalPtr := &totalUSD
 
 	// loadgen cost — only computable when metrics exist. Failed runs may have
@@ -54,7 +63,7 @@ func (o *Orchestrator) computeRunCost(ctx context.Context, runID string) (*float
 	// total-cost write.
 	var loadgenPtr *float64
 	if metrics, mErr := o.repo.GetMetricsByRunID(ctx, runID); mErr == nil && metrics != nil && metrics.TotalDurationSeconds != nil {
-		loadgenUSD := hourly * *metrics.TotalDurationSeconds / 3600
+		loadgenUSD := effHourly * *metrics.TotalDurationSeconds / 3600
 		loadgenPtr = &loadgenUSD
 	}
 

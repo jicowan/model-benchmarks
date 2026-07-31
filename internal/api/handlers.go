@@ -538,6 +538,44 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		streamerMemLimitPtr = &n
 	}
 
+	// PRD-57: distributed-run validation + persisted topology. Only "distributed"
+	// triggers the multi-node path; "" / "single" take the existing single-
+	// instance flow untouched.
+	var deploymentModePtr, networkModePtr *string
+	var nodeCountPtr, ppPtr *int
+	if req.DeploymentMode == "distributed" {
+		if req.Framework != "llm-d" {
+			return "", &createRunError{http.StatusBadRequest, "distributed runs require framework=llm-d"}
+		}
+		if instType.AcceleratorType != "gpu" {
+			return "", &createRunError{http.StatusBadRequest, "distributed runs require a GPU instance type"}
+		}
+		if req.NodeCount < 2 {
+			return "", &createRunError{http.StatusBadRequest, "distributed runs require node_count >= 2"}
+		}
+		// vLLM multi-node mapping (PRD-56): PP spans nodes, TP is within a node.
+		if req.PipelineParallelDegree != req.NodeCount {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("pipeline_parallel_degree (%d) must equal node_count (%d)", req.PipelineParallelDegree, req.NodeCount)}
+		}
+		if instType.AcceleratorCount > 0 && req.TensorParallelDegree != instType.AcceleratorCount {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("tensor_parallel_degree (%d) must equal the instance's GPUs per node (%d)", req.TensorParallelDegree, instType.AcceleratorCount)}
+		}
+		if req.NetworkMode != "" && req.NetworkMode != "efa" && req.NetworkMode != "tcp" {
+			return "", &createRunError{http.StatusBadRequest, "network_mode must be 'efa' or 'tcp'"}
+		}
+		dm := "distributed"
+		deploymentModePtr = &dm
+		nc := req.NodeCount
+		nodeCountPtr = &nc
+		pp := req.PipelineParallelDegree
+		ppPtr = &pp
+		nm := req.NetworkMode
+		if nm == "" {
+			nm = "efa"
+		}
+		networkModePtr = &nm
+	}
+
 	run := &database.BenchmarkRun{
 		ModelID:                model.ID,
 		InstanceTypeID:         instType.ID,
@@ -560,6 +598,10 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		StreamerConcurrency:    streamerConcurrencyPtr,
 		StreamerMemoryLimitGiB: streamerMemLimitPtr,
 		ModelS3URI:             s3URIPtr,
+		DeploymentMode:         deploymentModePtr,
+		NodeCount:              nodeCountPtr,
+		PipelineParallelDegree: ppPtr,
+		NetworkMode:            networkModePtr,
 		Status:                 "pending",
 	}
 
