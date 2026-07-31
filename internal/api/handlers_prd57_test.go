@@ -102,13 +102,34 @@ func TestCreateRun_Distributed_RejectsPPMismatch(t *testing.T) {
 	}
 }
 
-func TestCreateRun_Distributed_RejectsTPMismatch(t *testing.T) {
+func TestCreateRun_Distributed_RejectsTPOverGPUs(t *testing.T) {
 	mux := distServer(t)
 	r := validDistributedReq()
-	r.TensorParallelDegree = 4 // != GPUs/node (8)
+	r.TensorParallelDegree = 16 // > GPUs/node (8) — physically impossible
 	w := postRun(mux, r)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "tensor_parallel_degree") {
-		t.Errorf("want 400 TP mismatch; got %d: %s", w.Code, w.Body.String())
+		t.Errorf("want 400 TP > GPUs/node; got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TP is an INDEPENDENT knob, not forced to fill the node: TP < GPUs/node is
+// allowed (e.g. TP=4 on an 8-GPU node), and TP=1 (pipeline-parallel WITHOUT
+// tensor-parallel) is first-class.
+func TestCreateRun_Distributed_AllowsTPBelowGPUs(t *testing.T) {
+	mux := distServer(t)
+	r := validDistributedReq()
+	r.TensorParallelDegree = 4 // < GPUs/node (8) — valid
+	if w := postRun(mux, r); w.Code != http.StatusAccepted {
+		t.Errorf("TP<GPUs/node should be accepted; got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateRun_Distributed_AllowsPPWithoutTP(t *testing.T) {
+	mux := distServer(t)
+	r := validDistributedReq()
+	r.TensorParallelDegree = 1 // PP-only, no within-node tensor sharding
+	if w := postRun(mux, r); w.Code != http.StatusAccepted {
+		t.Errorf("TP=1 (PP-only) should be accepted; got %d: %s", w.Code, w.Body.String())
 	}
 }
 

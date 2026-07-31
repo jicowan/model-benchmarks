@@ -21,6 +21,10 @@ export default function Distributed() {
     model_hf_revision: "main",
     instance_type_name: "",
     node_count: 2,
+    // Tensor-parallel is an INDEPENDENT, user-specified knob (within-node),
+    // NOT forced to fill the node. Default 1 = pipeline-parallel WITHOUT
+    // tensor-parallel (a first-class topology). Editable up to GPUs/node.
+    tensor_parallel_degree: 1,
     network_mode: "efa" as "efa" | "tcp",
     concurrency: 16,
     input_sequence_length: 512,
@@ -43,11 +47,12 @@ export default function Distributed() {
     [instanceTypes, form.instance_type_name],
   );
 
-  // Topology is derived from the doc's rule: TP = GPUs/node, PP = node count.
+  // TP is user-specified (within-node); PP spans nodes (== node count for a
+  // single co-located group). Total serving GPUs = TP × node_count.
   const gpusPerNode = selectedInstance?.accelerator_count ?? 0;
-  const tp = gpusPerNode; // within-node tensor parallel
+  const tp = Math.min(form.tensor_parallel_degree, gpusPerNode || form.tensor_parallel_degree);
   const pp = form.node_count; // across-node pipeline parallel
-  const totalGPUs = gpusPerNode * form.node_count;
+  const totalGPUs = tp * form.node_count;
 
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -58,6 +63,8 @@ export default function Distributed() {
     if (!form.instance_type_name) return setError("Select a GPU instance type.");
     if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
     if (gpusPerNode < 1) return setError("Selected instance has no GPUs.");
+    if (form.tensor_parallel_degree < 1 || form.tensor_parallel_degree > gpusPerNode)
+      return setError(`Tensor-parallel must be between 1 and ${gpusPerNode} (GPUs per node).`);
 
     const req: RunRequest = {
       model_hf_id: form.model_hf_id,
@@ -157,12 +164,30 @@ export default function Distributed() {
           </label>
         </div>
 
+        {/* Tensor-parallel (within node) — independent knob, 1 = PP-only */}
+        <label className="flex flex-col gap-1.5">
+          <span className="font-mono text-[11.5px] tracking-mech text-ink-1 uppercase">
+            Tensor-parallel (GPUs per node used)
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={gpusPerNode || undefined}
+            className="input w-full"
+            value={form.tensor_parallel_degree}
+            onChange={(e) => set("tensor_parallel_degree", Math.max(1, Number(e.target.value) || 1))}
+          />
+          <span className="font-mono text-[10.5px] text-ink-2">
+            1 = pipeline-parallel only (no tensor sharding). Max {gpusPerNode || "?"} (GPUs per node).
+          </span>
+        </label>
+
         {/* Derived topology summary */}
         <div className="border border-line bg-surface-1 px-3 py-2.5 font-mono text-[11.5px] text-ink-1">
-          <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology (derived)</div>
+          <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology</div>
           {gpusPerNode > 0 ? (
             <span className="text-ink-0">
-              {form.node_count} nodes × {gpusPerNode} GPU = {totalGPUs} GPUs · TP={tp} (within node) · PP={pp} (across nodes)
+              {form.node_count} nodes · TP={tp} (within node) · PP={pp} (across nodes) · {totalGPUs} GPUs serving
             </span>
           ) : (
             <span className="text-ink-2">Select an instance type to compute the topology.</span>

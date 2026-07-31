@@ -553,12 +553,27 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		if req.NodeCount < 2 {
 			return "", &createRunError{http.StatusBadRequest, "distributed runs require node_count >= 2"}
 		}
-		// vLLM multi-node mapping (PRD-56): PP spans nodes, TP is within a node.
-		if req.PipelineParallelDegree != req.NodeCount {
-			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("pipeline_parallel_degree (%d) must equal node_count (%d)", req.PipelineParallelDegree, req.NodeCount)}
+		// vLLM multi-node mapping: TP is WITHIN a node, PP spans nodes. These
+		// are INDEPENDENT knobs — we do NOT force TP to fill the node, so
+		// pipeline-parallel WITHOUT tensor-parallel (TP=1) is a first-class
+		// topology (validated green in PRD-56). Constraints are just the
+		// physical bounds:
+		//   * TP in [1, GPUs-per-node]  — TP can't exceed a node's GPUs.
+		//   * PP in [2, node_count]     — PP spans nodes; needs >= 2 to be
+		//     distributed, and can't exceed the nodes we're scaling out.
+		tp := req.TensorParallelDegree
+		if tp < 1 {
+			tp = 1 // default: no within-node tensor sharding (PP-only)
 		}
-		if instType.AcceleratorCount > 0 && req.TensorParallelDegree != instType.AcceleratorCount {
-			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("tensor_parallel_degree (%d) must equal the instance's GPUs per node (%d)", req.TensorParallelDegree, instType.AcceleratorCount)}
+		if instType.AcceleratorCount > 0 && tp > instType.AcceleratorCount {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("tensor_parallel_degree (%d) exceeds the instance's GPUs per node (%d)", tp, instType.AcceleratorCount)}
+		}
+		req.TensorParallelDegree = tp
+		if req.PipelineParallelDegree < 2 {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("pipeline_parallel_degree (%d) must be >= 2 for a distributed run", req.PipelineParallelDegree)}
+		}
+		if req.PipelineParallelDegree > req.NodeCount {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("pipeline_parallel_degree (%d) cannot exceed node_count (%d)", req.PipelineParallelDegree, req.NodeCount)}
 		}
 		if req.NetworkMode != "" && req.NetworkMode != "efa" && req.NetworkMode != "tcp" {
 			return "", &createRunError{http.StatusBadRequest, "network_mode must be 'efa' or 'tcp'"}
