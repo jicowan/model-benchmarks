@@ -125,6 +125,15 @@ spec:
         - path:
             type: PathPrefix
             value: /
+      # Envoy Gateway's DEFAULT request timeout is 15s — far too low for LLM
+      # inference, which routinely takes longer to generate (esp. long outputs
+      # on modest GPUs). Without this, every slow request fails with a 504 at
+      # ~15s (observed: 600/600 loadgen requests failed at ~16s). Raise both the
+      # end-to-end and per-backend timeouts generously. request >= backendRequest
+      # is required by the Gateway API.
+      timeouts:
+        request: "3600s"
+        backendRequest: "3600s"
 {{- define "llmdPodSpec" }}
 {{- $p := .p }}
         terminationGracePeriodSeconds: 60

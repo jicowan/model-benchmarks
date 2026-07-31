@@ -59,6 +59,12 @@ func TestRenderLLMDDeployment_ObjectGraph(t *testing.T) {
 	if !strings.Contains(out, "name: bench-abc12345-svc") {
 		t.Error("HTTPRoute/Service should use the -svc name to avoid the LWS headless-Service collision")
 	}
+	// LLM inference exceeds Envoy Gateway's default 15s request timeout — the
+	// route must raise it or slow requests 504 (root cause of the 600/600
+	// loadgen failures).
+	if !strings.Contains(out, "timeouts:") || !strings.Contains(out, `request: "3600s"`) {
+		t.Error("HTTPRoute must set a generous request timeout (default 15s 504s LLM requests)")
+	}
 	if !strings.Contains(out, "port: 8000") {
 		t.Error("HTTPRoute should backendRef the Service on port 8000")
 	}

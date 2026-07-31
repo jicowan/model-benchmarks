@@ -123,9 +123,16 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 		return &out, nil
 	}
 
-	// Strategy 2: Try inference-perf v0.2.0 format
+	// Strategy 2: Try inference-perf v0.2.0 format. Accept the payload whenever
+	// it's structurally an inference-perf summary (successes OR failures
+	// present) — NOT only when successes>0. An all-failed run (successes=0,
+	// failures>0) is a valid, parseable result whose failure count must be
+	// surfaced, not masked behind a generic "no JSON payload" error.
 	var ipOut InferencePerfOutput
-	if err := json.Unmarshal(data, &ipOut); err == nil && ipOut.Successes.Count > 0 {
+	if err := json.Unmarshal(data, &ipOut); err == nil && (ipOut.Successes.Count > 0 || ipOut.Failures.Count > 0) {
+		if ipOut.Successes.Count == 0 {
+			return nil, fmt.Errorf("loadgen completed but all %d request(s) failed (0 succeeded) — the model endpoint returned no successful responses", ipOut.Failures.Count)
+		}
 		return convertInferencePerfOutput(&ipOut), nil
 	}
 

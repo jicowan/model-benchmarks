@@ -322,8 +322,18 @@ func (o *Orchestrator) waitForLWSReady(ctx context.Context, ns, name string, cfg
 			// The object may not be visible immediately after apply; retry.
 			log.Printf("[%s] get LWS %s: %v", cfg.RunID[:8], name, err)
 		} else if lwsGroupReady(lws.Object) {
-			log.Printf("[%s] LeaderWorkerSet %s ready", cfg.RunID[:8], name)
-			return nil
+			// LWS group-ready is necessary but NOT sufficient: it can flip true
+			// before the leader's OpenAI server passes its readiness probe, so
+			// the serving Service still has no endpoints and the gateway
+			// black-holes requests (observed: 600/600 loadgen requests failed
+			// against EndpointsNotFound). Gate on the leader Service actually
+			// having a ready endpoint — the exact precondition the gateway needs
+			// to route — before declaring readiness.
+			if o.serviceHasReadyEndpoint(ctx, ns, name+"-svc") {
+				log.Printf("[%s] LeaderWorkerSet %s ready and serving endpoint is live", cfg.RunID[:8], name)
+				return nil
+			}
+			log.Printf("[%s] LWS %s group-ready but serving endpoint not populated yet; waiting", cfg.RunID[:8], name)
 		}
 
 		// OOM scan across all group pods (leader + workers).
@@ -347,6 +357,33 @@ func (o *Orchestrator) waitForLWSReady(ctx context.Context, ns, name string, cfg
 		}
 	}
 	return fmt.Errorf("LeaderWorkerSet %s not ready after %v", name, distributedReadinessTimeout)
+}
+
+// serviceHasReadyEndpoint reports whether the given Service has at least one
+// READY backing endpoint — i.e. the gateway can actually route to it. Uses
+// EndpointSlices (Endpoints is deprecated on EKS 1.33+). This is the signal the
+// loadgen depends on; gating readiness on it closes the race where the LWS
+// reports group-ready before the leader's API server is serving.
+func (o *Orchestrator) serviceHasReadyEndpoint(ctx context.Context, ns, svcName string) bool {
+	slices, err := o.client.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kubernetes.io/service-name=%s", svcName),
+	})
+	if err != nil {
+		log.Printf("[endpoints] list EndpointSlices for %s: %v", svcName, err)
+		return false
+	}
+	for _, sl := range slices.Items {
+		for _, ep := range sl.Endpoints {
+			// Ready is a *bool; treat nil as ready per the API convention only
+			// when Conditions is unset, else require explicit true.
+			if ep.Conditions.Ready == nil || *ep.Conditions.Ready {
+				if len(ep.Addresses) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // lwsGroupReady reports whether an LWS group is fully ready. LWS surfaces

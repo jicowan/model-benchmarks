@@ -26,6 +26,12 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list"]
+  # PRD-56: gate distributed readiness on the leader Service having a ready
+  # endpoint (the gateway's routing precondition) — closes the race where the
+  # LWS reports group-ready before the leader's API server is serving.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list"]
   # PRD-33: Capacity Reservations card patches Karpenter CRDs to attach
   # ODCRs/CBRs to the GPU + Neuron EC2NodeClasses and keep the NodePools'
   # capacity-type requirement including 'reserved'.
