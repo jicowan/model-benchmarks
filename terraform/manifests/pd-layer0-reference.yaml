@@ -1,0 +1,215 @@
+# PRD-58 Layer 0 — hand-validated multi-node prefill/decode disaggregation on
+# the g6 pool over TCP NIXL. Adapted from llm-d guides/pd-disaggregation
+# (modelserver/gpu/vllm/base) for our cluster:
+#   - small public model (Qwen2.5-1.5B-Instruct) instead of gpt-oss-120b
+#   - TP=1 both roles; prefill & decode pinned to SEPARATE nodes (anti-affinity)
+#   - GPUs via DRA ResourceClaimTemplate (gpu.nvidia.com) — not nvidia.com/gpu
+#   - NIXL over TCP: UCX_TLS=tcp,cuda_copy,cuda_ipc (cuda_copy REQUIRED for GPU
+#     KV registration), UCX_MODULE_DIR=.../nixl_cu13.libs/ucx (image ships
+#     cu12+cu13), VLLM_NIXL_SIDE_CHANNEL_HOST=podIP.
+#   - VLLM_LOGGING_LEVEL=DEBUG: workaround for vLLM #29369 (GIL hot-loop starves
+#     NIXL add_remote_agent → decode hangs on 1st request at INFO level).
+#   - VALIDATED 2026-07-31: cross-node KV transfer over TCP works via the decode
+#     sidecar; prefill prompt_tokens_total went nonzero (real P->D transfer).
+#   - scheduled onto the multinode-test pool (accelbench.io/dra + multinode taint)
+# Namespace: llm-d-pd (created separately).
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: pd-gpu
+  namespace: llm-d-pd
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.nvidia.com
+            count: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prefill
+  namespace: llm-d-pd
+  labels: { llm-d.ai/role: prefill, app: pd-prefill }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { llm-d.ai/role: prefill, app: pd-prefill }
+  template:
+    metadata:
+      labels: { llm-d.ai/role: prefill, app: pd-prefill }
+    spec:
+      # Separate node from decode.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { llm-d.ai/role: decode }
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+        - { key: accelbench.io/multinode, operator: Equal, value: "true", effect: NoSchedule }
+      nodeSelector: { accelbench.io/dra: "true" }
+      resourceClaims:
+        - name: gpu
+          resourceClaimTemplateName: pd-gpu
+      containers:
+        - name: modelserver
+          image: vllm/vllm-openai:v0.25.0
+          command: ["vllm", "serve"]
+          args:
+            - "Qwen/Qwen2.5-1.5B-Instruct"
+            - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
+            - "--tensor-parallel-size=1"
+            - "--block-size=128"
+            - "--kv-transfer-config"
+            - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
+            - "--no-disable-hybrid-kv-cache-manager"
+          env:
+            - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+              value: "5600"
+            - name: UCX_TLS
+              value: "tcp,cuda_copy,cuda_ipc"
+            - name: UCX_NET_DEVICES
+              value: "all"
+            - name: UCX_MODULE_DIR
+              value: "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
+            - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+              value: "120"
+            - name: VLLM_LOGGING_LEVEL
+              value: "DEBUG"
+          ports:
+            - { name: modelserver, containerPort: 8000, protocol: TCP }
+            - { name: nixl, containerPort: 5600, protocol: TCP }
+          resources:
+            requests: { cpu: "3", memory: 12Gi }
+            limits:   { memory: 12Gi }
+            claims:   [ { name: gpu } ]
+          volumeMounts:
+            - { name: shm, mountPath: /dev/shm }
+          readinessProbe:
+            httpGet: { path: /v1/models, port: modelserver }
+            periodSeconds: 10
+            failureThreshold: 60
+          startupProbe:
+            httpGet: { path: /v1/models, port: modelserver }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 80
+      volumes:
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decode
+  namespace: llm-d-pd
+  labels: { llm-d.ai/role: decode, app: pd-decode }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { llm-d.ai/role: decode, app: pd-decode }
+  template:
+    metadata:
+      labels: { llm-d.ai/role: decode, app: pd-decode }
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { llm-d.ai/role: prefill }
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+        - { key: accelbench.io/multinode, operator: Equal, value: "true", effect: NoSchedule }
+      nodeSelector: { accelbench.io/dra: "true" }
+      resourceClaims:
+        - name: gpu
+          resourceClaimTemplateName: pd-gpu
+      # The routing sidecar (initContainer w/ restartPolicy:Always) fronts
+      # vLLM on :8000, proxies to vLLM :8200, orchestrates the P→D KV pull.
+      initContainers:
+        - name: routing-proxy
+          image: ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0
+          restartPolicy: Always
+          args:
+            - "--port=8000"
+            - "--vllm-port=8200"
+            - "--kv-connector=nixlv2"
+            - "--zap-log-level=1"
+            - "--secure-proxy=false"
+          ports:
+            - { name: sidecar, containerPort: 8000, protocol: TCP }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+      containers:
+        - name: modelserver
+          image: vllm/vllm-openai:v0.25.0
+          command: ["vllm", "serve"]
+          args:
+            - "Qwen/Qwen2.5-1.5B-Instruct"
+            - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
+            - "--tensor-parallel-size=1"
+            - "--block-size=128"
+            - "--kv-transfer-config"
+            - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
+            - "--no-disable-hybrid-kv-cache-manager"
+            - "--port=8200"
+          env:
+            - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+              value: "5600"
+            - name: UCX_TLS
+              value: "tcp,cuda_copy,cuda_ipc"
+            - name: UCX_NET_DEVICES
+              value: "all"
+            - name: UCX_MODULE_DIR
+              value: "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
+            - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+              value: "120"
+            - name: VLLM_LOGGING_LEVEL
+              value: "DEBUG"
+          ports:
+            - { name: modelserver, containerPort: 8200, protocol: TCP }
+            - { name: nixl, containerPort: 5600, protocol: TCP }
+          resources:
+            requests: { cpu: "3", memory: 12Gi }
+            limits:   { memory: 12Gi }
+            claims:   [ { name: gpu } ]
+          volumeMounts:
+            - { name: shm, mountPath: /dev/shm }
+          readinessProbe:
+            httpGet: { path: /v1/models, port: modelserver }
+            periodSeconds: 10
+            failureThreshold: 60
+          startupProbe:
+            httpGet: { path: /v1/models, port: modelserver }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 80
+      volumes:
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }
+---
+# Services so the EPP/router (and my probes) can reach each role.
+apiVersion: v1
+kind: Service
+metadata: { name: prefill, namespace: llm-d-pd }
+spec:
+  selector: { app: pd-prefill }
+  ports: [ { name: http, port: 8000, targetPort: 8000 } ]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: decode, namespace: llm-d-pd }
+spec:
+  selector: { app: pd-decode }
+  ports: [ { name: http, port: 8000, targetPort: 8000 } ]  # sidecar entrypoint
