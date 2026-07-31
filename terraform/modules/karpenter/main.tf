@@ -642,6 +642,13 @@ resource "kubectl_manifest" "dcgm_exporter" {
             - key: accelbench.io/dedicated
               operator: Exists
               effect: NoSchedule
+            # PRD-56: also tolerate the multi-node static GPU pool's taint so
+            # the exporter lands on distributed-inference nodes — otherwise the
+            # per-node DCGM scrape (orchestrator llmdServingNodeIPs -> :9400)
+            # hits no exporter and reports 0% GPU metrics for distributed runs.
+            - key: accelbench.io/multinode
+              operator: Exists
+              effect: NoSchedule
             - key: CriticalAddonsOnly
               operator: Exists
           containers:
