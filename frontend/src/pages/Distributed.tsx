@@ -39,14 +39,18 @@ export default function Distributed() {
     prefill_tp: 1,
     decode_replicas: 1,
     decode_tp: 1,
+    // PRD-63: optional co-located "both" pool (0 = no both pool, today's PD shape).
+    both_replicas: 0,
+    both_tp: 1,
     // PRD-64: shared vLLM runtime knobs (both modes). 0/"" = vLLM default.
     max_model_len: 0,
     max_num_batched_tokens: 0,
     kv_cache_dtype: "" as "" | "auto" | "fp8",
     quantization: "" as "" | "fp16" | "int8" | "int4",
-    // PRD-64: optional per-role scheduler override (D/P only). 0 = inherit shared.
+    // PRD-64/63: optional per-role scheduler override (D/P only). 0 = inherit shared.
     prefill_max_num_batched_tokens: 0,
     decode_max_num_batched_tokens: 0,
+    both_max_num_batched_tokens: 0,
   });
 
   useEffect(() => {
@@ -74,8 +78,18 @@ export default function Distributed() {
   // the node total is prefill + decode replicas. GPUs = Σ replicas × role TP.
   const pTP = Math.min(form.prefill_tp, gpusPerNode || form.prefill_tp);
   const dTP = Math.min(form.decode_tp, gpusPerNode || form.decode_tp);
-  const disaggNodes = form.prefill_replicas + form.decode_replicas;
-  const disaggGPUs = form.prefill_replicas * pTP + form.decode_replicas * dTP;
+  const bTP = Math.min(form.both_tp, gpusPerNode || form.both_tp);
+  const disaggNodes = form.prefill_replicas + form.decode_replicas + form.both_replicas;
+  const disaggGPUs =
+    form.prefill_replicas * pTP + form.decode_replicas * dTP + form.both_replicas * bTP;
+  // PRD-63: compact topology string, dropping zero-count roles for readability
+  // (a both-only run reads "2B", a P+both run reads "2P3B").
+  const topologyParts = [
+    form.prefill_replicas > 0 ? `${form.prefill_replicas}P` : "",
+    form.decode_replicas > 0 ? `${form.decode_replicas}D` : "",
+    form.both_replicas > 0 ? `${form.both_replicas}B` : "",
+  ].filter(Boolean);
+  const topologyStr = topologyParts.join("") || "—";
 
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -110,14 +124,20 @@ export default function Distributed() {
 
     let req: RunRequest;
     if (mode === "disaggregated") {
-      if (form.prefill_replicas < 1 || form.decode_replicas < 1)
-        return setError("Prefill and decode each need at least 1 replica.");
-      if (form.prefill_replicas + form.decode_replicas < 2)
-        return setError("Disaggregated runs need at least 2 nodes (prefill + decode).");
-      if (form.prefill_tp < 1 || form.prefill_tp > gpusPerNode)
+      // PRD-63: combination validation. Each role >= 0; total >= 1; a prefill
+      // pool needs a decode-capable pool (decode or both).
+      if (form.prefill_replicas < 0 || form.decode_replicas < 0 || form.both_replicas < 0)
+        return setError("Replica counts must be 0 or more.");
+      if (form.prefill_replicas + form.decode_replicas + form.both_replicas < 1)
+        return setError("Set at least one pool (prefill, decode, or both) with ≥ 1 replica.");
+      if (form.prefill_replicas > 0 && form.decode_replicas === 0 && form.both_replicas === 0)
+        return setError("A prefill pool needs a decode-capable pool (decode or both) to finish requests.");
+      if (form.prefill_replicas > 0 && (form.prefill_tp < 1 || form.prefill_tp > gpusPerNode))
         return setError(`Prefill TP must be between 1 and ${gpusPerNode} (GPUs per node).`);
-      if (form.decode_tp < 1 || form.decode_tp > gpusPerNode)
+      if (form.decode_replicas > 0 && (form.decode_tp < 1 || form.decode_tp > gpusPerNode))
         return setError(`Decode TP must be between 1 and ${gpusPerNode} (GPUs per node).`);
+      if (form.both_replicas > 0 && (form.both_tp < 1 || form.both_tp > gpusPerNode))
+        return setError(`Both TP must be between 1 and ${gpusPerNode} (GPUs per node).`);
       req = {
         ...base,
         deployment_mode: "disaggregated",
@@ -125,9 +145,13 @@ export default function Distributed() {
         prefill_tp: pTP,
         decode_replicas: form.decode_replicas,
         decode_tp: dTP,
-        // PRD-64: per-role scheduler override (0 ⇒ inherit shared).
+        // PRD-63: co-located "both" pool (omit at 0 so a normal PD run is unchanged).
+        both_replicas: form.both_replicas || undefined,
+        both_tp: form.both_replicas > 0 ? bTP : undefined,
+        // PRD-64/63: per-role scheduler override (0 ⇒ inherit shared).
         prefill_max_num_batched_tokens: form.prefill_max_num_batched_tokens || undefined,
         decode_max_num_batched_tokens: form.decode_max_num_batched_tokens || undefined,
+        both_max_num_batched_tokens: form.both_max_num_batched_tokens || undefined,
       };
     } else {
       if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
@@ -277,18 +301,18 @@ export default function Distributed() {
           </>
         ) : (
           <>
-            {/* Disaggregated: prefill + decode sub-sections (the xPyD ratio). */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* Disaggregated: prefill + decode + both sub-sections (xPyDzB). */}
+            <div className="grid grid-cols-3 gap-4">
               <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
                 <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">Prefill</div>
                 <label className="flex flex-col gap-1">
                   <span className="font-mono text-[10.5px] text-ink-2 uppercase">Replicas</span>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     className="input w-full"
                     value={form.prefill_replicas}
-                    onChange={(e) => set("prefill_replicas", Math.max(1, Number(e.target.value) || 1))}
+                    onChange={(e) => set("prefill_replicas", Math.max(0, Number(e.target.value) || 0))}
                   />
                 </label>
                 <label className="flex flex-col gap-1">
@@ -321,10 +345,10 @@ export default function Distributed() {
                   <span className="font-mono text-[10.5px] text-ink-2 uppercase">Replicas</span>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     className="input w-full"
                     value={form.decode_replicas}
-                    onChange={(e) => set("decode_replicas", Math.max(1, Number(e.target.value) || 1))}
+                    onChange={(e) => set("decode_replicas", Math.max(0, Number(e.target.value) || 0))}
                   />
                 </label>
                 <label className="flex flex-col gap-1">
@@ -351,22 +375,63 @@ export default function Distributed() {
                   <span className="font-mono text-[9.5px] text-ink-2">blank = shared · decode is memory-bound</span>
                 </label>
               </div>
-            </div>{/* END prefill/decode role boxes */}
+              <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
+                <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">Both (co-located)</div>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Replicas</span>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input w-full"
+                    value={form.both_replicas}
+                    onChange={(e) => set("both_replicas", Math.max(0, Number(e.target.value) || 0))}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Tensor-parallel</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={gpusPerNode || undefined}
+                    className="input w-full"
+                    value={form.both_tp}
+                    onChange={(e) => set("both_tp", Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Max batched tokens</span>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="shared"
+                    className="input w-full"
+                    value={form.both_max_num_batched_tokens || ""}
+                    onChange={(e) => set("both_max_num_batched_tokens", Math.max(0, Number(e.target.value) || 0))}
+                  />
+                  <span className="font-mono text-[9.5px] text-ink-2">blank = shared · fused prefill+decode, no KV hop</span>
+                </label>
+              </div>
+            </div>{/* END prefill/decode/both role boxes */}
 
             {/* KV connector (fixed) + guidance */}
             <div className="font-mono text-[10.5px] text-ink-2">
               KV connector: NIXL over {form.network_mode === "tcp" ? "TCP" : "EFA/libfabric"} · routed via the
-              InferencePool + Endpoint Picker (KV/role/load-aware). Tune the prefill:decode ratio to your
-              input:output sequence-length ratio.
+              InferencePool + Endpoint Picker (KV/role/load-aware). Use a <span className="text-ink-1">both</span> pool
+              to serve short prompts locally (no KV hop) while long prompts disaggregate onto dedicated prefill pods —
+              the middle ground between fully co-located and fully disaggregated. A both-only pool is co-located
+              serving <span className="text-ink-1">with</span> EPP prefix/queue routing across replicas.
             </div>
 
-            {/* Derived xPyD summary */}
+            {/* Derived xPyDzB summary */}
             <div className="border border-line bg-surface-1 px-3 py-2.5 font-mono text-[11.5px] text-ink-1">
-              <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology (xPyD)</div>
+              <div className="text-ink-2 tracking-mech uppercase text-[10.5px] mb-1">Topology (xPyDzB)</div>
               {gpusPerNode > 0 ? (
                 <span className="text-ink-0">
-                  {form.prefill_replicas}P{form.decode_replicas}D · prefill {form.prefill_replicas}× TP={pTP} ·
-                  decode {form.decode_replicas}× TP={dTP} · {disaggNodes} nodes · {disaggGPUs} GPUs serving
+                  {topologyStr}
+                  {form.prefill_replicas > 0 && <> · prefill {form.prefill_replicas}× TP={pTP}</>}
+                  {form.decode_replicas > 0 && <> · decode {form.decode_replicas}× TP={dTP}</>}
+                  {form.both_replicas > 0 && <> · both {form.both_replicas}× TP={bTP}</>}
+                  {" "}· {disaggNodes} nodes · {disaggGPUs} GPUs serving
                 </span>
               ) : (
                 <span className="text-ink-2">Select an instance type to compute the topology.</span>

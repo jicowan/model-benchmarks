@@ -90,6 +90,40 @@ func TestAggregateGPU_MultiNodeMemorySumVsPeak(t *testing.T) {
 	}
 }
 
+// TestAggregateGPU_BothRoleShardFlowsThrough (PRD-63): the aggregation keys on
+// an arbitrary role string, so a co-located "both" shard appears in the
+// breakdown with role="both" and contributes to the group totals — no PRD-59
+// change was needed to support it.
+func TestAggregateGPU_BothRoleShardFlowsThrough(t *testing.T) {
+	both0 := gpuShardKey{Node: "node-0", Role: "both"}
+	both1 := gpuShardKey{Node: "node-1", Role: "both"}
+	prefill := gpuShardKey{Node: "node-2", Role: "prefill"}
+	samples := map[gpuShardKey]*gpuShardSamples{
+		both0:   {util: []float64{60, 80}, memMiB: []float64{15360}}, // peak 15 GiB
+		both1:   {util: []float64{40, 60}, memMiB: []float64{10240}}, // peak 10 GiB
+		prefill: {util: []float64{20}, memMiB: []float64{5120}},      // peak 5 GiB
+	}
+	agg := aggregateGPU(samples, []gpuShardKey{both0, both1, prefill})
+
+	// Three shards; the two both shards carry role="both".
+	if len(agg.Shards) != 3 {
+		t.Fatalf("want 3 shards, got %d", len(agg.Shards))
+	}
+	nBoth := 0
+	for _, s := range agg.Shards {
+		if s.Role == "both" {
+			nBoth++
+		}
+	}
+	if nBoth != 2 {
+		t.Errorf("expected 2 both-role shards in the breakdown, got %d", nBoth)
+	}
+	// Memory total sums all per-node peaks: 15 + 10 + 5 = 30 GiB.
+	if !approx(agg.MemoryTotalGiB, 30) {
+		t.Errorf("mem total = %.3f, want 30 (sum of per-node peaks incl. both)", agg.MemoryTotalGiB)
+	}
+}
+
 // TestAggregateGPU_Empty returns zeroes/nils without panicking.
 func TestAggregateGPU_Empty(t *testing.T) {
 	agg := aggregateGPU(map[gpuShardKey]*gpuShardSamples{}, nil)

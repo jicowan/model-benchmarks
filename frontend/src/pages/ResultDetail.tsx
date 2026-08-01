@@ -216,7 +216,11 @@ export default function ResultDetail() {
             ...(run.deployment_mode === "disaggregated"
               ? [{
                   label: "Topology",
-                  value: `${run.prefill_replicas ?? "?"}P${run.decode_replicas ?? "?"}D · prefill TP=${run.prefill_tp ?? "?"} · decode TP=${run.decode_tp ?? "?"} · ${run.node_count ?? "?"} nodes`,
+                  value: `${[
+                    run.prefill_replicas ? `${run.prefill_replicas}P` : "",
+                    run.decode_replicas ? `${run.decode_replicas}D` : "",
+                    run.both_replicas ? `${run.both_replicas}B` : "",
+                  ].filter(Boolean).join("") || "?"} · ${run.node_count ?? "?"} nodes`,
                 }]
               : run.deployment_mode === "distributed"
               ? [{
@@ -235,8 +239,15 @@ export default function ResultDetail() {
             ...(run.deployment_mode === "disaggregated"
               ? [
                   { label: "Deployment", value: "disaggregated (prefill/decode, llm-d)" },
-                  { label: "Prefill", value: `${run.prefill_replicas ?? "?"} × TP=${run.prefill_tp ?? "?"}` },
-                  { label: "Decode", value: `${run.decode_replicas ?? "?"} × TP=${run.decode_tp ?? "?"}` },
+                  ...(run.prefill_replicas
+                    ? [{ label: "Prefill", value: `${run.prefill_replicas} × TP=${run.prefill_tp ?? "?"}` }]
+                    : []),
+                  ...(run.decode_replicas
+                    ? [{ label: "Decode", value: `${run.decode_replicas} × TP=${run.decode_tp ?? "?"}` }]
+                    : []),
+                  ...(run.both_replicas
+                    ? [{ label: "Both (co-located)", value: `${run.both_replicas} × TP=${run.both_tp ?? "?"}` }]
+                    : []),
                   { label: "Node Count", value: run.node_count ?? null },
                   { label: "KV Connector", value: run.kv_connector ?? null },
                   { label: "KV Transfer", value: run.kv_transfer_backend ?? null },

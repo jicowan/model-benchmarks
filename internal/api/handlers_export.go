@@ -150,6 +150,23 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		}
 		return def
 	}
+	// PRD-63: a role's replica count may legitimately be 0 (a both-only run has
+	// null prefill/decode). derefZero preserves 0 (vs. deref's floor-to-def),
+	// so the exported graph matches the run's actual pool combination.
+	derefZero := func(p *int) int {
+		if p != nil && *p > 0 {
+			return *p
+		}
+		return 0
+	}
+	// Replica counts preserve 0; but if the whole set is empty (all null, e.g. a
+	// historical PD row that predates typed export), fall back to a 1P1D graph.
+	prefillR := derefZero(d.PrefillReplicas)
+	decodeR := derefZero(d.DecodeReplicas)
+	bothR := derefZero(d.BothReplicas)
+	if prefillR == 0 && decodeR == 0 && bothR == 0 {
+		prefillR, decodeR = 1, 1
+	}
 	return manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
 		Name:                name,
 		Namespace:           "accelbench",
@@ -159,10 +176,12 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		ModelHfID:           d.ModelHfID,
 		ModelLabel:          sanitizeDNS1123(d.ModelHfID),
 		HfToken:             "",
-		PrefillReplicas:     deref(d.PrefillReplicas, 1),
+		PrefillReplicas:     prefillR,
 		PrefillTP:           deref(d.PrefillTP, 1),
-		DecodeReplicas:      deref(d.DecodeReplicas, 1),
+		DecodeReplicas:      decodeR,
 		DecodeTP:            deref(d.DecodeTP, 1),
+		BothReplicas:        bothR,
+		BothTP:              deref(d.BothTP, 1),
 		CPURequest:          fmt.Sprintf("%d", max(d.VCPUs*3/4, 1)),
 		MemoryRequest:       fmt.Sprintf("%dGi", max(d.MemoryGiB*85/100, 1)),
 		NetworkMode:         exportNetworkMode(d),

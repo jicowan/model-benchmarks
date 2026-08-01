@@ -56,13 +56,20 @@ type BenchmarkRun struct {
 	DecodeReplicas    *int    `json:"decode_replicas,omitempty"`
 	DecodeTP          *int    `json:"decode_tp,omitempty"`
 	DecodePP          *int    `json:"decode_pp,omitempty"`
+	// PRD-63: co-located prefill+decode ("both") pool (migration 040). Non-null
+	// only when the disaggregated run set a both pool. both_pp is intentionally
+	// omitted (per-role PP > 1 is a non-goal).
+	BothReplicas *int `json:"both_replicas,omitempty"`
+	BothTP       *int `json:"both_tp,omitempty"`
 	KVConnector       *string `json:"kv_connector,omitempty"`
 	KVTransferBackend *string `json:"kv_transfer_backend,omitempty"`
 	// PRD-64: per-role scheduler override (D/P only). Null ⇒ that role uses the
 	// shared MaxNumBatchedTokens (below). Prefill wants a large batched-token
-	// budget (compute-bound); decode less so (memory-bound).
+	// budget (compute-bound); decode less so (memory-bound). PRD-63 adds the
+	// symmetric knob for the co-located "both" role.
 	PrefillMaxNumBatchedTokens *int `json:"prefill_max_num_batched_tokens,omitempty"`
 	DecodeMaxNumBatchedTokens  *int `json:"decode_max_num_batched_tokens,omitempty"`
+	BothMaxNumBatchedTokens    *int `json:"both_max_num_batched_tokens,omitempty"`
 	Quantization          *string    `json:"quantization,omitempty"`
 	Concurrency           int        `json:"concurrency"`
 	InputSequenceLength   int        `json:"input_sequence_length"`
@@ -291,10 +298,15 @@ type RunRequest struct {
 	DecodeReplicas  int `json:"decode_replicas,omitempty"`
 	DecodeTP        int `json:"decode_tp,omitempty"`
 	DecodePP        int `json:"decode_pp,omitempty"`
+	// PRD-63: optional co-located "both" pool. 0 ⇒ no both pool (today's PD
+	// behavior). both_pp intentionally omitted (per-role PP > 1 is a non-goal).
+	BothReplicas int `json:"both_replicas,omitempty"`
+	BothTP       int `json:"both_tp,omitempty"`
 	// PRD-64: optional per-role scheduler override (D/P only). 0 ⇒ inherit the
-	// shared MaxNumBatchedTokens.
+	// shared MaxNumBatchedTokens. PRD-63 adds the symmetric "both" knob.
 	PrefillMaxNumBatchedTokens int `json:"prefill_max_num_batched_tokens,omitempty"`
 	DecodeMaxNumBatchedTokens  int `json:"decode_max_num_batched_tokens,omitempty"`
+	BothMaxNumBatchedTokens    int `json:"both_max_num_batched_tokens,omitempty"`
 }
 
 // TestSuiteRun represents a test suite execution.

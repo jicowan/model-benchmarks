@@ -547,7 +547,8 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	var nodeCountPtr, ppPtr *int
 	var prefillReplicasPtr, prefillTPPtr, prefillPPPtr *int
 	var decodeReplicasPtr, decodeTPPtr, decodePPPtr *int
-	var prefillMaxNBTPtr, decodeMaxNBTPtr *int // PRD-64 per-role scheduler override
+	var bothReplicasPtr, bothTPPtr *int          // PRD-63 co-located "both" pool
+	var prefillMaxNBTPtr, decodeMaxNBTPtr, bothMaxNBTPtr *int // PRD-64/63 per-role scheduler override
 	var kvConnectorPtr, kvBackendPtr *string
 	if req.DeploymentMode == "disaggregated" {
 		if req.Framework != "llm-d" {
@@ -557,28 +558,43 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require a GPU instance type"}
 		}
 		gpn := instType.AcceleratorCount
-		// Per-role replica counts (the xPyD ratio) — each >= 1.
-		if req.PrefillReplicas < 1 {
-			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require prefill_replicas >= 1"}
+		// PRD-63: per-role replica counts are combination-validated (not each
+		// >= 1). "both" is additive; a run may set any subset of {prefill,
+		// decode, both} with replicas >= 0. Rejections:
+		//   * any role negative
+		//   * total node sum < 1 (nothing to run)
+		//   * prefill > 0 with NO decode-capable pool (decode or both) — a lone
+		//     prefill pool can't finish a disaggregated request.
+		if req.PrefillReplicas < 0 || req.DecodeReplicas < 0 || req.BothReplicas < 0 {
+			return "", &createRunError{http.StatusBadRequest, "prefill_replicas / decode_replicas / both_replicas must be >= 0"}
 		}
-		if req.DecodeReplicas < 1 {
-			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require decode_replicas >= 1"}
+		if req.PrefillReplicas+req.DecodeReplicas+req.BothReplicas < 1 {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs need at least one pool (prefill, decode, or both) with replicas >= 1"}
+		}
+		if req.PrefillReplicas > 0 && req.DecodeReplicas == 0 && req.BothReplicas == 0 {
+			return "", &createRunError{http.StatusBadRequest, "a prefill pool needs a decode-capable pool (decode or both) to finish requests"}
 		}
 		// Per-role TP is within-node: default 1 (no tensor sharding), bounded by
 		// the node's GPU count. Independent knobs per role (AWS reference:
 		// prefill TP=1, decode TP=4).
-		pTP, dTP := req.PrefillTP, req.DecodeTP
+		pTP, dTP, bTP := req.PrefillTP, req.DecodeTP, req.BothTP
 		if pTP < 1 {
 			pTP = 1
 		}
 		if dTP < 1 {
 			dTP = 1
 		}
+		if bTP < 1 {
+			bTP = 1
+		}
 		if gpn > 0 && pTP > gpn {
 			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("prefill_tp (%d) exceeds the instance's GPUs per node (%d)", pTP, gpn)}
 		}
 		if gpn > 0 && dTP > gpn {
 			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("decode_tp (%d) exceeds the instance's GPUs per node (%d)", dTP, gpn)}
+		}
+		if gpn > 0 && bTP > gpn {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("both_tp (%d) exceeds the instance's GPUs per node (%d)", bTP, gpn)}
 		}
 		// Per-role PP > 1 (multi-node-per-role) is a documented follow-on: a
 		// Deployment can't express multi-node --nnodes coordination. Constrain
@@ -596,12 +612,12 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		if req.NetworkMode != "" && req.NetworkMode != "efa" && req.NetworkMode != "tcp" {
 			return "", &createRunError{http.StatusBadRequest, "network_mode must be 'efa' or 'tcp'"}
 		}
-		// A disaggregated run holds prefill + decode nodes simultaneously; each
-		// pod is one node (TP within-node, PP=1). The total must be >= 2
-		// (prefill and decode land on separate nodes — the whole point).
-		totalNodes := req.PrefillReplicas*pPP + req.DecodeReplicas*dPP
-		if totalNodes < 2 {
-			return "", &createRunError{http.StatusBadRequest, "disaggregated runs need at least 2 nodes (prefill + decode on separate nodes)"}
+		// Each role pod is one node (TP within-node, PP=1). The node total sums
+		// all three pools. PRD-63 relaxes the floor to >= 1 (a "both"-only pool
+		// serves everything locally and needs no separate node).
+		totalNodes := req.PrefillReplicas*pPP + req.DecodeReplicas*dPP + req.BothReplicas
+		if totalNodes < 1 {
+			return "", &createRunError{http.StatusBadRequest, "disaggregated runs need at least 1 serving node"}
 		}
 
 		dm := "disaggregated"
@@ -615,10 +631,21 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		networkModePtr = &nm
 		req.NetworkMode = nm
 		req.PrefillTP, req.DecodeTP, req.PrefillPP, req.DecodePP = pTP, dTP, pPP, dPP
-		pr, pt, pp := req.PrefillReplicas, pTP, pPP
-		dr, dt, dp := req.DecodeReplicas, dTP, dPP
-		prefillReplicasPtr, prefillTPPtr, prefillPPPtr = &pr, &pt, &pp
-		decodeReplicasPtr, decodeTPPtr, decodePPPtr = &dr, &dt, &dp
+		req.BothTP = bTP
+		// Persist each pool that is present. A role with 0 replicas stays NULL so
+		// the row is self-describing (a both-only run has null prefill/decode).
+		if req.PrefillReplicas > 0 {
+			pr, pt, pp := req.PrefillReplicas, pTP, pPP
+			prefillReplicasPtr, prefillTPPtr, prefillPPPtr = &pr, &pt, &pp
+		}
+		if req.DecodeReplicas > 0 {
+			dr, dt, dp := req.DecodeReplicas, dTP, dPP
+			decodeReplicasPtr, decodeTPPtr, decodePPPtr = &dr, &dt, &dp
+		}
+		if req.BothReplicas > 0 {
+			br, bt := req.BothReplicas, bTP
+			bothReplicasPtr, bothTPPtr = &br, &bt
+		}
 		// KV connector/backend are derived from the fabric (nixl over tcp|libfabric),
 		// surfaced in results so a disaggregated run is self-describing.
 		kvc := "nixl"
@@ -631,7 +658,7 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		// PRD-64: optional per-role scheduler override. Positive when set; null
 		// (0) ⇒ role inherits the shared max_num_batched_tokens. Bound matches
 		// the shared knob (> 0).
-		if req.PrefillMaxNumBatchedTokens < 0 || req.DecodeMaxNumBatchedTokens < 0 {
+		if req.PrefillMaxNumBatchedTokens < 0 || req.DecodeMaxNumBatchedTokens < 0 || req.BothMaxNumBatchedTokens < 0 {
 			return "", &createRunError{http.StatusBadRequest, "per-role max_num_batched_tokens must be positive"}
 		}
 		if req.PrefillMaxNumBatchedTokens > 0 {
@@ -641,6 +668,10 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		if req.DecodeMaxNumBatchedTokens > 0 {
 			v := req.DecodeMaxNumBatchedTokens
 			decodeMaxNBTPtr = &v
+		}
+		if req.BothMaxNumBatchedTokens > 0 {
+			v := req.BothMaxNumBatchedTokens
+			bothMaxNBTPtr = &v
 		}
 	} else if req.DeploymentMode == "distributed" {
 		if req.Framework != "llm-d" {
@@ -722,10 +753,13 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		DecodeReplicas:         decodeReplicasPtr,
 		DecodeTP:               decodeTPPtr,
 		DecodePP:               decodePPPtr,
+		BothReplicas:           bothReplicasPtr,
+		BothTP:                 bothTPPtr,
 		KVConnector:            kvConnectorPtr,
 		KVTransferBackend:      kvBackendPtr,
 		PrefillMaxNumBatchedTokens: prefillMaxNBTPtr,
 		DecodeMaxNumBatchedTokens:  decodeMaxNBTPtr,
+		BothMaxNumBatchedTokens:    bothMaxNBTPtr,
 		Status:                 "pending",
 	}
 
@@ -762,9 +796,13 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			cfg.PrefillTP = req.PrefillTP
 			cfg.DecodeReplicas = req.DecodeReplicas
 			cfg.DecodeTP = req.DecodeTP
-			// PRD-64: per-role scheduler override (0 ⇒ inherit shared).
+			// PRD-63: co-located "both" pool.
+			cfg.BothReplicas = req.BothReplicas
+			cfg.BothTP = req.BothTP
+			// PRD-64/63: per-role scheduler override (0 ⇒ inherit shared).
 			cfg.PrefillMaxNumBatchedTokens = req.PrefillMaxNumBatchedTokens
 			cfg.DecodeMaxNumBatchedTokens = req.DecodeMaxNumBatchedTokens
+			cfg.BothMaxNumBatchedTokens = req.BothMaxNumBatchedTokens
 		}
 		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)

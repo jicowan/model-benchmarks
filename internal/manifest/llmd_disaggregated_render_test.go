@@ -240,6 +240,132 @@ func TestRenderLLMDDisaggregated_PerRoleSchedulerOverride(t *testing.T) {
 	}
 }
 
+// TestRenderLLMDDisaggregated_BothRole (PRD-63): a run with BothReplicas > 0
+// renders a {{.Name}}-both Deployment with role=both, the routing sidecar, the
+// NIXL kv-transfer config, the both TP flag, a -both-devices claim, and the pool
+// selector labels — alongside the prefill/decode graph.
+func TestRenderLLMDDisaggregated_BothRole(t *testing.T) {
+	p := sampleDisaggParams()
+	p.BothReplicas = 3
+	p.BothTP = 2
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"name: bench-abc12345-both\n",
+		"name: bench-abc12345-both-devices",
+		"llm-d.ai/role: both",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("both role missing %q", want)
+		}
+	}
+	// 4 Deployments now (prefill, decode, both, EPP).
+	if n := strings.Count(out, "kind: Deployment"); n != 4 {
+		t.Errorf("expected 4 Deployments (prefill, decode, both, EPP), got %d", n)
+	}
+	// both carries the sidecar too → 2 routing-proxy init containers (decode + both).
+	if n := strings.Count(out, "name: routing-proxy"); n != 2 {
+		t.Errorf("expected routing-proxy on decode AND both (2), got %d", n)
+	}
+	// both TP=2 flag present; both DRA claim count 2.
+	if !strings.Contains(out, "--tensor-parallel-size=2") {
+		t.Error("both TP=2 flag missing")
+	}
+	// both pod's vLLM behind the sidecar → --port=8200 (like decode).
+	if n := strings.Count(out, "--port=8200"); n < 2 {
+		t.Errorf("both + decode should both serve vLLM on 8200, got %d", n)
+	}
+	// pool selector labels on the both pod.
+	if !strings.Contains(out, "llm-d.ai/inference-serving: \"true\"") {
+		t.Error("both pod missing pool selector label")
+	}
+}
+
+// TestRenderLLMDDisaggregated_BothOnly (PRD-63): a both-only run (prefill=0,
+// decode=0) renders ONLY the both role — no prefill/decode Deployment, RCT, or
+// Service — plus the shared InferencePool/EPP/HTTPRoute.
+func TestRenderLLMDDisaggregated_BothOnly(t *testing.T) {
+	p := sampleDisaggParams()
+	p.PrefillReplicas = 0
+	p.DecodeReplicas = 0
+	p.BothReplicas = 2
+	p.BothTP = 1
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No prefill/decode role objects.
+	for _, notWant := range []string{
+		"name: bench-abc12345-prefill\n",
+		"name: bench-abc12345-decode\n",
+		"name: bench-abc12345-prefill-devices",
+		"name: bench-abc12345-decode-devices",
+		"llm-d.ai/role: prefill",
+		"llm-d.ai/role: decode",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("both-only run should NOT render %q", notWant)
+		}
+	}
+	// Exactly 2 Deployments: both + EPP.
+	if n := strings.Count(out, "kind: Deployment"); n != 2 {
+		t.Errorf("both-only: expected 2 Deployments (both, EPP), got %d", n)
+	}
+	// The both role + shared routing graph are present.
+	for _, want := range []string{
+		"name: bench-abc12345-both\n",
+		"name: bench-abc12345-both-devices",
+		"kind: InferencePool",
+		"kind: HTTPRoute",
+		"name: bench-abc12345-pool",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("both-only run missing %q", want)
+		}
+	}
+	// both anti-affines against its OWN role (spread across nodes), not prefill/decode.
+	if !strings.Contains(out, "llm-d.ai/role: both\n                topologyKey: kubernetes.io/hostname") {
+		t.Error("both should self-anti-affine (role: both in the podAntiAffinity selector)")
+	}
+}
+
+// TestRenderLLMDDisaggregated_BothPerRoleScheduler (PRD-63): BothServeArgs, when
+// set, drives the both Deployment's --max-num-batched-tokens independently.
+func TestRenderLLMDDisaggregated_BothPerRoleScheduler(t *testing.T) {
+	p := sampleDisaggParams()
+	p.BothReplicas = 1
+	p.BothTP = 1
+	base := []string{"Qwen/Qwen2.5-1.5B-Instruct", "--max-model-len", "4096"}
+	p.ServeArgs = append(append([]string{}, base...), "--max-num-batched-tokens", "2048")
+	p.BothServeArgs = append(append([]string{}, base...), "--max-num-batched-tokens", "9001")
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"9001"`) {
+		t.Error("both per-role batched-token override (9001) missing")
+	}
+}
+
+// TestRenderLLMDDisaggregated_NoBothByDefault (PRD-63, load-bearing): with
+// BothReplicas == 0 (the default), NO both objects render — the graph is the
+// unchanged two-role prefill/decode shape.
+func TestRenderLLMDDisaggregated_NoBothByDefault(t *testing.T) {
+	out, err := RenderLLMDDisaggregated(sampleDisaggParams()) // BothReplicas 0
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "bench-abc12345-both") || strings.Contains(out, "llm-d.ai/role: both") {
+		t.Error("BothReplicas==0 must render no both objects")
+	}
+	// Still exactly 3 Deployments (prefill, decode, EPP).
+	if n := strings.Count(out, "kind: Deployment"); n != 3 {
+		t.Errorf("expected 3 Deployments with no both pool, got %d", n)
+	}
+}
+
 // Regression: with NO per-role override, the render falls back to the shared
 // ServeArgs for both roles — byte-identical to pre-PRD-64 output.
 func TestRenderLLMDDisaggregated_NoOverrideFallsBackToShared(t *testing.T) {

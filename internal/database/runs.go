@@ -152,6 +152,10 @@ type RunExportDetails struct {
 	PrefillTP              *int
 	DecodeReplicas         *int
 	DecodeTP               *int
+	// PRD-63: co-located "both" pool, so the exported manifest reproduces a
+	// run that used a both pool (or a both-only run). Null on PD-only runs.
+	BothReplicas *int
+	BothTP       *int
 }
 
 // GetRunExportDetails returns the information needed to export a run's
@@ -169,7 +173,8 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 			it.accelerator_type, it.accelerator_name, it.accelerator_count, it.accelerator_memory_gib,
 			it.vcpus, it.memory_gib,
 			br.deployment_mode, br.node_count, br.pipeline_parallel_degree, br.network_mode,
-			br.prefill_replicas, br.prefill_tp, br.decode_replicas, br.decode_tp
+			br.prefill_replicas, br.prefill_tp, br.decode_replicas, br.decode_tp,
+			br.both_replicas, br.both_tp
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
 		JOIN instance_types it ON br.instance_type_id = it.id
@@ -184,6 +189,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 		&d.VCPUs, &d.MemoryGiB,
 		&d.DeploymentMode, &d.NodeCount, &d.PipelineParallelDegree, &d.NetworkMode,
 		&d.PrefillReplicas, &d.PrefillTP, &d.DecodeReplicas, &d.DecodeTP,
+		&d.BothReplicas, &d.BothTP,
 	)
 	if err != nil {
 		if err.Error() == "no rows in result set" {

@@ -62,11 +62,15 @@ export interface BenchmarkRun {
   decode_replicas?: number | null;
   decode_tp?: number | null;
   decode_pp?: number | null;
+  // PRD-63: co-located "both" pool. Null unless the run set a both pool.
+  both_replicas?: number | null;
+  both_tp?: number | null;
   kv_connector?: string | null;
   kv_transfer_backend?: string | null;
-  // PRD-64: per-role scheduler override (D/P). Null ⇒ role used the shared value.
+  // PRD-64/63: per-role scheduler override. Null ⇒ role used the shared value.
   prefill_max_num_batched_tokens?: number | null;
   decode_max_num_batched_tokens?: number | null;
+  both_max_num_batched_tokens?: number | null;
   quantization?: string;
   concurrency: number;
   input_sequence_length: number;
@@ -234,10 +238,14 @@ export interface RunRequest {
   decode_replicas?: number;
   decode_tp?: number;
   decode_pp?: number;
-  // PRD-64: optional per-role scheduler override (D/P only). 0/undefined ⇒
+  // PRD-63: optional co-located "both" pool (prefill+decode fused).
+  both_replicas?: number;
+  both_tp?: number;
+  // PRD-64/63: optional per-role scheduler override (D/P only). 0/undefined ⇒
   // inherit the shared max_num_batched_tokens.
   prefill_max_num_batched_tokens?: number;
   decode_max_num_batched_tokens?: number;
+  both_max_num_batched_tokens?: number;
 }
 
 export interface RunListItem {

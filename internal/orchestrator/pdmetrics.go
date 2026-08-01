@@ -402,8 +402,16 @@ func (p *PDScraper) get(ctx context.Context, url string) (string, bool) {
 //     (last-first) delta, so the fields here HOLD THE DELTA (first is 0 in the
 //     rate call). A field stays -1 (absent) if no pod of the role reported it.
 // Correct for 1 pod (the historical 1P1D case) and N pods (multi-replica xPyD).
+// Accepts one or more role names — PRD-63 folds the co-located "both" role into
+// BOTH the prefill and decode reductions, since a "both" pod prefills locally,
+// decodes, AND executes KV pulls. The prefill/decode aggregates are never summed
+// together (each metric picks from one), so counting "both" in both is correct.
 // Must be called with p.mu held.
-func (p *PDScraper) aggregateRole(role string) pdVLLMResult {
+func (p *PDScraper) aggregateRole(roles ...string) pdVLLMResult {
+	want := map[string]bool{}
+	for _, r := range roles {
+		want[r] = true
+	}
 	agg := newPDVLLMResult()
 	// running (sum,seen) for each accumulated field
 	add := func(dst *float64, v float64) {
@@ -416,7 +424,7 @@ func (p *PDScraper) aggregateRole(role string) pdVLLMResult {
 		*dst += v
 	}
 	for url, role2 := range p.urlRole {
-		if role2 != role {
+		if !want[role2] {
 			continue
 		}
 		last := p.last[url]
@@ -458,8 +466,9 @@ func (p *PDScraper) Stop() *PDMetrics {
 	// e.g. 2 decode pods contribute additively). agg sums histogram sum/count
 	// (→ group mean), additive counters (bytes/failures), and window-deltas
 	// (external-cache hits/queries) across every pod in the role.
-	prefillAgg := p.aggregateRole("prefill")
-	decodeAgg := p.aggregateRole("decode")
+	// PRD-63: "both" pods prefill AND decode locally, so they feed both groups.
+	prefillAgg := p.aggregateRole("prefill", "both")
+	decodeAgg := p.aggregateRole("decode", "both")
 
 	// Phase-time group means (seconds → ms). Prefill time comes from prefill
 	// pods; fall back to decode pods if only they reported it.
@@ -578,10 +587,11 @@ func rateOverWindow(firstHits, lastHits, firstQ, lastQ float64) (float64, bool) 
 }
 
 // pdVLLMTargetURL builds the /metrics URL for a role's vLLM: prefill serves on
-// :8000, decode's vLLM is on :8200 (the sidecar occupies :8000).
+// :8000, decode's vLLM is on :8200 (the sidecar occupies :8000). The PRD-63
+// "both" role carries the same sidecar, so its vLLM is on :8200 too.
 func pdVLLMTargetURL(podIP, role string) string {
 	port := 8000
-	if role == "decode" {
+	if role == "decode" || role == "both" {
 		port = 8200
 	}
 	return fmt.Sprintf("http://%s:%d/metrics", podIP, port)

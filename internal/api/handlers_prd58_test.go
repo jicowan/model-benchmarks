@@ -52,13 +52,16 @@ func TestCreateRun_Disaggregated_RejectsNonLLMD(t *testing.T) {
 	}
 }
 
-func TestCreateRun_Disaggregated_RejectsZeroPrefill(t *testing.T) {
+// PRD-63 relaxed the per-role floors to combination validation: a decode-only
+// run (prefill=0, decode>=1) is now VALID — there's a decode-capable pool and no
+// lone prefill. (Pre-PRD-63 this was rejected for prefill_replicas < 1.)
+func TestCreateRun_Disaggregated_DecodeOnly_Accepted(t *testing.T) {
 	mux := distServer(t)
 	r := validDisaggregatedReq()
 	r.PrefillReplicas = 0
-	w := postRun(mux, r)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "prefill_replicas") {
-		t.Errorf("want 400 prefill_replicas; got %d: %s", w.Code, w.Body.String())
+	r.DecodeReplicas, r.DecodeTP = 2, 1
+	if w := postRun(mux, r); w.Code != http.StatusAccepted {
+		t.Errorf("decode-only should be accepted; got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -132,6 +135,89 @@ func TestCreateRun_Disaggregated_PersistsTopology(t *testing.T) {
 	}
 	if got.KVTransferBackend == nil || *got.KVTransferBackend != "tcp" {
 		t.Errorf("kv_transfer_backend should be tcp for tcp network mode: %v", got.KVTransferBackend)
+	}
+}
+
+// --- PRD-63: co-located "both" pool role ---
+
+// A both-only run (prefill=0, decode=0, both>=1) is accepted with NodeCount
+// equal to the both replica count.
+func TestCreateRun_Disaggregated_BothOnly_Accepted(t *testing.T) {
+	repo := database.NewMockRepo()
+	repo.SeedModel(&database.Model{ID: "m-70b", HfID: "meta-llama/Llama-3.1-70B", HfRevision: "main"})
+	repo.SeedInstanceType(&database.InstanceType{
+		ID: "inst-p5", Name: "p5.48xlarge", Family: "p5",
+		AcceleratorType: "gpu", AcceleratorName: "H100",
+		AcceleratorCount: 8, AcceleratorMemoryGiB: 640, VCPUs: 192, MemoryGiB: 2048,
+	})
+	srv := NewServer(repo, fake.NewSimpleClientset(), "test-pod")
+
+	r := validDisaggregatedReq()
+	r.PrefillReplicas, r.DecodeReplicas = 0, 0
+	r.BothReplicas, r.BothTP = 2, 1
+	runID, err := srv.CreateRun(context.Background(), ptrReq(r))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	got, _ := repo.GetBenchmarkRun(context.Background(), runID)
+	if got.NodeCount == nil || *got.NodeCount != 2 {
+		t.Errorf("both-only node_count should be 2, got %v", got.NodeCount)
+	}
+	if got.BothReplicas == nil || *got.BothReplicas != 2 {
+		t.Errorf("both_replicas not persisted: %v", got.BothReplicas)
+	}
+	// prefill/decode stay NULL (self-describing row).
+	if got.PrefillReplicas != nil || got.DecodeReplicas != nil {
+		t.Errorf("both-only run should leave prefill/decode NULL, got %v/%v", got.PrefillReplicas, got.DecodeReplicas)
+	}
+}
+
+// both + prefill (decode=0) is valid and recommended — the both pool covers decode.
+func TestCreateRun_Disaggregated_BothPlusPrefill_Accepted(t *testing.T) {
+	mux := distServer(t)
+	r := validDisaggregatedReq()
+	r.PrefillReplicas, r.PrefillTP = 1, 1
+	r.DecodeReplicas = 0
+	r.BothReplicas, r.BothTP = 2, 1
+	if w := postRun(mux, r); w.Code != http.StatusAccepted {
+		t.Errorf("both+prefill should be accepted; got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A lone prefill pool (prefill>0, decode=0, both=0) is rejected — no decode
+// coverage means nothing can finish a disaggregated request.
+func TestCreateRun_Disaggregated_LonePrefill_Rejected(t *testing.T) {
+	mux := distServer(t)
+	r := validDisaggregatedReq()
+	r.PrefillReplicas, r.PrefillTP = 2, 1
+	r.DecodeReplicas = 0
+	r.BothReplicas = 0
+	w := postRun(mux, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "decode-capable") {
+		t.Errorf("lone prefill should be rejected (no decode coverage); got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// both_tp over the node's GPU count is rejected.
+func TestCreateRun_Disaggregated_BothTPOverGPUs_Rejected(t *testing.T) {
+	mux := distServer(t)
+	r := validDisaggregatedReq()
+	r.PrefillReplicas, r.DecodeReplicas = 0, 0
+	r.BothReplicas, r.BothTP = 1, 16 // > 8 GPUs/node
+	w := postRun(mux, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "both_tp") {
+		t.Errorf("want 400 both_tp; got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// An all-zero disaggregated run (no pool at all) is rejected.
+func TestCreateRun_Disaggregated_NoPool_Rejected(t *testing.T) {
+	mux := distServer(t)
+	r := validDisaggregatedReq()
+	r.PrefillReplicas, r.DecodeReplicas, r.BothReplicas = 0, 0, 0
+	w := postRun(mux, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for no pool; got %d: %s", w.Code, w.Body.String())
 	}
 }
 

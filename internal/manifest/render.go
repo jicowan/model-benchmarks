@@ -249,6 +249,10 @@ type LLMDDisaggregatedParams struct {
 	ServeArgs        []string
 	PrefillServeArgs []string
 	DecodeServeArgs  []string
+	// BothServeArgs (PRD-63) is the per-role arg set for the co-located "both"
+	// role — identical to ServeArgs except the scheduler knob may differ. Nil ⇒
+	// the template falls back to the shared ServeArgs (byte-identical render).
+	BothServeArgs []string
 	ContainerName string
 	ModelHfID     string
 	ModelLabel    string
@@ -259,10 +263,17 @@ type LLMDDisaggregatedParams struct {
 	// DRA GPU count); replica counts are the xPyD ratio. PP>1 per role is a
 	// follow-on (a Deployment can't express multi-node coordination) and is not
 	// rendered — the orchestrator/API constrain per-role PP to 1.
+	//
+	// BothReplicas/BothTP (PRD-63) size the optional co-located "both" pool.
+	// BothReplicas == 0 (the default) renders NO both role — the graph is then
+	// byte-identical to the two-role prefill/decode graph. A "both"-only run
+	// sets PrefillReplicas == DecodeReplicas == 0.
 	PrefillReplicas int
 	PrefillTP       int
 	DecodeReplicas  int
 	DecodeTP        int
+	BothReplicas    int
+	BothTP          int
 
 	// Per-pod CPU/memory requests (GPUs come via the DRA claim).
 	CPURequest    string

@@ -106,8 +106,19 @@ export default function DistributedReport() {
     ? `${instanceType.name} · ${instanceType.accelerator_count}×${instanceType.accelerator_name} · ${nodeCount} nodes`
     : `${nodeCount} nodes`;
 
+  // PRD-63: xPyDzB, dropping zero-count roles. A both-only run reads "2B".
+  const disaggTopoStr = [
+    run.prefill_replicas ? `${run.prefill_replicas}P` : "",
+    run.decode_replicas ? `${run.decode_replicas}D` : "",
+    run.both_replicas ? `${run.both_replicas}B` : "",
+  ].filter(Boolean).join("") || "?";
+  const disaggTopoDetail = [
+    run.prefill_replicas ? `prefill TP=${run.prefill_tp ?? "?"}` : "",
+    run.decode_replicas ? `decode TP=${run.decode_tp ?? "?"}` : "",
+    run.both_replicas ? `both TP=${run.both_tp ?? "?"}` : "",
+  ].filter(Boolean).join(" · ");
   const topologyValue = disaggregated
-    ? `${run.prefill_replicas ?? "?"}P${run.decode_replicas ?? "?"}D · prefill TP=${run.prefill_tp ?? "?"} · decode TP=${run.decode_tp ?? "?"} · ${nodeCount} nodes`
+    ? `${disaggTopoStr} · ${disaggTopoDetail} · ${nodeCount} nodes`
     : `${nodeCount} nodes · TP=${run.tensor_parallel_degree} · PP=${run.pipeline_parallel_degree ?? "?"}`;
 
   const statusBadge = (
@@ -196,15 +207,23 @@ export default function DistributedReport() {
             { label: "Node Count", value: nodeCount },
             ...(disaggregated
               ? [
-                  { label: "Prefill", value: `${run.prefill_replicas ?? "?"} × TP=${run.prefill_tp ?? "?"}` },
-                  { label: "Decode", value: `${run.decode_replicas ?? "?"} × TP=${run.decode_tp ?? "?"}` },
+                  // PRD-63: only show a role row when that pool has replicas.
+                  ...(run.prefill_replicas
+                    ? [{ label: "Prefill", value: `${run.prefill_replicas} × TP=${run.prefill_tp ?? "?"}` }]
+                    : []),
+                  ...(run.decode_replicas
+                    ? [{ label: "Decode", value: `${run.decode_replicas} × TP=${run.decode_tp ?? "?"}` }]
+                    : []),
+                  ...(run.both_replicas
+                    ? [{ label: "Both (co-located)", value: `${run.both_replicas} × TP=${run.both_tp ?? "?"}` }]
+                    : []),
                   { label: "KV Connector", value: run.kv_connector ?? null },
                   { label: "KV Transfer", value: run.kv_transfer_backend ?? null },
-                  // PRD-64: per-role scheduler override (only shown when set).
-                  ...(run.prefill_max_num_batched_tokens || run.decode_max_num_batched_tokens
+                  // PRD-64/63: per-role scheduler override (only shown when set).
+                  ...(run.prefill_max_num_batched_tokens || run.decode_max_num_batched_tokens || run.both_max_num_batched_tokens
                     ? [{
-                        label: "Max Batched Tokens (P/D)",
-                        value: `prefill=${run.prefill_max_num_batched_tokens ?? "shared"} · decode=${run.decode_max_num_batched_tokens ?? "shared"}`,
+                        label: "Max Batched Tokens (P/D/B)",
+                        value: `prefill=${run.prefill_max_num_batched_tokens ?? "shared"} · decode=${run.decode_max_num_batched_tokens ?? "shared"} · both=${run.both_max_num_batched_tokens ?? "shared"}`,
                       }]
                     : []),
                 ]

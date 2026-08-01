@@ -69,3 +69,98 @@ func TestApplyDisaggregatedManifestSet(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyDisaggregatedWithBothRole (PRD-63): a graph that adds a co-located
+// "both" pool applies cleanly through the dynamic client — the extra RCT,
+// Deployment, and Service (3 objects) land on top of the 16-object PD graph.
+func TestApplyDisaggregatedWithBothRole(t *testing.T) {
+	yamlStr, err := manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
+		Name: "bench-both1234", Namespace: "accelbench",
+		Image:     "vllm/vllm-openai:v0.25.0",
+		ServeArgs: []string{"Qwen/Qwen2.5-1.5B-Instruct"},
+		ContainerName: "vllm", ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct",
+		ModelLabel: "qwen2-5-1-5b-instruct",
+		PrefillReplicas: 1, PrefillTP: 1, DecodeReplicas: 1, DecodeTP: 1,
+		BothReplicas: 2, BothTP: 1,
+		CPURequest: "3", MemoryRequest: "12Gi", NetworkMode: "tcp",
+		NixlModuleDir: "/x/ucx", EPPImage: "epp:v0.9.0", SidecarImage: "sidecar:v0.9.0",
+		NonCachedTokens: 16, GPUDeviceClass: "gpu.nvidia.com",
+		GatewayName: "accelbench-gateway", GatewayNamespace: "envoy-gateway-system",
+		MultiNodeTaintKey: "accelbench.io/multinode", MultiNodeTaintValue: "true",
+		DRANodeSelectorKey: "accelbench.io/dra", DRANodeSelectorVal: "true",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	o := &Orchestrator{
+		client:    k8sfake.NewSimpleClientset(),
+		repo:      database.NewMockRepo(),
+		dynClient: newFakeDyn(),
+	}
+	applied, err := o.applyManifestSet(context.Background(), "accelbench", yamlStr)
+	if err != nil {
+		t.Fatalf("applyManifestSet: %v", err)
+	}
+	// 16 (PD graph) + 3 (both RCT + Deployment + Service) = 19.
+	if len(applied) != 19 {
+		t.Errorf("expected 19 applied objects with a both pool, got %d", len(applied))
+	}
+	var foundBothDep bool
+	for _, a := range applied {
+		if a.name == "bench-both1234-both" && a.gvr.Resource == "deployments" {
+			foundBothDep = true
+		}
+	}
+	if !foundBothDep {
+		t.Error("both Deployment not applied")
+	}
+	for i := len(applied) - 1; i >= 0; i-- {
+		_ = o.deleteUnstructured(context.Background(), "accelbench", applied[i])
+	}
+}
+
+// TestApplyDisaggregatedBothOnly (PRD-63): a both-only run (prefill=0, decode=0)
+// applies only the both role + shared routing graph — 14 objects (16 minus the
+// 2 prefill/decode RCTs and 2 role Services minus... precisely: both RCT +
+// both Deployment + both Service + InferencePool + ConfigMap + SA + Role +
+// RoleBinding + ClusterRole + ClusterRoleBinding + EPP Deployment + EPP Service +
+// HTTPRoute = 13).
+func TestApplyDisaggregatedBothOnly(t *testing.T) {
+	yamlStr, err := manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
+		Name: "bench-bo123456", Namespace: "accelbench",
+		Image:     "vllm/vllm-openai:v0.25.0",
+		ServeArgs: []string{"Qwen/Qwen2.5-1.5B-Instruct"},
+		ContainerName: "vllm", ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct",
+		ModelLabel: "qwen2-5-1-5b-instruct",
+		PrefillReplicas: 0, DecodeReplicas: 0, BothReplicas: 2, BothTP: 1,
+		CPURequest: "3", MemoryRequest: "12Gi", NetworkMode: "tcp",
+		NixlModuleDir: "/x/ucx", EPPImage: "epp:v0.9.0", SidecarImage: "sidecar:v0.9.0",
+		NonCachedTokens: 16, GPUDeviceClass: "gpu.nvidia.com",
+		GatewayName: "accelbench-gateway", GatewayNamespace: "envoy-gateway-system",
+		MultiNodeTaintKey: "accelbench.io/multinode", MultiNodeTaintValue: "true",
+		DRANodeSelectorKey: "accelbench.io/dra", DRANodeSelectorVal: "true",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	o := &Orchestrator{
+		client:    k8sfake.NewSimpleClientset(),
+		repo:      database.NewMockRepo(),
+		dynClient: newFakeDyn(),
+	}
+	applied, err := o.applyManifestSet(context.Background(), "accelbench", yamlStr)
+	if err != nil {
+		t.Fatalf("applyManifestSet: %v", err)
+	}
+	if len(applied) != 13 {
+		t.Errorf("expected 13 applied objects for a both-only run, got %d", len(applied))
+	}
+	for _, a := range applied {
+		if a.name == "bench-bo123456-prefill" || a.name == "bench-bo123456-decode" {
+			t.Errorf("both-only run should not apply %s", a.name)
+		}
+	}
+	for i := len(applied) - 1; i >= 0; i-- {
+		_ = o.deleteUnstructured(context.Background(), "accelbench", applied[i])
+	}
+}

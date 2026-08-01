@@ -85,11 +85,18 @@ type RunConfig struct {
 	PrefillTP       int
 	DecodeReplicas  int
 	DecodeTP        int
+	// PRD-63: optional co-located "both" pool (prefill+decode fused). 0 ⇒ no
+	// both pool (today's PD behavior). NodeCount includes BothReplicas so the
+	// shared pool-acquire / scale / teardown / cost paths key on the total.
+	BothReplicas int
+	BothTP       int
 	// PRD-64: optional per-role scheduler override (0 ⇒ inherit the shared
 	// Request.MaxNumBatchedTokens). Prefill compute-bound wants a larger budget;
-	// decode memory-bound. Only consulted for disaggregated runs.
+	// decode memory-bound. Only consulted for disaggregated runs. PRD-63 adds
+	// the symmetric knob for the "both" role.
 	PrefillMaxNumBatchedTokens int
 	DecodeMaxNumBatchedTokens  int
+	BothMaxNumBatchedTokens    int
 }
 
 // Deployment sub-modes (PRD-57/58). Request.DeploymentMode carries these.
@@ -352,7 +359,19 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 			// covers BOTH roles' nodes via the shared app.kubernetes.io/name label.
 			metricsSvc := modelName + "-svc"
 			if cfg.IsDisaggregated() {
-				metricsSvc = modelName + "-decode"
+				// Decode does the token generation, so its serving metrics are the
+				// relevant ones. PRD-63: a "both"-only run has no decode Service —
+				// fall back to the both (then prefill) Service so the vLLM-metrics
+				// target still resolves. (DCGM still fans out across ALL role nodes
+				// via the shared app.kubernetes.io/name label, independent of this.)
+				switch {
+				case cfg.DecodeReplicas > 0:
+					metricsSvc = modelName + "-decode"
+				case cfg.BothReplicas > 0:
+					metricsSvc = modelName + "-both"
+				default:
+					metricsSvc = modelName + "-prefill"
+				}
 			}
 			// PRD-59: keyed scraper — bucket DCGM samples per {node, role} so the
 			// distributed report can show per-node/per-role GPU telemetry and an

@@ -83,13 +83,31 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	if decodeTP < 1 {
 		decodeTP = 1
 	}
+	// Prefill/decode clamp their replica floor to 1 UNLESS the other roles
+	// cover the topology — a "both"-only run legitimately sets both to 0. The
+	// API validates the combination (at least one decode-capable pool); here we
+	// only avoid rewriting a deliberate 0 up to 1. bothReplicas defaults to 0
+	// (no both pool) and clamps a negative to 0.
+	bothReplicas := cfg.BothReplicas
+	if bothReplicas < 0 {
+		bothReplicas = 0
+	}
+	bothTP := cfg.BothTP
+	if bothTP < 1 {
+		bothTP = 1
+	}
 	prefillReplicas := cfg.PrefillReplicas
-	if prefillReplicas < 1 {
-		prefillReplicas = 1
+	if prefillReplicas < 0 {
+		prefillReplicas = 0
 	}
 	decodeReplicas := cfg.DecodeReplicas
-	if decodeReplicas < 1 {
-		decodeReplicas = 1
+	if decodeReplicas < 0 {
+		decodeReplicas = 0
+	}
+	// If no role is set at all (defensive — the API rejects this), fall back to
+	// the historical 1P1D minimum so we never render an empty graph.
+	if prefillReplicas == 0 && decodeReplicas == 0 && bothReplicas == 0 {
+		prefillReplicas, decodeReplicas = 1, 1
 	}
 
 	// ServeArgs = model positional + static tuning flags. The per-role TP,
@@ -115,12 +133,15 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	// override is set — otherwise they stay nil and the template falls back to
 	// the shared set, keeping the render byte-identical to pre-PRD-64.
 	serveArgs := buildServeArgs(cfg.Request.MaxNumBatchedTokens)
-	var prefillServeArgs, decodeServeArgs []string
+	var prefillServeArgs, decodeServeArgs, bothServeArgs []string
 	if cfg.PrefillMaxNumBatchedTokens > 0 {
 		prefillServeArgs = buildServeArgs(cfg.PrefillMaxNumBatchedTokens)
 	}
 	if cfg.DecodeMaxNumBatchedTokens > 0 {
 		decodeServeArgs = buildServeArgs(cfg.DecodeMaxNumBatchedTokens)
+	}
+	if cfg.BothMaxNumBatchedTokens > 0 {
+		bothServeArgs = buildServeArgs(cfg.BothMaxNumBatchedTokens)
 	}
 
 	var modelServiceAccount string
@@ -145,6 +166,7 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		ServeArgs:           serveArgs,
 		PrefillServeArgs:    prefillServeArgs,
 		DecodeServeArgs:     decodeServeArgs,
+		BothServeArgs:       bothServeArgs,
 		ContainerName:       rt.ContainerName(),
 		ModelHfID:           cfg.Request.ModelHfID,
 		ModelLabel:          modelLabelValue(cfg.Request.ModelHfID),
@@ -154,6 +176,8 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		PrefillTP:           prefillTP,
 		DecodeReplicas:      decodeReplicas,
 		DecodeTP:            decodeTP,
+		BothReplicas:        bothReplicas,
+		BothTP:              bothTP,
 		CPURequest:          cpuReq,
 		MemoryRequest:       memReq,
 		NetworkMode:         cfg.networkMode(),
@@ -182,8 +206,8 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	if err != nil {
 		return fmt.Errorf("apply disaggregated manifest set: %w", err)
 	}
-	log.Printf("[%s] applied disaggregated object graph: %d objects (%dP%dD, prefill TP=%d, decode TP=%d)",
-		cfg.RunID[:8], len(applied), prefillReplicas, decodeReplicas, prefillTP, decodeTP)
+	log.Printf("[%s] applied disaggregated object graph: %d objects (%dP%dD%dB, prefill TP=%d, decode TP=%d, both TP=%d)",
+		cfg.RunID[:8], len(applied), prefillReplicas, decodeReplicas, bothReplicas, prefillTP, decodeTP, bothTP)
 	return nil
 }
 
@@ -198,21 +222,37 @@ func (o *Orchestrator) waitForDisaggregatedReady(ctx context.Context, ns, name s
 	deadline := time.Now().Add(distributedReadinessTimeout)
 	prefillDep := name + "-prefill"
 	decodeDep := name + "-decode"
+	bothDep := name + "-both"
+	// PRD-63: a role is present only when it has replicas > 0. Gate each role's
+	// readiness/endpoint check on presence so a "both"-only (or both+prefill)
+	// run doesn't block on a Deployment that was never rendered. A normal PD run
+	// has prefill+decode present and no both, so its wait is unchanged.
+	havePrefill := cfg.PrefillReplicas > 0
+	haveDecode := cfg.DecodeReplicas > 0
+	haveBoth := cfg.BothReplicas > 0
+	if !havePrefill && !haveDecode && !haveBoth {
+		// Defensive: match the render fallback (1P1D) so we wait on what deployed.
+		havePrefill, haveDecode = true, true
+	}
 	for time.Now().Before(deadline) {
-		prefillReady := o.deploymentFullyReady(ctx, ns, prefillDep)
-		decodeReady := o.deploymentFullyReady(ctx, ns, decodeDep)
+		prefillReady := !havePrefill || o.deploymentFullyReady(ctx, ns, prefillDep)
+		decodeReady := !haveDecode || o.deploymentFullyReady(ctx, ns, decodeDep)
+		bothReady := !haveBoth || o.deploymentFullyReady(ctx, ns, bothDep)
 
-		if prefillReady && decodeReady {
-			// Both groups report Ready; confirm each role's Service actually has
-			// a ready endpoint before declaring success (same race the co-located
-			// path hit — group-ready can precede a servable endpoint).
-			if o.serviceHasReadyEndpoint(ctx, ns, prefillDep) && o.serviceHasReadyEndpoint(ctx, ns, decodeDep) {
-				log.Printf("[%s] prefill + decode groups ready and serving endpoints live", cfg.RunID[:8])
+		if prefillReady && decodeReady && bothReady {
+			// All present groups report Ready; confirm each present role's Service
+			// actually has a ready endpoint before declaring success (same race the
+			// co-located path hit — group-ready can precede a servable endpoint).
+			prefillEP := !havePrefill || o.serviceHasReadyEndpoint(ctx, ns, prefillDep)
+			decodeEP := !haveDecode || o.serviceHasReadyEndpoint(ctx, ns, decodeDep)
+			bothEP := !haveBoth || o.serviceHasReadyEndpoint(ctx, ns, bothDep)
+			if prefillEP && decodeEP && bothEP {
+				log.Printf("[%s] disaggregated groups ready and serving endpoints live", cfg.RunID[:8])
 				return nil
 			}
-			log.Printf("[%s] both groups ready but a serving endpoint not populated yet; waiting", cfg.RunID[:8])
+			log.Printf("[%s] groups ready but a serving endpoint not populated yet; waiting", cfg.RunID[:8])
 		} else {
-			log.Printf("[%s] waiting for disaggregated groups: prefill=%v decode=%v", cfg.RunID[:8], prefillReady, decodeReady)
+			log.Printf("[%s] waiting for disaggregated groups: prefill=%v decode=%v both=%v", cfg.RunID[:8], prefillReady, decodeReady, bothReady)
 		}
 
 		// OOM scan across all pods of the run (both roles).

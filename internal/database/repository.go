@@ -198,9 +198,10 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		     prefill_replicas, prefill_tp, prefill_pp,
 		     decode_replicas, decode_tp, decode_pp,
 		     kv_connector, kv_transfer_backend,
-		     prefill_max_num_batched_tokens, decode_max_num_batched_tokens)
+		     prefill_max_num_batched_tokens, decode_max_num_batched_tokens,
+		     both_replicas, both_tp, both_max_num_batched_tokens)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
-		         $27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
+		         $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
@@ -229,6 +230,9 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		run.KVTransferBackend,
 		run.PrefillMaxNumBatchedTokens,
 		run.DecodeMaxNumBatchedTokens,
+		run.BothReplicas,
+		run.BothTP,
+		run.BothMaxNumBatchedTokens,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
@@ -502,7 +506,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		        prefill_replicas, prefill_tp, prefill_pp,
 		        decode_replicas, decode_tp, decode_pp,
 		        kv_connector, kv_transfer_backend,
-		        prefill_max_num_batched_tokens, decode_max_num_batched_tokens
+		        prefill_max_num_batched_tokens, decode_max_num_batched_tokens,
+		        both_replicas, both_tp, both_max_num_batched_tokens
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
@@ -517,7 +522,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.PrefillReplicas, &run.PrefillTP, &run.PrefillPP,
 		&run.DecodeReplicas, &run.DecodeTP, &run.DecodePP,
 		&run.KVConnector, &run.KVTransferBackend,
-		&run.PrefillMaxNumBatchedTokens, &run.DecodeMaxNumBatchedTokens)
+		&run.PrefillMaxNumBatchedTokens, &run.DecodeMaxNumBatchedTokens,
+		&run.BothReplicas, &run.BothTP, &run.BothMaxNumBatchedTokens)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

@@ -24,6 +24,10 @@ express multi-node --nnodes coordination). vLLM transfers the KV cache
 prefill→decode over NIXL; the decode sidecar executes the hand-off, the EPP
 decides which prefill/decode endpoints to use. GPUs are claimed via DRA.
 */ -}}
+{{- /* PRD-63: prefill and decode are each rendered only when their replica
+   count is > 0, so a "both"-only run (prefill=0, decode=0) emits neither. A
+   normal PD run always has both > 0, so this graph is unchanged for it. */ -}}
+{{- if gt .PrefillReplicas 0 -}}
 apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
@@ -41,6 +45,8 @@ spec:
             deviceClassName: {{ .GPUDeviceClass }}
             count: {{ .PrefillTP }}
 ---
+{{- end }}
+{{- if gt .DecodeReplicas 0 }}
 apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
@@ -57,7 +63,32 @@ spec:
           exactly:
             deviceClassName: {{ .GPUDeviceClass }}
             count: {{ .DecodeTP }}
+{{- end }}
+{{- if gt .BothReplicas 0 }}
 ---
+# PRD-63: co-located prefill+decode ("both") role — a self-sufficient pod that
+# serves short requests locally AND can decode a remote-prefill request the EPP
+# routes to it. Rendered only when BothReplicas > 0, so a PD-only run stays
+# byte-identical to the two-role graph.
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: {{ .Name }}-both-devices
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    accelbench/role: both
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: {{ .GPUDeviceClass }}
+            count: {{ .BothTP }}
+{{- end }}
+---
+{{- if gt .PrefillReplicas 0 }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,6 +115,8 @@ spec:
     spec:
 {{- template "pdPodSpec" (dict "p" . "role" "prefill") }}
 ---
+{{- end }}
+{{- if gt .DecodeReplicas 0 }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -110,6 +143,36 @@ spec:
     spec:
 {{- template "pdPodSpec" (dict "p" . "role" "decode") }}
 ---
+{{- end }}
+{{- if gt .BothReplicas 0 }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}-both
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: model-server
+    llm-d.ai/role: both
+spec:
+  replicas: {{ .BothReplicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Name }}
+      llm-d.ai/role: both
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: model-server
+        llm-d.ai/role: both
+        llm-d.ai/inference-serving: "true"
+        llm-d.ai/model: {{ .ModelLabel }}
+    spec:
+{{- template "pdPodSpec" (dict "p" . "role" "both") }}
+---
+{{- end }}
+{{- if gt .PrefillReplicas 0 }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -128,6 +191,8 @@ spec:
       targetPort: 8000
       protocol: TCP
 ---
+{{- end }}
+{{- if gt .DecodeReplicas 0 }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -146,6 +211,27 @@ spec:
       targetPort: 8000
       protocol: TCP
 ---
+{{- end }}
+{{- if gt .BothReplicas 0 }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}-both
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Name }}
+    llm-d.ai/role: both
+  ports:
+    - name: http
+      port: 8000        # sidecar entrypoint on the both pod
+      targetPort: 8000
+      protocol: TCP
+---
+{{- end }}
 # One InferencePool spans BOTH roles; the EPP splits prefill vs decode
 # internally via prefill-filter/decode-filter keyed on the llm-d.ai/role label
 # (docs-grounded — llm-d-inference-scheduler v0.9.0). GA v1 API requires an
@@ -434,14 +520,17 @@ spec:
         serviceAccountName: {{ $p.ModelServiceAccount }}
 {{- end }}
         # Prefill and decode pods land on SEPARATE nodes (KV crosses the
-        # network — the whole point of disaggregation).
+        # network — the whole point of disaggregation). A "both" pod is
+        # self-sufficient (it prefills locally), so it anti-affines against
+        # ITS OWN role — spreading replicas across nodes without forcing it
+        # off the prefill/decode nodes (co-residency with them is fine).
         affinity:
           podAntiAffinity:
             requiredDuringSchedulingIgnoredDuringExecution:
               - labelSelector:
                   matchLabels:
                     app.kubernetes.io/name: {{ $p.Name }}
-                    llm-d.ai/role: {{ if eq $role "prefill" }}decode{{ else }}prefill{{ end }}
+                    llm-d.ai/role: {{ if eq $role "prefill" }}decode{{ else if eq $role "decode" }}prefill{{ else }}both{{ end }}
                 topologyKey: kubernetes.io/hostname
         tolerations:
           - key: {{ $p.MultiNodeTaintKey }}
@@ -460,10 +549,12 @@ spec:
         resourceClaims:
           - name: gpu
             resourceClaimTemplateName: {{ $p.Name }}-{{ $role }}-devices
-{{- if eq $role "decode" }}
+{{- if or (eq $role "decode") (eq $role "both") }}
         # Native sidecar (initContainer, restartPolicy:Always): fronts vLLM on
         # :8000, proxies to vLLM :8200, and executes the KV pull from the
-        # prefiller the EPP selected (x-prefiller-host-port header).
+        # prefiller the EPP selected (x-prefiller-host-port header). A "both"
+        # pod prefills locally, but still needs the sidecar so the EPP can route
+        # a remote-prefill request to it as the decoder — the safe superset.
         initContainers:
           - name: routing-proxy
             image: {{ $p.SidecarImage }}
@@ -487,23 +578,22 @@ spec:
             image: {{ $p.Image }}
             command: ["vllm", "serve"]
             args:
-{{- /* PRD-64: use the per-role arg set when provided, else the shared
-       ServeArgs (byte-identical to pre-PRD-64 when no per-role override).
-       PRD-63 note: when a "both" role is added, give it a BothServeArgs field
-       and an `else if eq $role "both"` branch here — the fallback pattern
-       extends cleanly. */ -}}
+{{- /* PRD-64/63: use the per-role arg set when provided, else the shared
+       ServeArgs (byte-identical to pre-PRD-64 when no per-role override). The
+       "both" role (PRD-63) mirrors this: BothServeArgs when set, shared
+       otherwise. */ -}}
 {{- $serveArgs := $p.ServeArgs }}
-{{- if eq $role "prefill" }}{{ if $p.PrefillServeArgs }}{{ $serveArgs = $p.PrefillServeArgs }}{{ end }}{{ else if eq $role "decode" }}{{ if $p.DecodeServeArgs }}{{ $serveArgs = $p.DecodeServeArgs }}{{ end }}{{ end }}
+{{- if eq $role "prefill" }}{{ if $p.PrefillServeArgs }}{{ $serveArgs = $p.PrefillServeArgs }}{{ end }}{{ else if eq $role "decode" }}{{ if $p.DecodeServeArgs }}{{ $serveArgs = $p.DecodeServeArgs }}{{ end }}{{ else if eq $role "both" }}{{ if $p.BothServeArgs }}{{ $serveArgs = $p.BothServeArgs }}{{ end }}{{ end }}
 {{- range $serveArgs }}
               - {{ . | yamlQuote }}
 {{- end }}
-              - "--tensor-parallel-size={{ if eq $role "prefill" }}{{ $p.PrefillTP }}{{ else }}{{ $p.DecodeTP }}{{ end }}"
+              - "--tensor-parallel-size={{ if eq $role "prefill" }}{{ $p.PrefillTP }}{{ else if eq $role "both" }}{{ $p.BothTP }}{{ else }}{{ $p.DecodeTP }}{{ end }}"
               - "--block-size=128"
               - "--kv-transfer-config"
               - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
               - "--no-disable-hybrid-kv-cache-manager"
               - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
-{{- if eq $role "decode" }}
+{{- if or (eq $role "decode") (eq $role "both") }}
               - "--port=8200"
 {{- else }}
               - "--port=8000"
@@ -544,7 +634,7 @@ spec:
               - name: VLLM_LOGGING_LEVEL
                 value: "DEBUG"
             ports:
-{{- if eq $role "decode" }}
+{{- if or (eq $role "decode") (eq $role "both") }}
               - name: modelserver
                 containerPort: 8200
                 protocol: TCP
@@ -570,13 +660,13 @@ spec:
             readinessProbe:
               httpGet:
                 path: /v1/models
-                port: {{ if eq $role "decode" }}8200{{ else }}8000{{ end }}
+                port: {{ if or (eq $role "decode") (eq $role "both") }}8200{{ else }}8000{{ end }}
               periodSeconds: 10
               failureThreshold: 60
             startupProbe:
               httpGet:
                 path: /v1/models
-                port: {{ if eq $role "decode" }}8200{{ else }}8000{{ end }}
+                port: {{ if or (eq $role "decode") (eq $role "both") }}8200{{ else }}8000{{ end }}
               initialDelaySeconds: 30
               periodSeconds: 15
               failureThreshold: 80
