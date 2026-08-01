@@ -112,10 +112,13 @@ func parsePDVLLMMetrics(r io.Reader) pdVLLMResult {
 		case strings.HasPrefix(line, "vllm:external_prefix_cache_queries_total"):
 			setIfOK(line, &res.extPrefixQueries)
 
-		// prompt_tokens_by_source, external_kv_transfer variant only. The metric
-		// name prefix also matches the base counter, so require the label.
+		// prompt_tokens_by_source, external_kv_transfer variant only. On the wire
+		// this counter emits BOTH a `_total` value line and a `_created`
+		// timestamp line, and BOTH carry the source= label — so exclude
+		// `_created` or its ~1.7e9 timestamp would clobber the real count.
 		case strings.HasPrefix(line, "vllm:prompt_tokens_by_source"):
-			if strings.Contains(line, `source="external_kv_transfer"`) {
+			if strings.Contains(line, `source="external_kv_transfer"`) &&
+				!strings.Contains(line, "_created") {
 				setIfOK(line, &res.externalKVPromptTokens)
 			}
 		}
@@ -191,12 +194,14 @@ func parsePDEPPMetrics(r io.Reader) pdEPPResult {
 			continue
 		}
 		switch {
-		// Disaggregation-decision counter (llm-d canonical + deprecated alias +
-		// the pd-specific name). Prometheus appends _total on the wire.
-		case strings.HasPrefix(line, "llm_d_epp_disagg_decision_total"),
-			strings.HasPrefix(line, "llm_d_epp_pd_decision_total"),
-			strings.HasPrefix(line, "llm_d_inference_scheduler_disagg_decision_total"),
-			strings.HasPrefix(line, "llm_d_inference_scheduler_pd_decision_total"):
+		// Disaggregation-decision counter. Count ONLY the canonical llm_d_epp_*
+		// name: the EPP emits BOTH llm_d_epp_disagg_decision_total AND the
+		// deprecated llm_d_inference_scheduler_disagg_decision_total with
+		// IDENTICAL values (confirmed live) — matching both would double-count.
+		// The deprecated alias is deliberately ignored here. (llm_d_epp_pd_decision
+		// is a distinct PD-only variant not emitted in our build; if a future
+		// version drops the disagg name for it, revisit.)
+		case strings.HasPrefix(line, "llm_d_epp_disagg_decision_total"):
 			v, err := parsePromValue(line)
 			if err != nil {
 				continue

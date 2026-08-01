@@ -337,20 +337,29 @@ export default function Runs() {
       {
         accessorKey: "instance_type_name",
         header: "INSTANCE",
-        // PRD-57: for distributed runs, show the multi-node topology
-        // (e.g. "g6.xlarge ×2" + a badge) where a single instance shows today.
+        // PRD-57/58: for multi-node runs, show the topology (e.g. "g6.xlarge ×2"
+        // + a badge) where a single instance shows today. Co-located distributed
+        // (PP) shows "dist"; prefill/decode disaggregated shows "P/D" so the two
+        // multi-node modes are distinguishable at a glance (PRD-62).
         cell: ({ row }) => {
           const j = row.original;
           const distributed = j.deployment_mode === "distributed";
+          const disaggregated = j.deployment_mode === "disaggregated";
+          const multiNode = distributed || disaggregated;
           return (
             <span className="text-ink-1 inline-flex items-center gap-1.5">
               {j.instance_type_name}
-              {distributed && j.node_count ? (
+              {multiNode && j.node_count ? (
                 <span className="num text-ink-2">×{j.node_count}</span>
               ) : null}
               {distributed ? (
                 <span className="font-mono text-[9.5px] tracking-widemech uppercase px-1 py-0.5 border border-signal/50 text-signal bg-signal/5">
                   dist
+                </span>
+              ) : null}
+              {disaggregated ? (
+                <span className="font-mono text-[9.5px] tracking-widemech uppercase px-1 py-0.5 border border-accent/50 text-accent bg-accent/5">
+                  P/D
                 </span>
               ) : null}
             </span>

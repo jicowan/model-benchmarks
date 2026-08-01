@@ -26,8 +26,10 @@ vllm:nixl_num_kv_expired_reqs_total{model_name="q",engine="0"} 2
 vllm:external_prefix_cache_hits_total{model_name="q"} 120
 vllm:external_prefix_cache_queries_total{model_name="q"} 200
 vllm:prompt_tokens_total{model_name="q"} 5000
-vllm:prompt_tokens_by_source{model_name="q",source="local_compute"} 100
-vllm:prompt_tokens_by_source{model_name="q",source="external_kv_transfer"} 4900
+vllm:prompt_tokens_by_source_total{model_name="q",source="local_compute"} 100
+vllm:prompt_tokens_by_source_total{model_name="q",source="external_kv_transfer"} 4900
+vllm:prompt_tokens_by_source_created{model_name="q",source="external_kv_transfer"} 1785619026.5
+vllm:external_prefix_cache_hits_created{model_name="q"} 1785619026.5
 `
 
 func TestParsePDVLLMMetrics_Decode(t *testing.T) {
@@ -117,6 +119,25 @@ func TestParsePDEPPMetrics(t *testing.T) {
 	}
 	if !approx(r.poolKVUtil, 0.55) || !approx(r.poolQueueSize, 2) || !approx(r.poolReadyPods, 2) {
 		t.Errorf("pool gauges wrong: kv=%.2f q=%.0f ready=%.0f", r.poolKVUtil, r.poolQueueSize, r.poolReadyPods)
+	}
+}
+
+// The EPP emits BOTH the canonical llm_d_epp_disagg_decision_total AND the
+// deprecated llm_d_inference_scheduler_disagg_decision_total alias with
+// identical values (confirmed live). The parser must count only the canonical
+// one — else the total double-counts.
+func TestParsePDEPPMetrics_NoDoubleCountDeprecatedAlias(t *testing.T) {
+	txt := `llm_d_epp_disagg_decision_total{decision_type="decode-only"} 30
+llm_d_epp_disagg_decision_total{decision_type="prefill-decode"} 70
+llm_d_inference_scheduler_disagg_decision_total{decision_type="decode-only"} 30
+llm_d_inference_scheduler_disagg_decision_total{decision_type="prefill-decode"} 70
+`
+	r := parsePDEPPMetrics(strings.NewReader(txt))
+	if !approx(r.decisionTotal, 100) {
+		t.Errorf("decision total = %.0f, want 100 (deprecated alias must NOT double-count to 200)", r.decisionTotal)
+	}
+	if !approx(r.decisionPD, 70) {
+		t.Errorf("prefill-decode = %.0f, want 70", r.decisionPD)
 	}
 }
 
