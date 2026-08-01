@@ -200,6 +200,13 @@ export default function DistributedReport() {
                   { label: "Decode", value: `${run.decode_replicas ?? "?"} × TP=${run.decode_tp ?? "?"}` },
                   { label: "KV Connector", value: run.kv_connector ?? null },
                   { label: "KV Transfer", value: run.kv_transfer_backend ?? null },
+                  // PRD-64: per-role scheduler override (only shown when set).
+                  ...(run.prefill_max_num_batched_tokens || run.decode_max_num_batched_tokens
+                    ? [{
+                        label: "Max Batched Tokens (P/D)",
+                        value: `prefill=${run.prefill_max_num_batched_tokens ?? "shared"} · decode=${run.decode_max_num_batched_tokens ?? "shared"}`,
+                      }]
+                    : []),
                 ]
               : [
                   { label: "Tensor Parallel", value: run.tensor_parallel_degree },

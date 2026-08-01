@@ -93,18 +93,35 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	}
 
 	// ServeArgs = model positional + static tuning flags. The per-role TP,
-	// port, and KV-transfer config are appended by the template.
-	_, serveArgs := rt.BuildArgs(runtime.ContainerParams{
-		ModelHfID:           cfg.Request.ModelHfID,
-		ModelS3URI:          modelS3URI,
-		UseRunaiStreamer:    useRunai,
-		MaxModelLen:         cfg.Request.MaxModelLen,
-		MaxNumBatchedTokens: cfg.Request.MaxNumBatchedTokens,
-		KVCacheDtype:        cfg.Request.KVCacheDtype,
-		Quantization:        derefStr(cfg.Request.Quantization),
-		StreamerConcurrency: cfg.Request.StreamerConcurrency,
-		AcceleratorName:     cfg.InstanceType.AcceleratorName,
-	})
+	// port, and KV-transfer config are appended by the template. All the
+	// model-identity knobs (MaxModelLen, KVCacheDtype, Quantization) are shared
+	// across roles — only MaxNumBatchedTokens (the scheduler knob) may differ
+	// per role (PRD-64). buildServeArgs holds everything but that one knob fixed.
+	buildServeArgs := func(maxNumBatchedTokens int) []string {
+		_, args := rt.BuildArgs(runtime.ContainerParams{
+			ModelHfID:           cfg.Request.ModelHfID,
+			ModelS3URI:          modelS3URI,
+			UseRunaiStreamer:    useRunai,
+			MaxModelLen:         cfg.Request.MaxModelLen,
+			MaxNumBatchedTokens: maxNumBatchedTokens,
+			KVCacheDtype:        cfg.Request.KVCacheDtype,
+			Quantization:        derefStr(cfg.Request.Quantization),
+			StreamerConcurrency: cfg.Request.StreamerConcurrency,
+			AcceleratorName:     cfg.InstanceType.AcceleratorName,
+		})
+		return args
+	}
+	// Shared arg set (the default). Per-role sets are built ONLY when a role
+	// override is set — otherwise they stay nil and the template falls back to
+	// the shared set, keeping the render byte-identical to pre-PRD-64.
+	serveArgs := buildServeArgs(cfg.Request.MaxNumBatchedTokens)
+	var prefillServeArgs, decodeServeArgs []string
+	if cfg.PrefillMaxNumBatchedTokens > 0 {
+		prefillServeArgs = buildServeArgs(cfg.PrefillMaxNumBatchedTokens)
+	}
+	if cfg.DecodeMaxNumBatchedTokens > 0 {
+		decodeServeArgs = buildServeArgs(cfg.DecodeMaxNumBatchedTokens)
+	}
 
 	var modelServiceAccount string
 	if useRunai {
@@ -126,6 +143,8 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		Namespace:           ns,
 		Image:               image,
 		ServeArgs:           serveArgs,
+		PrefillServeArgs:    prefillServeArgs,
+		DecodeServeArgs:     decodeServeArgs,
 		ContainerName:       rt.ContainerName(),
 		ModelHfID:           cfg.Request.ModelHfID,
 		ModelLabel:          modelLabelValue(cfg.Request.ModelHfID),

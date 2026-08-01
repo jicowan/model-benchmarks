@@ -210,3 +210,51 @@ func TestRenderLLMDDisaggregated_SeparateNodes(t *testing.T) {
 		t.Errorf("both roles need podAntiAffinity for separate nodes, got %d", n)
 	}
 }
+
+// TestRenderLLMDDisaggregated_PerRoleSchedulerOverride (PRD-64): when per-role
+// ServeArgs are set, the prefill and decode Deployments emit DIFFERENT
+// --max-num-batched-tokens, while model-identity flags stay identical.
+func TestRenderLLMDDisaggregated_PerRoleSchedulerOverride(t *testing.T) {
+	p := sampleDisaggParams()
+	// Shared/default args (what BuildArgs would emit) + per-role overrides that
+	// differ only in --max-num-batched-tokens.
+	base := []string{"Qwen/Qwen2.5-1.5B-Instruct", "--trust-remote-code", "--max-model-len", "4096"}
+	p.ServeArgs = append(append([]string{}, base...), "--max-num-batched-tokens", "2048")
+	p.PrefillServeArgs = append(append([]string{}, base...), "--max-num-batched-tokens", "16384")
+	p.DecodeServeArgs = append(append([]string{}, base...), "--max-num-batched-tokens", "2048")
+
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"--max-num-batched-tokens"`) {
+		t.Fatal("expected the flag rendered")
+	}
+	// Both per-role values must appear (16384 prefill, 2048 decode).
+	if !strings.Contains(out, `"16384"`) || !strings.Contains(out, `"2048"`) {
+		t.Errorf("expected both per-role batched-token values (16384 prefill, 2048 decode)")
+	}
+	// Model-identity flag identical across roles → appears for both (2x).
+	if n := strings.Count(out, `"--max-model-len"`); n != 2 {
+		t.Errorf("--max-model-len should appear once per role (2), got %d", n)
+	}
+}
+
+// Regression: with NO per-role override, the render falls back to the shared
+// ServeArgs for both roles — byte-identical to pre-PRD-64 output.
+func TestRenderLLMDDisaggregated_NoOverrideFallsBackToShared(t *testing.T) {
+	shared := sampleDisaggParams()
+	shared.ServeArgs = []string{"Qwen/Qwen2.5-1.5B-Instruct", "--trust-remote-code", "--max-num-batched-tokens", "2048"}
+	// PrefillServeArgs / DecodeServeArgs left nil.
+	withNil, err := RenderLLMDDisaggregated(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both roles get 2048; no other batched-token value present.
+	if n := strings.Count(withNil, `"--max-num-batched-tokens"`); n != 2 {
+		t.Errorf("shared arg should render for both roles (2), got %d", n)
+	}
+	if strings.Contains(withNil, `"16384"`) {
+		t.Error("no per-role override set → no divergent value should appear")
+	}
+}

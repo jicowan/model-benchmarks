@@ -134,3 +134,40 @@ func TestCreateRun_Disaggregated_PersistsTopology(t *testing.T) {
 		t.Errorf("kv_transfer_backend should be tcp for tcp network mode: %v", got.KVTransferBackend)
 	}
 }
+
+// TestCreateRun_Disaggregated_PerRoleScheduler (PRD-64): per-role
+// max_num_batched_tokens overrides validate + persist; unset stays NULL.
+func TestCreateRun_Disaggregated_PerRoleScheduler(t *testing.T) {
+	repo := database.NewMockRepo()
+	repo.SeedModel(&database.Model{ID: "m-70b", HfID: "meta-llama/Llama-3.1-70B", HfRevision: "main"})
+	repo.SeedInstanceType(&database.InstanceType{
+		ID: "inst-p5", Name: "p5.48xlarge", Family: "p5",
+		AcceleratorType: "gpu", AcceleratorName: "H100",
+		AcceleratorCount: 8, AcceleratorMemoryGiB: 640, VCPUs: 192, MemoryGiB: 2048,
+	})
+	srv := NewServer(repo, fake.NewSimpleClientset(), "test-pod")
+
+	r := validDisaggregatedReq()
+	r.PrefillMaxNumBatchedTokens = 16384
+	r.DecodeMaxNumBatchedTokens = 2048
+	runID, err := srv.CreateRun(context.Background(), ptrReq(r))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	got, _ := repo.GetBenchmarkRun(context.Background(), runID)
+	if got.PrefillMaxNumBatchedTokens == nil || *got.PrefillMaxNumBatchedTokens != 16384 {
+		t.Errorf("prefill override not persisted: %v", got.PrefillMaxNumBatchedTokens)
+	}
+	if got.DecodeMaxNumBatchedTokens == nil || *got.DecodeMaxNumBatchedTokens != 2048 {
+		t.Errorf("decode override not persisted: %v", got.DecodeMaxNumBatchedTokens)
+	}
+
+	// Unset → NULL (today's behavior).
+	r2 := validDisaggregatedReq()
+	id2, _ := srv.CreateRun(context.Background(), ptrReq(r2))
+	got2, _ := repo.GetBenchmarkRun(context.Background(), id2)
+	if got2.PrefillMaxNumBatchedTokens != nil || got2.DecodeMaxNumBatchedTokens != nil {
+		t.Errorf("unset per-role scheduler should be NULL, got %v/%v",
+			got2.PrefillMaxNumBatchedTokens, got2.DecodeMaxNumBatchedTokens)
+	}
+}

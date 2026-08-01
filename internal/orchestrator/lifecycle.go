@@ -85,6 +85,11 @@ type RunConfig struct {
 	PrefillTP       int
 	DecodeReplicas  int
 	DecodeTP        int
+	// PRD-64: optional per-role scheduler override (0 ⇒ inherit the shared
+	// Request.MaxNumBatchedTokens). Prefill compute-bound wants a larger budget;
+	// decode memory-bound. Only consulted for disaggregated runs.
+	PrefillMaxNumBatchedTokens int
+	DecodeMaxNumBatchedTokens  int
 }
 
 // Deployment sub-modes (PRD-57/58). Request.DeploymentMode carries these.

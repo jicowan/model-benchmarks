@@ -39,6 +39,14 @@ export default function Distributed() {
     prefill_tp: 1,
     decode_replicas: 1,
     decode_tp: 1,
+    // PRD-64: shared vLLM runtime knobs (both modes). 0/"" = vLLM default.
+    max_model_len: 0,
+    max_num_batched_tokens: 0,
+    kv_cache_dtype: "" as "" | "auto" | "fp8",
+    quantization: "" as "" | "fp16" | "int8" | "int4",
+    // PRD-64: optional per-role scheduler override (D/P only). 0 = inherit shared.
+    prefill_max_num_batched_tokens: 0,
+    decode_max_num_batched_tokens: 0,
   });
 
   useEffect(() => {
@@ -92,6 +100,12 @@ export default function Distributed() {
       run_type: "on_demand",
       hf_token: form.hf_token || undefined,
       network_mode: form.network_mode,
+      // PRD-64: shared vLLM runtime knobs (both modes). Omit at 0/"" so vLLM
+      // defaults apply — keeps a run that sets nothing byte-identical to before.
+      max_model_len: form.max_model_len || undefined,
+      max_num_batched_tokens: form.max_num_batched_tokens || undefined,
+      kv_cache_dtype: form.kv_cache_dtype || undefined,
+      quantization: form.quantization || undefined,
     };
 
     let req: RunRequest;
@@ -111,6 +125,9 @@ export default function Distributed() {
         prefill_tp: pTP,
         decode_replicas: form.decode_replicas,
         decode_tp: dTP,
+        // PRD-64: per-role scheduler override (0 ⇒ inherit shared).
+        prefill_max_num_batched_tokens: form.prefill_max_num_batched_tokens || undefined,
+        decode_max_num_batched_tokens: form.decode_max_num_batched_tokens || undefined,
       };
     } else {
       if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
@@ -285,6 +302,18 @@ export default function Distributed() {
                     onChange={(e) => set("prefill_tp", Math.max(1, Number(e.target.value) || 1))}
                   />
                 </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Max batched tokens</span>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="shared"
+                    className="input w-full"
+                    value={form.prefill_max_num_batched_tokens || ""}
+                    onChange={(e) => set("prefill_max_num_batched_tokens", Math.max(0, Number(e.target.value) || 0))}
+                  />
+                  <span className="font-mono text-[9.5px] text-ink-2">blank = shared · larger favors prefill (compute-bound)</span>
+                </label>
               </div>
               <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
                 <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">Decode</div>
@@ -309,8 +338,20 @@ export default function Distributed() {
                     onChange={(e) => set("decode_tp", Math.max(1, Number(e.target.value) || 1))}
                   />
                 </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10.5px] text-ink-2 uppercase">Max batched tokens</span>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="shared"
+                    className="input w-full"
+                    value={form.decode_max_num_batched_tokens || ""}
+                    onChange={(e) => set("decode_max_num_batched_tokens", Math.max(0, Number(e.target.value) || 0))}
+                  />
+                  <span className="font-mono text-[9.5px] text-ink-2">blank = shared · decode is memory-bound</span>
+                </label>
               </div>
-            </div>
+            </div>{/* END prefill/decode role boxes */}
 
             {/* KV connector (fixed) + guidance */}
             <div className="font-mono text-[10.5px] text-ink-2">
@@ -333,6 +374,69 @@ export default function Distributed() {
             </div>
           </>
         )}
+
+        {/* PRD-64: shared vLLM model runtime parameters (both modes). These
+            already flow through BuildArgs into the rendered pods; blank/default
+            = vLLM default. In D/P they apply to BOTH roles (model-identity knobs
+            must match across prefill+decode); the per-role Max-batched-tokens
+            override above is the only knob that may differ by role. */}
+        <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
+          <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">Model runtime parameters</div>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10.5px] text-ink-2 uppercase">Max model len</span>
+              <input
+                type="number"
+                min={0}
+                placeholder="auto"
+                className="input w-full"
+                value={form.max_model_len || ""}
+                onChange={(e) => set("max_model_len", Math.max(0, Number(e.target.value) || 0))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10.5px] text-ink-2 uppercase">
+                Max batched tokens{mode === "disaggregated" ? " (shared)" : ""}
+              </span>
+              <input
+                type="number"
+                min={0}
+                placeholder="vLLM default"
+                className="input w-full"
+                value={form.max_num_batched_tokens || ""}
+                onChange={(e) => set("max_num_batched_tokens", Math.max(0, Number(e.target.value) || 0))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10.5px] text-ink-2 uppercase">KV cache dtype</span>
+              <select
+                className="input w-full"
+                value={form.kv_cache_dtype}
+                onChange={(e) => set("kv_cache_dtype", e.target.value as "" | "auto" | "fp8")}
+              >
+                <option value="">auto</option>
+                <option value="fp8">fp8</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10.5px] text-ink-2 uppercase">Quantization</span>
+              <select
+                className="input w-full"
+                value={form.quantization}
+                onChange={(e) => set("quantization", e.target.value as "" | "fp16" | "int8" | "int4")}
+              >
+                <option value="">none</option>
+                <option value="fp16">fp16</option>
+                <option value="int8">int8</option>
+                <option value="int4">int4</option>
+              </select>
+            </label>
+          </div>
+          <span className="font-mono text-[9.5px] text-ink-2">
+            Manual knobs — the recommender/estimator is single-node-only for now (not offered for distributed runs).
+            {mode === "disaggregated" ? " Model-identity knobs apply identically to prefill + decode." : ""}
+          </span>
+        </div>
 
         {/* Scenario + load knobs */}
         <div className="grid grid-cols-2 gap-4">

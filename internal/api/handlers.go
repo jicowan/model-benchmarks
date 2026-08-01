@@ -547,6 +547,7 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	var nodeCountPtr, ppPtr *int
 	var prefillReplicasPtr, prefillTPPtr, prefillPPPtr *int
 	var decodeReplicasPtr, decodeTPPtr, decodePPPtr *int
+	var prefillMaxNBTPtr, decodeMaxNBTPtr *int // PRD-64 per-role scheduler override
 	var kvConnectorPtr, kvBackendPtr *string
 	if req.DeploymentMode == "disaggregated" {
 		if req.Framework != "llm-d" {
@@ -627,6 +628,20 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			kvb = "tcp"
 		}
 		kvBackendPtr = &kvb
+		// PRD-64: optional per-role scheduler override. Positive when set; null
+		// (0) ⇒ role inherits the shared max_num_batched_tokens. Bound matches
+		// the shared knob (> 0).
+		if req.PrefillMaxNumBatchedTokens < 0 || req.DecodeMaxNumBatchedTokens < 0 {
+			return "", &createRunError{http.StatusBadRequest, "per-role max_num_batched_tokens must be positive"}
+		}
+		if req.PrefillMaxNumBatchedTokens > 0 {
+			v := req.PrefillMaxNumBatchedTokens
+			prefillMaxNBTPtr = &v
+		}
+		if req.DecodeMaxNumBatchedTokens > 0 {
+			v := req.DecodeMaxNumBatchedTokens
+			decodeMaxNBTPtr = &v
+		}
 	} else if req.DeploymentMode == "distributed" {
 		if req.Framework != "llm-d" {
 			return "", &createRunError{http.StatusBadRequest, "distributed runs require framework=llm-d"}
@@ -709,6 +724,8 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		DecodePP:               decodePPPtr,
 		KVConnector:            kvConnectorPtr,
 		KVTransferBackend:      kvBackendPtr,
+		PrefillMaxNumBatchedTokens: prefillMaxNBTPtr,
+		DecodeMaxNumBatchedTokens:  decodeMaxNBTPtr,
 		Status:                 "pending",
 	}
 
@@ -745,6 +762,9 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			cfg.PrefillTP = req.PrefillTP
 			cfg.DecodeReplicas = req.DecodeReplicas
 			cfg.DecodeTP = req.DecodeTP
+			// PRD-64: per-role scheduler override (0 ⇒ inherit shared).
+			cfg.PrefillMaxNumBatchedTokens = req.PrefillMaxNumBatchedTokens
+			cfg.DecodeMaxNumBatchedTokens = req.DecodeMaxNumBatchedTokens
 		}
 		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)

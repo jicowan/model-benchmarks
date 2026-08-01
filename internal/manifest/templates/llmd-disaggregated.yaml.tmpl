@@ -487,7 +487,14 @@ spec:
             image: {{ $p.Image }}
             command: ["vllm", "serve"]
             args:
-{{- range $p.ServeArgs }}
+{{- /* PRD-64: use the per-role arg set when provided, else the shared
+       ServeArgs (byte-identical to pre-PRD-64 when no per-role override).
+       PRD-63 note: when a "both" role is added, give it a BothServeArgs field
+       and an `else if eq $role "both"` branch here — the fallback pattern
+       extends cleanly. */ -}}
+{{- $serveArgs := $p.ServeArgs }}
+{{- if eq $role "prefill" }}{{ if $p.PrefillServeArgs }}{{ $serveArgs = $p.PrefillServeArgs }}{{ end }}{{ else if eq $role "decode" }}{{ if $p.DecodeServeArgs }}{{ $serveArgs = $p.DecodeServeArgs }}{{ end }}{{ end }}
+{{- range $serveArgs }}
               - {{ . | yamlQuote }}
 {{- end }}
               - "--tensor-parallel-size={{ if eq $role "prefill" }}{{ $p.PrefillTP }}{{ else }}{{ $p.DecodeTP }}{{ end }}"

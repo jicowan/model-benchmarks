@@ -241,7 +241,14 @@ type LLMDDisaggregatedParams struct {
 	// template). ModelLabel is a DNS-safe form of the model id used for the
 	// InferencePool selector (llm-d.ai/model).
 	Image         string
-	ServeArgs     []string
+	// ServeArgs is the shared/default arg set. PrefillServeArgs / DecodeServeArgs
+	// (PRD-64) are the per-role arg sets — identical to ServeArgs except the
+	// scheduler knob (--max-num-batched-tokens) may differ per role. When the
+	// per-role sets are empty the template falls back to ServeArgs, so a run
+	// with no per-role override renders byte-identically to pre-PRD-64.
+	ServeArgs        []string
+	PrefillServeArgs []string
+	DecodeServeArgs  []string
 	ContainerName string
 	ModelHfID     string
 	ModelLabel    string

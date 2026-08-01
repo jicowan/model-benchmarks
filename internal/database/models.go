@@ -58,6 +58,11 @@ type BenchmarkRun struct {
 	DecodePP          *int    `json:"decode_pp,omitempty"`
 	KVConnector       *string `json:"kv_connector,omitempty"`
 	KVTransferBackend *string `json:"kv_transfer_backend,omitempty"`
+	// PRD-64: per-role scheduler override (D/P only). Null ⇒ that role uses the
+	// shared MaxNumBatchedTokens (below). Prefill wants a large batched-token
+	// budget (compute-bound); decode less so (memory-bound).
+	PrefillMaxNumBatchedTokens *int `json:"prefill_max_num_batched_tokens,omitempty"`
+	DecodeMaxNumBatchedTokens  *int `json:"decode_max_num_batched_tokens,omitempty"`
 	Quantization          *string    `json:"quantization,omitempty"`
 	Concurrency           int        `json:"concurrency"`
 	InputSequenceLength   int        `json:"input_sequence_length"`
@@ -286,6 +291,10 @@ type RunRequest struct {
 	DecodeReplicas  int `json:"decode_replicas,omitempty"`
 	DecodeTP        int `json:"decode_tp,omitempty"`
 	DecodePP        int `json:"decode_pp,omitempty"`
+	// PRD-64: optional per-role scheduler override (D/P only). 0 ⇒ inherit the
+	// shared MaxNumBatchedTokens.
+	PrefillMaxNumBatchedTokens int `json:"prefill_max_num_batched_tokens,omitempty"`
+	DecodeMaxNumBatchedTokens  int `json:"decode_max_num_batched_tokens,omitempty"`
 }
 
 // TestSuiteRun represents a test suite execution.
