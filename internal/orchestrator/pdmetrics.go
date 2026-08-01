@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/accelbench/accelbench/internal/manifest"
 )
 
 // PRD-62: prefill/decode + KV-transfer + EPP routing metrics. This file is the
@@ -466,9 +468,12 @@ func (p *PDScraper) Stop() *PDMetrics {
 	// e.g. 2 decode pods contribute additively). agg sums histogram sum/count
 	// (→ group mean), additive counters (bytes/failures), and window-deltas
 	// (external-cache hits/queries) across every pod in the role.
-	// PRD-63: "both" pods prefill AND decode locally, so they feed both groups.
-	prefillAgg := p.aggregateRole("prefill", "both")
-	decodeAgg := p.aggregateRole("decode", "both")
+	// PRD-63: "both" (prefill-decode) pods prefill AND decode locally, so they
+	// feed both groups. The observed pod label is the canonical wire value
+	// (manifest.PDBothRoleLabel = "prefill-decode"); the legacy "both" alias is
+	// matched too in case an operator points us at an older EPP/pool.
+	prefillAgg := p.aggregateRole("prefill", manifest.PDBothRoleLabel, "both")
+	decodeAgg := p.aggregateRole("decode", manifest.PDBothRoleLabel, "both")
 
 	// Phase-time group means (seconds → ms). Prefill time comes from prefill
 	// pods; fall back to decode pods if only they reported it.
@@ -588,10 +593,11 @@ func rateOverWindow(firstHits, lastHits, firstQ, lastQ float64) (float64, bool) 
 
 // pdVLLMTargetURL builds the /metrics URL for a role's vLLM: prefill serves on
 // :8000, decode's vLLM is on :8200 (the sidecar occupies :8000). The PRD-63
-// "both" role carries the same sidecar, so its vLLM is on :8200 too.
+// co-located pool (wire role "prefill-decode", legacy alias "both") carries the
+// same sidecar, so its vLLM is on :8200 too.
 func pdVLLMTargetURL(podIP, role string) string {
 	port := 8000
-	if role == "decode" || role == "both" {
+	if role == "decode" || role == manifest.PDBothRoleLabel || role == "both" {
 		port = 8200
 	}
 	return fmt.Sprintf("http://%s:%d/metrics", podIP, port)

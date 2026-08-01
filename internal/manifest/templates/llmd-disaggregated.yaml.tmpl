@@ -153,19 +153,24 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/component: model-server
-    llm-d.ai/role: both
+    # PRD-63: the llm-d.ai/role WIRE VALUE is the canonical "prefill-decode"
+    # (the EPP filters key on it); "both" is a deprecated alias in
+    # llm-d-inference-scheduler. Our internal role key / object-name suffix
+    # stays "-both" (short); only this label value is prefill-decode. Kept in
+    # sync with manifest.PDBothRoleLabel by TestBothRoleLabelMatchesConst.
+    llm-d.ai/role: prefill-decode
 spec:
   replicas: {{ .BothReplicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ .Name }}
-      llm-d.ai/role: both
+      llm-d.ai/role: prefill-decode
   template:
     metadata:
       labels:
         app.kubernetes.io/name: {{ .Name }}
         app.kubernetes.io/component: model-server
-        llm-d.ai/role: both
+        llm-d.ai/role: prefill-decode
         llm-d.ai/inference-serving: "true"
         llm-d.ai/model: {{ .ModelLabel }}
     spec:
@@ -224,7 +229,7 @@ spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: {{ .Name }}
-    llm-d.ai/role: both
+    llm-d.ai/role: prefill-decode   # PRD-63: canonical "both" wire value
   ports:
     - name: http
       port: 8000        # sidecar entrypoint on the both pod
@@ -281,6 +286,25 @@ data:
     - type: queue-scorer
     - type: prefill-filter
     - type: decode-filter
+{{- if gt .BothReplicas 0 }}
+    # PRD-63: when a co-located "both" (prefill-decode) pool is present, the
+    # remote-prefill leg must target ONLY dedicated prefill pods. The stock
+    # prefill-filter admits prefill AND prefill-decode/both (roles.go @ v0.9.0),
+    # so it could pick a both pod as its own remote prefiller → an illegal NIXL
+    # self-transfer (the disagg-profile-handler has no anti-self-routing). This
+    # label-selector-filter admits only the literal "prefill" role; the prefill
+    # profile below refs it instead of prefill-filter. decode-filter is left
+    # untouched so both pods still serve the decode/local path. (A both-only
+    # pool then has zero prefill candidates → never disaggregates → serves
+    # everything locally, which is the intended co-located-with-EPP semantics.)
+    - type: label-selector-filter
+      name: prefill-only-filter
+      parameters:
+        matchExpressions:
+        - key: llm-d.ai/role
+          operator: In
+          values: ["prefill"]
+{{- end }}
     - type: max-score-picker
     - type: prefix-based-pd-decider
       parameters:
@@ -292,7 +316,7 @@ data:
     schedulingProfiles:
     - name: prefill
       plugins:
-      - pluginRef: prefill-filter
+      - pluginRef: {{ if gt .BothReplicas 0 }}prefill-only-filter{{ else }}prefill-filter{{ end }}
       - pluginRef: max-score-picker
       - pluginRef: prefix-cache-scorer
         weight: 2
@@ -530,7 +554,7 @@ spec:
               - labelSelector:
                   matchLabels:
                     app.kubernetes.io/name: {{ $p.Name }}
-                    llm-d.ai/role: {{ if eq $role "prefill" }}decode{{ else if eq $role "decode" }}prefill{{ else }}both{{ end }}
+                    llm-d.ai/role: {{ if eq $role "prefill" }}decode{{ else if eq $role "decode" }}prefill{{ else }}prefill-decode{{ end }}
                 topologyKey: kubernetes.io/hostname
         tolerations:
           - key: {{ $p.MultiNodeTaintKey }}

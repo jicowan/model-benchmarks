@@ -255,11 +255,17 @@ func TestRenderLLMDDisaggregated_BothRole(t *testing.T) {
 	for _, want := range []string{
 		"name: bench-abc12345-both\n",
 		"name: bench-abc12345-both-devices",
-		"llm-d.ai/role: both",
+		// PRD-63: the wire role value is the canonical "prefill-decode", not the
+		// deprecated "both" alias (object names still use -both).
+		"llm-d.ai/role: prefill-decode",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("both role missing %q", want)
 		}
+	}
+	// The deprecated bare "both" role value must NOT be emitted.
+	if strings.Contains(out, "llm-d.ai/role: both\n") {
+		t.Error("should render canonical prefill-decode, not the deprecated both alias")
 	}
 	// 4 Deployments now (prefill, decode, both, EPP).
 	if n := strings.Count(out, "kind: Deployment"); n != 4 {
@@ -296,14 +302,16 @@ func TestRenderLLMDDisaggregated_BothOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No prefill/decode role objects.
+	// No prefill/decode role objects. (Use newline-terminated role values so
+	// "llm-d.ai/role: prefill\n" doesn't spuriously match the both pod's
+	// "llm-d.ai/role: prefill-decode\n".)
 	for _, notWant := range []string{
 		"name: bench-abc12345-prefill\n",
 		"name: bench-abc12345-decode\n",
 		"name: bench-abc12345-prefill-devices",
 		"name: bench-abc12345-decode-devices",
-		"llm-d.ai/role: prefill",
-		"llm-d.ai/role: decode",
+		"llm-d.ai/role: prefill\n",
+		"llm-d.ai/role: decode\n",
 	} {
 		if strings.Contains(out, notWant) {
 			t.Errorf("both-only run should NOT render %q", notWant)
@@ -326,8 +334,47 @@ func TestRenderLLMDDisaggregated_BothOnly(t *testing.T) {
 		}
 	}
 	// both anti-affines against its OWN role (spread across nodes), not prefill/decode.
-	if !strings.Contains(out, "llm-d.ai/role: both\n                topologyKey: kubernetes.io/hostname") {
-		t.Error("both should self-anti-affine (role: both in the podAntiAffinity selector)")
+	if !strings.Contains(out, "llm-d.ai/role: prefill-decode\n                topologyKey: kubernetes.io/hostname") {
+		t.Error("both should self-anti-affine (role: prefill-decode in the podAntiAffinity selector)")
+	}
+	// PRD-63 fix: a both pool present → the prefill profile uses the
+	// prefill-only-filter (dedicated prefill pods only), NOT the stock
+	// prefill-filter which would admit the both pod and self-route.
+	if !strings.Contains(out, "prefill-only-filter") {
+		t.Error("both pool present should emit the prefill-only-filter (anti-self-route)")
+	}
+}
+
+// TestBothRoleLabelMatchesConst (PRD-63): the wire value the template emits for
+// the both pool must equal manifest.PDBothRoleLabel — the orchestrator's PD
+// scraper matches observed pod labels against that constant, so drift would
+// silently drop the both pod's metrics.
+func TestBothRoleLabelMatchesConst(t *testing.T) {
+	p := sampleDisaggParams()
+	p.BothReplicas = 1
+	p.BothTP = 1
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "llm-d.ai/role: "+PDBothRoleLabel+"\n") {
+		t.Errorf("template both role value must match PDBothRoleLabel (%q)", PDBothRoleLabel)
+	}
+}
+
+// TestRenderLLMDDisaggregated_NoPrefillOnlyFilterWithoutBoth (PRD-63): a plain
+// PD run (no both pool) keeps the stock prefill-filter — the anti-self-route
+// filter swap only applies when a both pool is present.
+func TestRenderLLMDDisaggregated_NoPrefillOnlyFilterWithoutBoth(t *testing.T) {
+	out, err := RenderLLMDDisaggregated(sampleDisaggParams()) // BothReplicas 0
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "prefill-only-filter") {
+		t.Error("PD-only run must not emit the prefill-only-filter")
+	}
+	if !strings.Contains(out, "pluginRef: prefill-filter") {
+		t.Error("PD-only run should keep the stock prefill-filter ref")
 	}
 }
 

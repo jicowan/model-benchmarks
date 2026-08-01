@@ -11,6 +11,16 @@ import (
 //go:embed templates/*.yaml.tmpl
 var templateFS embed.FS
 
+// PDBothRoleLabel is the canonical llm-d.ai/role WIRE VALUE the template emits
+// for the co-located "both" pool (PRD-63). llm-d-inference-scheduler v0.9.0
+// documents "both" as a deprecated alias of "prefill-decode" (roles.go), so we
+// render the canonical value to survive a future EPP dropping the alias. The
+// orchestrator's PD metric scraper matches pod labels against this same
+// constant; the template hardcodes the literal and TestBothRoleLabelMatchesConst
+// guards the two from drifting. (Our INTERNAL role key + object-name suffix stay
+// "both" — this constant is only the rendered/observed label value.)
+const PDBothRoleLabel = "prefill-decode"
+
 var templates *template.Template
 
 func init() {
