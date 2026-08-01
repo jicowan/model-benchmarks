@@ -334,12 +334,13 @@ export default function DistributedReport() {
                   <MetricCard label="Prefill Time (srv)" value={metrics.prefill_time_server_avg_ms} unit="ms" precision={0} />
                   <MetricCard label="Decode Time (srv)" value={metrics.decode_time_server_avg_ms} unit="ms" precision={0} />
                   <MetricCard label="Ext. Prefix Hit" value={metrics.external_prefix_cache_hit_rate} unit="%" precision={1} />
-                  <MetricCard label="Pool KV Util" value={metrics.pool_kv_cache_util_pct} unit="%" precision={0} />
+                  <MetricCard label="Pool KV Util (avg)" value={metrics.pool_kv_cache_util_pct} unit="%" precision={0} />
                   <MetricCard label="Pool Queue (avg)" value={metrics.pool_queue_size_avg} unit="req" precision={1} />
                 </div>
                 <p className="mt-2 caption">
                   PD Engaged = share of requests the EPP routed prefill→decode (vs. served decode-only locally).
-                  KV Transfer is the NIXL prefill→decode hand-off cost. Empty cells = metric not emitted
+                  KV Transfer is the NIXL prefill→decode hand-off cost. Pool gauges are averaged over
+                  serving scrapes (idle warmup/teardown excluded). Empty cells = metric not emitted
                   (e.g. NIXL &lt; 0.7.1 or EPP metrics unavailable).
                 </p>
               </section>

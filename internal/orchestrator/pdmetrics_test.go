@@ -161,3 +161,77 @@ func TestParsePDEPPMetrics_Empty(t *testing.T) {
 		t.Errorf("empty EPP scrape should be all -1, got %+v", r)
 	}
 }
+
+// TestActiveAverage_ExcludesIdleTail: the pool-gauge reduction must average only
+// over scrapes where the pool was serving (>0), so warmup + post-loadgen idle
+// zero-readings don't drag it toward 0 (the "pool KV util shows 0%" bug). And an
+// all-idle series yields not-ok → NULL, not a false 0.
+func TestActiveAverage_ExcludesIdleTail(t *testing.T) {
+	var sum float64
+	var n int
+	// scrape sequence: 0 (warmup), 0.4, 0.6, 0.5 (serving), 0, 0 (idle tail)
+	for _, v := range []float64{0, 0.4, 0.6, 0.5, 0, 0} {
+		accumulateActive(v, &sum, &n)
+	}
+	avg, ok := activeAverage(sum, n)
+	if !ok {
+		t.Fatal("expected an active average")
+	}
+	if !approx(avg, 0.5) { // (0.4+0.6+0.5)/3, NOT /6
+		t.Errorf("active avg = %.3f, want 0.5 (idle scrapes excluded)", avg)
+	}
+}
+
+func TestActiveAverage_AllIdleIsNull(t *testing.T) {
+	var sum float64
+	var n int
+	for _, v := range []float64{0, 0, 0} {
+		accumulateActive(v, &sum, &n)
+	}
+	if _, ok := activeAverage(sum, n); ok {
+		t.Error("all-idle series should yield not-ok (NULL), not a false 0")
+	}
+}
+
+// TestAggregateRole_MultiPod: two decode pods must AGGREGATE — bytes/failures
+// sum, transfer-time pools to a group mean, external-cache deltas sum — not
+// collapse to one pod (the multi-replica xPyD fix).
+func TestAggregateRole_MultiPod(t *testing.T) {
+	p := NewPDScraper(nil, "")
+	// pod A: 100 bytes over 2 xfers (sum 0.2s), 1 failure, ext hits 10→30 q 40→100
+	a := newPDVLLMResult()
+	a.nixlBytesSum, a.nixlBytesCount = 100, 2
+	a.nixlXferTimeSum, a.nixlXferTimeCount = 0.2, 2
+	a.nixlFailures = 1
+	a.extPrefixHits, a.extPrefixQueries = 30, 100
+	aFirst := newPDVLLMResult()
+	aFirst.extPrefixHits, aFirst.extPrefixQueries = 10, 40
+	// pod B: 300 bytes over 4 xfers (sum 0.6s), 0 failures, ext hits 0→20 q 0→60
+	b := newPDVLLMResult()
+	b.nixlBytesSum, b.nixlBytesCount = 300, 4
+	b.nixlXferTimeSum, b.nixlXferTimeCount = 0.6, 4
+	b.nixlFailures = 0
+	b.extPrefixHits, b.extPrefixQueries = 20, 60
+	bFirst := newPDVLLMResult()
+	bFirst.extPrefixHits, bFirst.extPrefixQueries = 0, 0
+
+	p.urlRole = map[string]string{"a": "decode", "b": "decode"}
+	p.first = map[string]pdVLLMResult{"a": aFirst, "b": bFirst}
+	p.last = map[string]pdVLLMResult{"a": a, "b": b}
+
+	agg := p.aggregateRole("decode")
+	if !approx(agg.nixlBytesSum, 400) { // 100+300
+		t.Errorf("bytes sum = %.0f, want 400", agg.nixlBytesSum)
+	}
+	if !approx(agg.nixlFailures, 1) { // 1+0
+		t.Errorf("failures = %.0f, want 1", agg.nixlFailures)
+	}
+	// pooled transfer-time mean = (0.2+0.6)/(2+4) = 0.1333s = 133.3ms
+	if v, ok := histMeanMs(agg.nixlXferTimeSum, agg.nixlXferTimeCount); !ok || !approx(v, 800.0/6.0) {
+		t.Errorf("pooled xfer mean ms = %.3f, want %.3f", v, 800.0/6.0)
+	}
+	// external cache: hit-deltas (20+20)=40 over query-deltas (60+60)=120 = 33.3%
+	if r, ok := rateOverWindow(0, agg.extPrefixHits, 0, agg.extPrefixQueries); !ok || !approx(r, 100.0/3.0) {
+		t.Errorf("pooled ext hit rate = %.3f, want %.3f", r, 100.0/3.0)
+	}
+}

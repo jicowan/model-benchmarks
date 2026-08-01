@@ -282,13 +282,25 @@ type PDScraper struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	// Per-role first/last snapshots for run-window deltas (counters) + latest
-	// histogram sums/counts (for means). Keyed by role.
-	first map[string]pdVLLMResult
-	last  map[string]pdVLLMResult
-	// EPP first/last (decision counters) + latest gauges.
+	// Per-POD first/last snapshots for run-window deltas (counters) + latest
+	// histogram sums/counts (for means). Keyed by scrape URL (unique per pod) so
+	// multi-replica xPyD (e.g. 2 decode pods) aggregates across ALL pods of a
+	// role rather than collapsing to one. Stop() groups these by role.
+	first   map[string]pdVLLMResult
+	last    map[string]pdVLLMResult
+	urlRole map[string]string // scrape URL → role, for grouping in Stop()
+	// EPP first/last (decision counters are cumulative → window delta).
 	eppFirst pdEPPResult
 	eppLast  pdEPPResult
+	// Pool-pressure gauges are point-in-time. Reporting the LAST value captured
+	// the post-loadgen idle tail (~0); a naive average over ALL scrapes is
+	// dragged toward 0 by the warmup + idle-tail readings too. So accumulate an
+	// ACTIVE average: sum/count only over scrapes where the pool was actually
+	// serving (value > 0). That's an honest "typical pressure while serving."
+	poolKVUtilSum   float64
+	poolKVUtilN     int
+	poolQueueSum    float64
+	poolQueueN      int
 }
 
 // NewPDScraper builds a PD metrics scraper. vllmTargets are (podIP,role,port)
@@ -302,6 +314,7 @@ func NewPDScraper(vllmTargets []pdScrapeTarget, eppURL string) *PDScraper {
 		done:        make(chan struct{}),
 		first:       map[string]pdVLLMResult{},
 		last:        map[string]pdVLLMResult{},
+		urlRole:     map[string]string{},
 		eppFirst:    newPDEPPResult(),
 		eppLast:     newPDEPPResult(),
 	}
@@ -335,10 +348,11 @@ func (p *PDScraper) scrape(ctx context.Context) {
 		}
 		res := parsePDVLLMMetrics(strings.NewReader(body))
 		p.mu.Lock()
-		if _, seen := p.first[t.role]; !seen {
-			p.first[t.role] = res
+		if _, seen := p.first[t.url]; !seen {
+			p.first[t.url] = res
+			p.urlRole[t.url] = t.role
 		}
-		p.last[t.role] = res
+		p.last[t.url] = res
 		p.mu.Unlock()
 	}
 	if p.eppURL != "" {
@@ -349,6 +363,11 @@ func (p *PDScraper) scrape(ctx context.Context) {
 				p.eppFirst = res
 			}
 			p.eppLast = res
+			// Pool gauges: accumulate an ACTIVE average — count a scrape only
+			// when the pool was serving (value > 0), so warmup + idle-tail
+			// zero-readings don't drag the mean toward 0.
+			accumulateActive(res.poolKVUtil, &p.poolKVUtilSum, &p.poolKVUtilN)
+			accumulateActive(res.poolQueueSize, &p.poolQueueSum, &p.poolQueueN)
 			p.mu.Unlock()
 		}
 	}
@@ -375,6 +394,53 @@ func (p *PDScraper) get(ctx context.Context, url string) (string, bool) {
 	return string(b), true
 }
 
+// aggregateRole combines every pod of a role into one pdVLLMResult:
+//   - histograms (prefill/decode/nixl_xfer time, nixl_bytes): sum the _sum and
+//     _count across pods → a group mean when divided later;
+//   - additive counters (nixl failures): sum across pods;
+//   - window-delta counters (external prefix hits/queries): sum each pod's
+//     (last-first) delta, so the fields here HOLD THE DELTA (first is 0 in the
+//     rate call). A field stays -1 (absent) if no pod of the role reported it.
+// Correct for 1 pod (the historical 1P1D case) and N pods (multi-replica xPyD).
+// Must be called with p.mu held.
+func (p *PDScraper) aggregateRole(role string) pdVLLMResult {
+	agg := newPDVLLMResult()
+	// running (sum,seen) for each accumulated field
+	add := func(dst *float64, v float64) {
+		if v < 0 {
+			return // pod didn't report this series
+		}
+		if *dst < 0 {
+			*dst = 0
+		}
+		*dst += v
+	}
+	for url, role2 := range p.urlRole {
+		if role2 != role {
+			continue
+		}
+		last := p.last[url]
+		first := p.first[url]
+		add(&agg.prefillTimeSum, last.prefillTimeSum)
+		add(&agg.prefillTimeCount, last.prefillTimeCount)
+		add(&agg.decodeTimeSum, last.decodeTimeSum)
+		add(&agg.decodeTimeCount, last.decodeTimeCount)
+		add(&agg.nixlXferTimeSum, last.nixlXferTimeSum)
+		add(&agg.nixlXferTimeCount, last.nixlXferTimeCount)
+		add(&agg.nixlBytesSum, last.nixlBytesSum)
+		add(&agg.nixlBytesCount, last.nixlBytesCount)
+		add(&agg.nixlFailures, last.nixlFailures)
+		// external cache: accumulate per-pod window delta (last - first).
+		if last.extPrefixHits >= 0 && first.extPrefixHits >= 0 {
+			add(&agg.extPrefixHits, last.extPrefixHits-first.extPrefixHits)
+		}
+		if last.extPrefixQueries >= 0 && first.extPrefixQueries >= 0 {
+			add(&agg.extPrefixQueries, last.extPrefixQueries-first.extPrefixQueries)
+		}
+	}
+	return agg
+}
+
 // Stop halts scraping and returns the run-level PD summary. Returns nil if no
 // disaggregation signal was collected at all (keeps the row clean).
 func (p *PDScraper) Stop() *PDMetrics {
@@ -388,29 +454,33 @@ func (p *PDScraper) Stop() *PDMetrics {
 	m := &PDMetrics{}
 	any := false
 
-	// Per-role: decode role carries the NIXL/external signals; prefill carries
-	// prefill_time. Fall back to whichever role reported a given series.
-	prefillLast := p.last["prefill"]
-	decodeLast := p.last["decode"]
+	// Aggregate per-pod results across ALL pods of each role (multi-replica xPyD:
+	// e.g. 2 decode pods contribute additively). agg sums histogram sum/count
+	// (→ group mean), additive counters (bytes/failures), and window-deltas
+	// (external-cache hits/queries) across every pod in the role.
+	prefillAgg := p.aggregateRole("prefill")
+	decodeAgg := p.aggregateRole("decode")
 
-	// Phase-time means (seconds → ms) from the latest histogram sum/count.
-	if v, ok := histMeanMs(prefillLast.prefillTimeSum, prefillLast.prefillTimeCount); ok {
+	// Phase-time group means (seconds → ms). Prefill time comes from prefill
+	// pods; fall back to decode pods if only they reported it.
+	if v, ok := histMeanMs(prefillAgg.prefillTimeSum, prefillAgg.prefillTimeCount); ok {
 		m.PrefillTimeAvgMs = &v
 		any = true
-	} else if v, ok := histMeanMs(decodeLast.prefillTimeSum, decodeLast.prefillTimeCount); ok {
+	} else if v, ok := histMeanMs(decodeAgg.prefillTimeSum, decodeAgg.prefillTimeCount); ok {
 		m.PrefillTimeAvgMs = &v
 		any = true
 	}
-	if v, ok := histMeanMs(decodeLast.decodeTimeSum, decodeLast.decodeTimeCount); ok {
+	if v, ok := histMeanMs(decodeAgg.decodeTimeSum, decodeAgg.decodeTimeCount); ok {
 		m.DecodeTimeAvgMs = &v
 		any = true
 	}
 
-	// KV transfer (decode side executes the pull → its NIXL series are the
-	// relevant ones; fall back to prefill if only that reported).
-	xr := decodeLast
+	// KV transfer: decode pods execute the pull → their NIXL series are the
+	// group; fall back to prefill if only that reported. Bytes/failures SUM
+	// across pods; transfer-time is a pooled mean (sum/count across pods).
+	xr := decodeAgg
 	if xr.nixlXferTimeCount < 0 {
-		xr = prefillLast
+		xr = prefillAgg
 	}
 	if v, ok := histMeanMs(xr.nixlXferTimeSum, xr.nixlXferTimeCount); ok {
 		m.KVTransferTimeAvgMs = &v
@@ -427,9 +497,9 @@ func (p *PDScraper) Stop() *PDMetrics {
 		any = true
 	}
 
-	// External prefix-cache reuse rate over the run window (decode side).
-	if r, ok := rateOverWindow(p.first["decode"].extPrefixHits, decodeLast.extPrefixHits,
-		p.first["decode"].extPrefixQueries, decodeLast.extPrefixQueries); ok {
+	// External prefix-cache reuse rate: pooled over the run window across all
+	// decode pods (Σ hit-deltas / Σ query-deltas).
+	if r, ok := rateOverWindow(0, decodeAgg.extPrefixHits, 0, decodeAgg.extPrefixQueries); ok {
 		m.ExternalPrefixCacheHitRate = &r
 		any = true
 	}
@@ -447,13 +517,16 @@ func (p *PDScraper) Stop() *PDMetrics {
 			any = true
 		}
 	}
-	if p.eppLast.poolKVUtil >= 0 {
-		v := p.eppLast.poolKVUtil * 100 // gauge is 0–1
+	// Pool gauges: report the ACTIVE average (mean over serving scrapes). If the
+	// pool never showed activity (all-zero), leave NULL rather than report 0 —
+	// a genuine "no measurable pool pressure" reads as "—" not a false 0.
+	if avg, ok := activeAverage(p.poolKVUtilSum, p.poolKVUtilN); ok {
+		v := avg * 100 // gauge is 0–1
 		m.PoolKVCacheUtilPct = &v
 		any = true
 	}
-	if p.eppLast.poolQueueSize >= 0 {
-		v := p.eppLast.poolQueueSize
+	if avg, ok := activeAverage(p.poolQueueSum, p.poolQueueN); ok {
+		v := avg
 		m.PoolQueueSizeAvg = &v
 		any = true
 	}
@@ -462,6 +535,24 @@ func (p *PDScraper) Stop() *PDMetrics {
 		return nil
 	}
 	return m
+}
+
+// accumulateActive adds v to the running (sum,count) only when v > 0 — the
+// "active-average" reduction for point-in-time pool gauges, so warmup and
+// post-loadgen idle-tail zero-readings don't drag the mean toward 0.
+func accumulateActive(v float64, sum *float64, n *int) {
+	if v > 0 {
+		*sum += v
+		*n++
+	}
+}
+
+// activeAverage returns sum/n, or (0,false) when n==0 (never active → NULL).
+func activeAverage(sum float64, n int) (float64, bool) {
+	if n == 0 {
+		return 0, false
+	}
+	return sum / float64(n), true
 }
 
 // histMeanMs returns (sum/count)*1000 as milliseconds when both are present and
