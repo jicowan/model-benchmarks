@@ -458,6 +458,40 @@ func (o *Orchestrator) llmdServingNodes(ctx context.Context, ns, name string) []
 	return nodes
 }
 
+// pdMetricsTargets resolves the PRD-62 PD-metrics scrape endpoints for a
+// disaggregated run: each role pod's vLLM /metrics (prefill on :8000, decode's
+// vLLM on :8200 behind the sidecar) and the EPP's :9090/metrics. Returns
+// (vllmTargets, eppURL). Best-effort — a missing pod just yields fewer targets;
+// the scraper degrades to NULLs. Only called for cfg.IsDisaggregated().
+func (o *Orchestrator) pdMetricsTargets(ctx context.Context, ns, name string) ([]pdScrapeTarget, string) {
+	pods, err := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", name),
+	})
+	if err != nil {
+		return nil, ""
+	}
+	var targets []pdScrapeTarget
+	var eppURL string
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodRunning || pod.Status.PodIP == "" {
+			continue
+		}
+		if pod.Labels["app.kubernetes.io/component"] == "epp" {
+			eppURL = fmt.Sprintf("http://%s:9090/metrics", pod.Status.PodIP)
+			continue
+		}
+		role := pod.Labels["llm-d.ai/role"]
+		if role == "" {
+			continue
+		}
+		targets = append(targets, pdScrapeTarget{
+			url:  pdVLLMTargetURL(pod.Status.PodIP, role),
+			role: role,
+		})
+	}
+	return targets, eppURL
+}
+
 // gatewayLoadgenTarget returns the (host, port) the loadgen should target for a
 // distributed run: the shared Envoy AI Gateway's Service by in-cluster DNS. The
 // gateway is ClusterIP; the OpenAI path is served through the HTTPRoute the

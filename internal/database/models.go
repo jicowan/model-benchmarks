@@ -170,6 +170,22 @@ type BenchmarkMetrics struct {
 	// scraper; PersistMetrics writes these into benchmark_metrics_by_shard in
 	// the same transaction. Not a column on benchmark_metrics — a child table.
 	Shards []ShardMetric `json:"shards,omitempty"`
+
+	// PRD-62: disaggregation / KV-transfer / EPP-routing run-level summaries.
+	// Non-null ONLY for disaggregated runs where the series populated (NIXL >=
+	// 0.7.1 for kv_transfer_*, a reachable EPP for disagg_*). NULL on
+	// single-instance, co-located, and historical rows.
+	KVTransferTimeAvgMs        *float64 `json:"kv_transfer_time_avg_ms,omitempty"`
+	KVTransferBytesTotal       *float64 `json:"kv_transfer_bytes_total,omitempty"`
+	KVTransferFailures         *float64 `json:"kv_transfer_failures,omitempty"`
+	PrefillTimeServerAvgMs     *float64 `json:"prefill_time_server_avg_ms,omitempty"`
+	DecodeTimeServerAvgMs      *float64 `json:"decode_time_server_avg_ms,omitempty"`
+	ExternalPrefixCacheHitRate *float64 `json:"external_prefix_cache_hit_rate,omitempty"`
+	DisaggPrefillDecodeCount   *float64 `json:"disagg_prefill_decode_count,omitempty"`
+	DisaggDecodeOnlyCount      *float64 `json:"disagg_decode_only_count,omitempty"`
+	DisaggEngagedRatePct       *float64 `json:"disagg_engaged_rate_pct,omitempty"`
+	PoolKVCacheUtilPct         *float64 `json:"pool_kv_cache_util_pct,omitempty"`
+	PoolQueueSizeAvg           *float64 `json:"pool_queue_size_avg,omitempty"`
 }
 
 // ShardMetric is one serving shard's ({node, role}) GPU telemetry for a

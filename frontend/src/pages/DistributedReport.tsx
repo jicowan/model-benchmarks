@@ -162,7 +162,11 @@ export default function DistributedReport() {
                     accent: successRate !== undefined && successRate < 99 ? "warn" : "signal",
                   },
                   { label: "Cost / 1M tok", value: per1MCost ?? undefined, unit: "$", precision: 2 },
-                  { label: "Total Cost", value: run.total_cost_usd ?? undefined, unit: "$", precision: 2 },
+                  // PRD-62: for disaggregated runs, surface the marquee signal —
+                  // how often PD actually engaged — in the hero; else total cost.
+                  disaggregated && metrics.disagg_engaged_rate_pct != null
+                    ? { label: "PD Engaged", value: metrics.disagg_engaged_rate_pct, unit: "%", precision: 0 }
+                    : { label: "Total Cost", value: run.total_cost_usd ?? undefined, unit: "$", precision: 2 },
                 ]
               : undefined
           }
@@ -314,6 +318,33 @@ export default function DistributedReport() {
               )}
             </section>
 
+            {/* E2. DISAGGREGATION / KV TRANSFER (PRD-62) — disaggregated runs
+                only, and only when the series were collected. The headline is
+                the disagg-engaged rate: did PD actually fire, and how often. */}
+            {disaggregated && hasDisaggMetrics(metrics) && (
+              <section className="mb-8">
+                <SectionHeader index="E2" label="Disaggregation / KV transfer" />
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <MetricCard label="PD Engaged" value={metrics.disagg_engaged_rate_pct} unit="%" precision={0} />
+                  <MetricCard label="Prefill→Decode reqs" value={metrics.disagg_prefill_decode_count} unit="" precision={0} />
+                  <MetricCard label="Decode-only reqs" value={metrics.disagg_decode_only_count} unit="" precision={0} />
+                  <MetricCard label="KV Transfer (avg)" value={metrics.kv_transfer_time_avg_ms} unit="ms" precision={2} />
+                  <MetricCard label="KV Bytes Moved" value={mib(metrics.kv_transfer_bytes_total)} unit="MiB" precision={1} />
+                  <MetricCard label="KV Transfer Fails" value={metrics.kv_transfer_failures} unit="" precision={0} />
+                  <MetricCard label="Prefill Time (srv)" value={metrics.prefill_time_server_avg_ms} unit="ms" precision={0} />
+                  <MetricCard label="Decode Time (srv)" value={metrics.decode_time_server_avg_ms} unit="ms" precision={0} />
+                  <MetricCard label="Ext. Prefix Hit" value={metrics.external_prefix_cache_hit_rate} unit="%" precision={1} />
+                  <MetricCard label="Pool KV Util" value={metrics.pool_kv_cache_util_pct} unit="%" precision={0} />
+                  <MetricCard label="Pool Queue (avg)" value={metrics.pool_queue_size_avg} unit="req" precision={1} />
+                </div>
+                <p className="mt-2 caption">
+                  PD Engaged = share of requests the EPP routed prefill→decode (vs. served decode-only locally).
+                  KV Transfer is the NIXL prefill→decode hand-off cost. Empty cells = metric not emitted
+                  (e.g. NIXL &lt; 0.7.1 or EPP metrics unavailable).
+                </p>
+              </section>
+            )}
+
             {/* F. REQUEST FLOW */}
             <section className="mb-8">
               <SectionHeader index="F" label="Request flow" />
@@ -358,4 +389,27 @@ export default function DistributedReport() {
 
 function fmt(n?: number | null, d = 1): string {
   return n == null ? "—" : n.toFixed(d);
+}
+
+// hasDisaggMetrics reports whether ANY PRD-62 disaggregation/KV/EPP field was
+// collected, so the section is shown only when there's something to show.
+function hasDisaggMetrics(m: BenchmarkMetrics): boolean {
+  return [
+    m.disagg_engaged_rate_pct,
+    m.disagg_prefill_decode_count,
+    m.disagg_decode_only_count,
+    m.kv_transfer_time_avg_ms,
+    m.kv_transfer_bytes_total,
+    m.kv_transfer_failures,
+    m.prefill_time_server_avg_ms,
+    m.decode_time_server_avg_ms,
+    m.external_prefix_cache_hit_rate,
+    m.pool_kv_cache_util_pct,
+    m.pool_queue_size_avg,
+  ].some((v) => v != null);
+}
+
+// mib converts a byte count to MiB for display; undefined passes through.
+function mib(bytes?: number): number | undefined {
+  return bytes == null ? undefined : bytes / (1024 * 1024);
 }

@@ -369,6 +369,21 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		log.Printf("[%s] started GPU metrics scraper", cfg.RunID[:8])
 	}
 
+	// PRD-62: for a DISAGGREGATED run, additionally scrape the per-role vLLM
+	// PD/KV counters + the EPP's disaggregation-decision metrics. Started only
+	// here (never for single-node or co-located runs), non-fatal, stopped with
+	// the GPU scraper below.
+	var pdScraper *PDScraper
+	if cfg.IsDisaggregated() {
+		vllmTargets, eppURL := o.pdMetricsTargets(ctx, ns, modelName)
+		if len(vllmTargets) > 0 || eppURL != "" {
+			pdScraper = NewPDScraper(vllmTargets, eppURL)
+			pdScraper.Start(ctx)
+			log.Printf("[%s] started PD/KV metrics scraper (%d vLLM target(s), epp=%t)",
+				cfg.RunID[:8], len(vllmTargets), eppURL != "")
+		}
+	}
+
 	// Phase 4: Launch load generator Job.
 	log.Printf("[%s] launching load generator", cfg.RunID[:8])
 	if err := o.repo.SetLoadgenStartedAt(ctx, cfg.RunID); err != nil {
@@ -377,6 +392,9 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	if err := o.launchLoadgen(ctx, ns, loadgenName, modelName, cfg); err != nil {
 		if gpuScraper != nil {
 			gpuScraper.Stop()
+		}
+		if pdScraper != nil {
+			pdScraper.Stop()
 		}
 		o.markFailed(ctx, cfg.RunID, fmt.Sprintf("launch loadgen: %v", err))
 		return fmt.Errorf("launch loadgen: %w", err)
@@ -396,6 +414,19 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 				gpuMetrics.MemoryPeakGiB, gpuMetrics.WaitingRequestsMax)
 		} else {
 			log.Printf("[%s] GPU scraper collected no samples", cfg.RunID[:8])
+		}
+	}
+
+	// PRD-62: stop the PD/KV scraper and collect the run-level disaggregation
+	// summary. Nil when nothing was collected (non-disaggregated, or the series
+	// never populated — e.g. older NIXL / unreachable EPP).
+	var pdMetrics *PDMetrics
+	if pdScraper != nil {
+		pdMetrics = pdScraper.Stop()
+		if pdMetrics != nil && pdMetrics.DisaggEngagedRatePct != nil {
+			log.Printf("[%s] PD metrics: disagg-engaged=%.0f%% kv-xfer-avg=%.2fms",
+				cfg.RunID[:8], *pdMetrics.DisaggEngagedRatePct,
+				derefF(pdMetrics.KVTransferTimeAvgMs))
 		}
 	}
 
@@ -457,6 +488,22 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		computed.TensorActivePeakPct = gpuMetrics.TensorActivePeakPct
 		computed.DRAMActiveAvgPct = gpuMetrics.DRAMActiveAvgPct
 		computed.DRAMActivePeakPct = gpuMetrics.DRAMActivePeakPct
+	}
+
+	// PRD-62: merge the run-level disaggregation summary (nil-safe; all pointers,
+	// so absent series stay NULL). Only set for disaggregated runs.
+	if pdMetrics != nil {
+		computed.KVTransferTimeAvgMs = pdMetrics.KVTransferTimeAvgMs
+		computed.KVTransferBytesTotal = pdMetrics.KVTransferBytesTotal
+		computed.KVTransferFailures = pdMetrics.KVTransferFailures
+		computed.PrefillTimeServerAvgMs = pdMetrics.PrefillTimeAvgMs
+		computed.DecodeTimeServerAvgMs = pdMetrics.DecodeTimeAvgMs
+		computed.ExternalPrefixCacheHitRate = pdMetrics.ExternalPrefixCacheHitRate
+		computed.DisaggPrefillDecodeCount = pdMetrics.DisaggPrefillDecodeCount
+		computed.DisaggDecodeOnlyCount = pdMetrics.DisaggDecodeOnlyCount
+		computed.DisaggEngagedRatePct = pdMetrics.DisaggEngagedRatePct
+		computed.PoolKVCacheUtilPct = pdMetrics.PoolKVCacheUtilPct
+		computed.PoolQueueSizeAvg = pdMetrics.PoolQueueSizeAvg
 	}
 
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {
@@ -1042,6 +1089,14 @@ func derefStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// derefF dereferences a *float64, returning 0 for nil (log/display convenience).
+func derefF(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
 }
 
 // RecoverOrphanedRuns checks for runs stuck in "running" status and attempts

@@ -392,9 +392,15 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		     sm_active_avg_pct, sm_active_peak_pct,
 		     tensor_active_avg_pct, tensor_active_peak_pct,
 		     dram_active_avg_pct, dram_active_peak_pct,
-		     accelerator_memory_total_gib)
+		     accelerator_memory_total_gib,
+		     kv_transfer_time_avg_ms, kv_transfer_bytes_total, kv_transfer_failures,
+		     prefill_time_server_avg_ms, decode_time_server_avg_ms,
+		     external_prefix_cache_hit_rate,
+		     disagg_prefill_decode_count, disagg_decode_only_count, disagg_engaged_rate_pct,
+		     pool_kv_cache_util_pct, pool_queue_size_avg)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46)
+		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,
+		         $47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57)
 		 RETURNING id`,
 		runID,
 		m.TTFTP50Ms, m.TTFTP90Ms, m.TTFTP95Ms, m.TTFTP99Ms,
@@ -415,6 +421,11 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		m.TensorActiveAvgPct, m.TensorActivePeakPct,
 		m.DRAMActiveAvgPct, m.DRAMActivePeakPct,
 		m.AcceleratorMemoryTotalGiB,
+		m.KVTransferTimeAvgMs, m.KVTransferBytesTotal, m.KVTransferFailures,
+		m.PrefillTimeServerAvgMs, m.DecodeTimeServerAvgMs,
+		m.ExternalPrefixCacheHitRate,
+		m.DisaggPrefillDecodeCount, m.DisaggDecodeOnlyCount, m.DisaggEngagedRatePct,
+		m.PoolKVCacheUtilPct, m.PoolQueueSizeAvg,
 	).Scan(&metricsID)
 	if err != nil {
 		return fmt.Errorf("insert metrics: %w", err)
@@ -570,7 +581,12 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		        sm_active_avg_pct, sm_active_peak_pct,
 		        tensor_active_avg_pct, tensor_active_peak_pct,
 		        dram_active_avg_pct, dram_active_peak_pct,
-		        accelerator_memory_total_gib
+		        accelerator_memory_total_gib,
+		        kv_transfer_time_avg_ms, kv_transfer_bytes_total, kv_transfer_failures,
+		        prefill_time_server_avg_ms, decode_time_server_avg_ms,
+		        external_prefix_cache_hit_rate,
+		        disagg_prefill_decode_count, disagg_decode_only_count, disagg_engaged_rate_pct,
+		        pool_kv_cache_util_pct, pool_queue_size_avg
 		 FROM benchmark_metrics WHERE run_id = $1`, runID,
 	).Scan(&m.ID, &m.RunID,
 		&m.TTFTP50Ms, &m.TTFTP90Ms, &m.TTFTP95Ms, &m.TTFTP99Ms,
@@ -590,7 +606,12 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		&m.SMActiveAvgPct, &m.SMActivePeakPct,
 		&m.TensorActiveAvgPct, &m.TensorActivePeakPct,
 		&m.DRAMActiveAvgPct, &m.DRAMActivePeakPct,
-		&m.AcceleratorMemoryTotalGiB)
+		&m.AcceleratorMemoryTotalGiB,
+		&m.KVTransferTimeAvgMs, &m.KVTransferBytesTotal, &m.KVTransferFailures,
+		&m.PrefillTimeServerAvgMs, &m.DecodeTimeServerAvgMs,
+		&m.ExternalPrefixCacheHitRate,
+		&m.DisaggPrefillDecodeCount, &m.DisaggDecodeOnlyCount, &m.DisaggEngagedRatePct,
+		&m.PoolKVCacheUtilPct, &m.PoolQueueSizeAvg)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

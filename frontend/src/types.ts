@@ -158,6 +158,20 @@ export interface BenchmarkMetrics {
   // PRD-59: per-node/per-role GPU breakdown for distributed runs; empty/absent
   // for single-instance runs.
   shards?: ShardMetric[];
+  // PRD-62: disaggregation / KV-transfer / EPP-routing run-level summaries.
+  // Present only on disaggregated runs where the series populated; undefined
+  // otherwise (render as "not collected").
+  kv_transfer_time_avg_ms?: number;
+  kv_transfer_bytes_total?: number;
+  kv_transfer_failures?: number;
+  prefill_time_server_avg_ms?: number;
+  decode_time_server_avg_ms?: number;
+  external_prefix_cache_hit_rate?: number;
+  disagg_prefill_decode_count?: number;
+  disagg_decode_only_count?: number;
+  disagg_engaged_rate_pct?: number;
+  pool_kv_cache_util_pct?: number;
+  pool_queue_size_avg?: number;
 }
 
 // PRD-59: one serving shard's ({node, role}) GPU telemetry (distributed runs).
