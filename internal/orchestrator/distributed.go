@@ -88,10 +88,19 @@ func (o *Orchestrator) selectMultinodePool(ctx context.Context, override string)
 		if len(name) < len("multinode-") || name[:len("multinode-")] != "multinode-" {
 			continue
 		}
+		// Auto-select considers ONLY AZ-pinned pools. A distributed/disaggregated
+		// run's cross-node traffic (NCCL all-reduce / NIXL KV transfer) must stay
+		// within one AZ — a pool with no topology.kubernetes.io/zone requirement
+		// lets Karpenter spread nodes across AZs, breaking locality and distorting
+		// latency. Such a pool is only usable via an explicit node_pool_override
+		// (e.g. a single-node smoke test); it is never auto-picked.
+		if !poolHasAZConstraint(&p) {
+			continue
+		}
 		ranked = append(ranked, poolRank{name: name, reserved: o.poolHasReservation(ctx, &p)})
 	}
 	if len(ranked) == 0 {
-		return nil, fmt.Errorf("no multinode NodePools found (is enable_multinode set in Terraform?)")
+		return nil, fmt.Errorf("no AZ-pinned multinode NodePools found (is enable_multinode set in Terraform?)")
 	}
 
 	// Reserved pools first; stable by name within each group for determinism.
@@ -108,6 +117,28 @@ func (o *Orchestrator) selectMultinodePool(ctx context.Context, override string)
 	}
 	log.Printf("[distributed] multinode pool preference order: %v", names)
 	return names, nil
+}
+
+// poolHasAZConstraint reports whether the NodePool pins its nodes to a single
+// Availability Zone — i.e. its requirements include a topology.kubernetes.io/zone
+// key. Only AZ-pinned pools are auto-select candidates (see selectMultinodePool):
+// a distributed run's cross-node fabric must stay within one AZ. A pool without
+// this requirement (a no-AZ scratch pool) is excluded from auto-select.
+func poolHasAZConstraint(pool *unstructured.Unstructured) bool {
+	reqs, found, _ := unstructured.NestedSlice(pool.Object, "spec", "template", "spec", "requirements")
+	if !found {
+		return false
+	}
+	for _, r := range reqs {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if key, _ := m["key"].(string); key == "topology.kubernetes.io/zone" {
+			return true
+		}
+	}
+	return false
 }
 
 // poolHasReservation reports whether the NodePool's referenced EC2NodeClass has

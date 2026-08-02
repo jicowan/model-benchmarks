@@ -39,7 +39,29 @@ func newFakeDyn(objs ...runtime.Object) *dynfake.FakeDynamicClient {
 	return dynfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToList, objs...)
 }
 
+// nodePoolObj builds an AZ-pinned NodePool (has a topology.kubernetes.io/zone
+// requirement) — the shape auto-select considers. Use nodePoolObjNoAZ for a
+// no-AZ scratch pool.
 func nodePoolObj(name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata":   map[string]any{"name": name},
+		"spec": map[string]any{
+			"replicas": int64(0),
+			"template": map[string]any{
+				"spec": map[string]any{
+					"requirements": []any{
+						map[string]any{"key": "topology.kubernetes.io/zone", "operator": "In", "values": []any{"us-east-2a"}},
+					},
+				},
+			},
+		},
+	}}
+}
+
+// nodePoolObjNoAZ builds a NodePool with NO AZ constraint (a scratch pool).
+func nodePoolObjNoAZ(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "karpenter.sh/v1",
 		"kind":       "NodePool",
@@ -177,6 +199,48 @@ func TestSelectMultinodePool_PrefersReserved(t *testing.T) {
 	}
 	if pools[0] != "multinode-us-east-2b" {
 		t.Errorf("reserved pool should sort first; got %v", pools)
+	}
+}
+
+// TestSelectMultinodePool_ExcludesNoAZPool: auto-select must NOT consider a
+// multinode pool that lacks an AZ constraint (a scratch pool) — it could spread
+// a run's nodes across AZs, breaking same-AZ NCCL/NIXL. Only AZ-pinned pools are
+// candidates, regardless of name / alphabetical order.
+func TestSelectMultinodePool_ExcludesNoAZPool(t *testing.T) {
+	dyn := newFakeDyn(
+		nodePoolObjNoAZ("multinode-scratch"), // no AZ requirement → must be skipped
+		nodePoolObj("multinode-us-east-2a"),
+		nodePoolObj("multinode-us-east-2b"),
+	)
+	o := New(k8sfake.NewSimpleClientset(), database.NewMockRepo(), "pod")
+	o.SetDynamicClient(dyn)
+
+	pools, err := o.selectMultinodePool(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pools {
+		if p == "multinode-scratch" {
+			t.Errorf("auto-select must exclude the no-AZ pool; got %v", pools)
+		}
+	}
+	if len(pools) != 2 {
+		t.Fatalf("expected only the 2 AZ-pinned pools, got %v", pools)
+	}
+}
+
+// TestSelectMultinodePool_NoAZPoolViaOverride: a no-AZ pool is still reachable
+// when explicitly requested (the override path bypasses auto-select entirely).
+func TestSelectMultinodePool_NoAZPoolViaOverride(t *testing.T) {
+	dyn := newFakeDyn(nodePoolObjNoAZ("multinode-scratch"), nodePoolObj("multinode-us-east-2a"))
+	o := New(k8sfake.NewSimpleClientset(), database.NewMockRepo(), "pod")
+	o.SetDynamicClient(dyn)
+	pools, err := o.selectMultinodePool(context.Background(), "multinode-scratch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pools) != 1 || pools[0] != "multinode-scratch" {
+		t.Errorf("explicit override should yield the requested pool; got %v", pools)
 	}
 }
 
