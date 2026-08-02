@@ -51,7 +51,18 @@ export default function Distributed() {
     prefill_max_num_batched_tokens: 0,
     decode_max_num_batched_tokens: 0,
     both_max_num_batched_tokens: 0,
+    // PRD-61: EPP routing config (disaggregated only). 0/"" = shipped default.
+    // pd_noncached_tokens uses -1 as the "unset" sentinel because 0 is a
+    // meaningful value (disable disaggregation) the user can deliberately pick.
+    pd_noncached_tokens: -1,
+    pd_prefix_cache_weight: 0,
+    pd_queue_scorer_weight: 0,
+    pd_max_prefix_blocks: 0,
+    pd_lru_capacity_per_server: 0,
   });
+  // PRD-61: the advanced routing panel defaults collapsed so the common path is
+  // visually unchanged.
+  const [showRouting, setShowRouting] = useState(false);
 
   useEffect(() => {
     listInstanceTypes()
@@ -152,6 +163,13 @@ export default function Distributed() {
         prefill_max_num_batched_tokens: form.prefill_max_num_batched_tokens || undefined,
         decode_max_num_batched_tokens: form.decode_max_num_batched_tokens || undefined,
         both_max_num_batched_tokens: form.both_max_num_batched_tokens || undefined,
+        // PRD-61: EPP routing config (omit at unset so the default is used).
+        // pd_noncached_tokens sentinel is -1 (unset); 0 is a real value (disable PD).
+        pd_noncached_tokens: form.pd_noncached_tokens >= 0 ? form.pd_noncached_tokens : undefined,
+        pd_prefix_cache_weight: form.pd_prefix_cache_weight || undefined,
+        pd_queue_scorer_weight: form.pd_queue_scorer_weight || undefined,
+        pd_max_prefix_blocks: form.pd_max_prefix_blocks || undefined,
+        pd_lru_capacity_per_server: form.pd_lru_capacity_per_server || undefined,
       };
     } else {
       if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
@@ -435,6 +453,109 @@ export default function Distributed() {
                 </span>
               ) : (
                 <span className="text-ink-2">Select an instance type to compute the topology.</span>
+              )}
+            </div>
+
+            {/* PRD-61: collapsible EPP routing / tuning panel. Defaults collapsed
+                so the common path is unchanged; blank inputs use the shipped
+                defaults, rendering the byte-identical EPP config. */}
+            <div className="border border-line bg-surface-1">
+              <button
+                type="button"
+                onClick={() => setShowRouting((s) => !s)}
+                className="w-full flex items-center justify-between px-3 py-2.5 font-mono text-[11px] tracking-mech uppercase text-ink-0"
+              >
+                <span>Routing / EPP tuning (advanced)</span>
+                <span className="text-ink-2">{showRouting ? "▾" : "▸"}</span>
+              </button>
+              {showRouting && (
+                <div className="px-3 pb-3 flex flex-col gap-3 border-t border-line pt-3">
+                  <div className="font-mono text-[10px] text-ink-2 leading-relaxed">
+                    Changing these redeploys the EPP for this run only — routing config is fixed for the
+                    run's lifetime (no hot reload). Leave blank to use the proven defaults. Effect is
+                    measurable on the distributed report (PD-engaged rate, KV transfer, pool pressure).
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <label className="flex flex-col gap-1">
+                      <span className="font-mono text-[10.5px] text-ink-2 uppercase">Non-cached tokens</span>
+                      <input
+                        type="number"
+                        min={-1}
+                        placeholder="default 16"
+                        className="input w-full"
+                        value={form.pd_noncached_tokens >= 0 ? form.pd_noncached_tokens : ""}
+                        onChange={(e) => set("pd_noncached_tokens", e.target.value === "" ? -1 : Math.max(0, Number(e.target.value) || 0))}
+                      />
+                      <span className="font-mono text-[9.5px] text-ink-2">
+                        disaggregate only when uncached prompt suffix ≥ N; 0 = never disaggregate. Only
+                        affects runs with a dedicated prefill pool.
+                      </span>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="font-mono text-[10.5px] text-ink-2 uppercase">Decider strategy</span>
+                      <input
+                        type="text"
+                        disabled
+                        className="input w-full opacity-60"
+                        value="threshold"
+                      />
+                      <span className="font-mono text-[9.5px] text-ink-2">
+                        "always" needs hardware calibration (peakPrefillThroughput) — not yet supported.
+                      </span>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="font-mono text-[10.5px] text-ink-2 uppercase">Prefix-cache scorer weight</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        placeholder="default 2"
+                        className="input w-full"
+                        value={form.pd_prefix_cache_weight || ""}
+                        onChange={(e) => set("pd_prefix_cache_weight", Math.max(0, Number(e.target.value) || 0))}
+                      />
+                      <span className="font-mono text-[9.5px] text-ink-2">higher favors cache affinity</span>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="font-mono text-[10.5px] text-ink-2 uppercase">Queue scorer weight</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        placeholder="default 1"
+                        className="input w-full"
+                        value={form.pd_queue_scorer_weight || ""}
+                        onChange={(e) => set("pd_queue_scorer_weight", Math.max(0, Number(e.target.value) || 0))}
+                      />
+                      <span className="font-mono text-[9.5px] text-ink-2">higher favors load-balancing</span>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="font-mono text-[10.5px] text-ink-2 uppercase">Max prefix blocks</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={4096}
+                        placeholder="default 256"
+                        className="input w-full"
+                        value={form.pd_max_prefix_blocks || ""}
+                        onChange={(e) => set("pd_max_prefix_blocks", Math.max(0, Number(e.target.value) || 0))}
+                      />
+                      <span className="font-mono text-[9.5px] text-ink-2">prefix-cache match depth</span>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="font-mono text-[10.5px] text-ink-2 uppercase">LRU capacity / server</span>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="default 31250"
+                        className="input w-full"
+                        value={form.pd_lru_capacity_per_server || ""}
+                        onChange={(e) => set("pd_lru_capacity_per_server", Math.max(0, Number(e.target.value) || 0))}
+                      />
+                      <span className="font-mono text-[9.5px] text-ink-2">prefix-cache capacity per server</span>
+                    </label>
+                  </div>
+                </div>
               )}
             </div>
           </>

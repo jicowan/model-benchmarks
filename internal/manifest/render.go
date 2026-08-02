@@ -303,6 +303,18 @@ type LLMDDisaggregatedParams struct {
 	SidecarImage    string
 	NonCachedTokens int
 
+	// PRD-61: run-tunable EPP EndpointPickerConfig knobs. The orchestrator
+	// defaults these to the shipped values (2/1/256/31250), so at the defaults
+	// the rendered pd-config.yaml is byte-identical to pre-PRD-61.
+	//   PrefixCacheScorerWeight / QueueScorerWeight — SHARED across both the
+	//     prefill and decode schedulingProfiles (per-profile is a follow-on).
+	//   MaxPrefixBlocksToMatch / LRUCapacityPerServer — approx-prefix-cache
+	//     producer params (match depth / capacity).
+	PrefixCacheScorerWeight int
+	QueueScorerWeight       int
+	MaxPrefixBlocksToMatch  int
+	LRUCapacityPerServer    int
+
 	// DRA GPU device class + scheduling (same as the co-located path).
 	GPUDeviceClass      string
 	GatewayName         string

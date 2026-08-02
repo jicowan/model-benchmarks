@@ -70,6 +70,15 @@ type BenchmarkRun struct {
 	PrefillMaxNumBatchedTokens *int `json:"prefill_max_num_batched_tokens,omitempty"`
 	DecodeMaxNumBatchedTokens  *int `json:"decode_max_num_batched_tokens,omitempty"`
 	BothMaxNumBatchedTokens    *int `json:"both_max_num_batched_tokens,omitempty"`
+	// PRD-61: run-tunable EPP routing config (disaggregated only, migration 041).
+	// Null ⇒ the shipped default was used (self-describing run). PDNonCachedTokens
+	// null ⇒ default 16; a stored 0 ⇒ disaggregation disabled for the run.
+	PDNonCachedTokens       *int    `json:"pd_noncached_tokens,omitempty"`
+	PDPrefixCacheWeight     *int    `json:"pd_prefix_cache_weight,omitempty"`
+	PDQueueScorerWeight     *int    `json:"pd_queue_scorer_weight,omitempty"`
+	PDMaxPrefixBlocks       *int    `json:"pd_max_prefix_blocks,omitempty"`
+	PDLRUCapacityPerServer  *int    `json:"pd_lru_capacity_per_server,omitempty"`
+	PDDeciderStrategy       *string `json:"pd_decider_strategy,omitempty"`
 	Quantization          *string    `json:"quantization,omitempty"`
 	Concurrency           int        `json:"concurrency"`
 	InputSequenceLength   int        `json:"input_sequence_length"`
@@ -307,6 +316,16 @@ type RunRequest struct {
 	PrefillMaxNumBatchedTokens int `json:"prefill_max_num_batched_tokens,omitempty"`
 	DecodeMaxNumBatchedTokens  int `json:"decode_max_num_batched_tokens,omitempty"`
 	BothMaxNumBatchedTokens    int `json:"both_max_num_batched_tokens,omitempty"`
+	// PRD-61: run-tunable EPP routing config (disaggregated only). All optional.
+	// PDNonCachedTokens is a POINTER because 0 is meaningful (disable PD) and must
+	// be distinguishable from "omitted → default 16"; the others use 0 = omitted
+	// (a 0 weight/size is never valid). PDDeciderStrategy "" = omitted → threshold.
+	PDNonCachedTokens      *int   `json:"pd_noncached_tokens,omitempty"`
+	PDPrefixCacheWeight    int    `json:"pd_prefix_cache_weight,omitempty"`
+	PDQueueScorerWeight    int    `json:"pd_queue_scorer_weight,omitempty"`
+	PDMaxPrefixBlocks      int    `json:"pd_max_prefix_blocks,omitempty"`
+	PDLRUCapacityPerServer int    `json:"pd_lru_capacity_per_server,omitempty"`
+	PDDeciderStrategy      string `json:"pd_decider_strategy,omitempty"`
 }
 
 // TestSuiteRun represents a test suite execution.

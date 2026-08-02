@@ -550,6 +550,17 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	var bothReplicasPtr, bothTPPtr *int          // PRD-63 co-located "both" pool
 	var prefillMaxNBTPtr, decodeMaxNBTPtr, bothMaxNBTPtr *int // PRD-64/63 per-role scheduler override
 	var kvConnectorPtr, kvBackendPtr *string
+	// PRD-61: run-tunable EPP routing config (disaggregated only).
+	var pdNonCachedPtr, pdPrefixWeightPtr, pdQueueWeightPtr, pdMaxPrefixBlocksPtr, pdLRUCapacityPtr *int
+	var pdDeciderStrategyPtr *string
+	// PRD-61: routing knobs are meaningless without an EPP — reject them on any
+	// non-disaggregated run rather than silently ignoring them.
+	if req.DeploymentMode != "disaggregated" {
+		if req.PDNonCachedTokens != nil || req.PDPrefixCacheWeight != 0 || req.PDQueueScorerWeight != 0 ||
+			req.PDMaxPrefixBlocks != 0 || req.PDLRUCapacityPerServer != 0 || req.PDDeciderStrategy != "" {
+			return "", &createRunError{http.StatusBadRequest, "EPP routing config (pd_*) is only valid for disaggregated runs"}
+		}
+	}
 	if req.DeploymentMode == "disaggregated" {
 		if req.Framework != "llm-d" {
 			return "", &createRunError{http.StatusBadRequest, "disaggregated runs require framework=llm-d"}
@@ -673,6 +684,58 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			v := req.BothMaxNumBatchedTokens
 			bothMaxNBTPtr = &v
 		}
+		// PRD-61: run-tunable EPP routing config. Each is optional; omitted →
+		// persist NULL → orchestrator applies the shipped default (byte-identical
+		// to today). Bounds are conservative; a bad-but-in-range value degrades
+		// only this run's routing (which, for a benchmark, is the point — bound,
+		// don't forbid).
+		if req.PDNonCachedTokens != nil {
+			// 0 is meaningful (disable disaggregation); cap the upper bound.
+			if *req.PDNonCachedTokens < 0 || *req.PDNonCachedTokens > 32768 {
+				return "", &createRunError{http.StatusBadRequest, "pd_noncached_tokens must be between 0 and 32768"}
+			}
+			v := *req.PDNonCachedTokens
+			pdNonCachedPtr = &v
+		}
+		// Scorer weights: relative small integers, 1..100 when set (0 = omitted).
+		if req.PDPrefixCacheWeight < 0 || req.PDPrefixCacheWeight > 100 ||
+			req.PDQueueScorerWeight < 0 || req.PDQueueScorerWeight > 100 {
+			return "", &createRunError{http.StatusBadRequest, "pd scorer weights must be between 1 and 100"}
+		}
+		if req.PDPrefixCacheWeight > 0 {
+			v := req.PDPrefixCacheWeight
+			pdPrefixWeightPtr = &v
+		}
+		if req.PDQueueScorerWeight > 0 {
+			v := req.PDQueueScorerWeight
+			pdQueueWeightPtr = &v
+		}
+		if req.PDMaxPrefixBlocks < 0 || req.PDMaxPrefixBlocks > 4096 {
+			return "", &createRunError{http.StatusBadRequest, "pd_max_prefix_blocks must be between 1 and 4096"}
+		}
+		if req.PDMaxPrefixBlocks > 0 {
+			v := req.PDMaxPrefixBlocks
+			pdMaxPrefixBlocksPtr = &v
+		}
+		if req.PDLRUCapacityPerServer < 0 || req.PDLRUCapacityPerServer > 10000000 {
+			return "", &createRunError{http.StatusBadRequest, "pd_lru_capacity_per_server out of range"}
+		}
+		if req.PDLRUCapacityPerServer > 0 {
+			v := req.PDLRUCapacityPerServer
+			pdLRUCapacityPtr = &v
+		}
+		// Decider strategy: "threshold" (default) is the only rendered path.
+		// "always" needs peakPrefillThroughput calibration (out of scope) — gate it.
+		if req.PDDeciderStrategy != "" {
+			if req.PDDeciderStrategy == "always" {
+				return "", &createRunError{http.StatusBadRequest, "pd_decider_strategy 'always' requires peakPrefillThroughput calibration (not yet supported); use 'threshold'"}
+			}
+			if req.PDDeciderStrategy != "threshold" {
+				return "", &createRunError{http.StatusBadRequest, "pd_decider_strategy must be 'threshold' or 'always'"}
+			}
+			v := req.PDDeciderStrategy
+			pdDeciderStrategyPtr = &v
+		}
 	} else if req.DeploymentMode == "distributed" {
 		if req.Framework != "llm-d" {
 			return "", &createRunError{http.StatusBadRequest, "distributed runs require framework=llm-d"}
@@ -760,6 +823,12 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		PrefillMaxNumBatchedTokens: prefillMaxNBTPtr,
 		DecodeMaxNumBatchedTokens:  decodeMaxNBTPtr,
 		BothMaxNumBatchedTokens:    bothMaxNBTPtr,
+		PDNonCachedTokens:      pdNonCachedPtr,
+		PDPrefixCacheWeight:    pdPrefixWeightPtr,
+		PDQueueScorerWeight:    pdQueueWeightPtr,
+		PDMaxPrefixBlocks:      pdMaxPrefixBlocksPtr,
+		PDLRUCapacityPerServer: pdLRUCapacityPtr,
+		PDDeciderStrategy:      pdDeciderStrategyPtr,
 		Status:                 "pending",
 	}
 
@@ -803,6 +872,13 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 			cfg.PrefillMaxNumBatchedTokens = req.PrefillMaxNumBatchedTokens
 			cfg.DecodeMaxNumBatchedTokens = req.DecodeMaxNumBatchedTokens
 			cfg.BothMaxNumBatchedTokens = req.BothMaxNumBatchedTokens
+			// PRD-61: run-tunable EPP routing config (nil/0 ⇒ orchestrator default).
+			cfg.PDNonCachedTokens = pdNonCachedPtr
+			cfg.PDPrefixCacheScorerWeight = req.PDPrefixCacheWeight
+			cfg.PDQueueScorerWeight = req.PDQueueScorerWeight
+			cfg.PDMaxPrefixBlocks = req.PDMaxPrefixBlocks
+			cfg.PDLRUCapacityPerServer = req.PDLRUCapacityPerServer
+			cfg.PDDeciderStrategy = req.PDDeciderStrategy
 		}
 		if err := s.orch.Execute(context.Background(), cfg); err != nil {
 			log.Printf("benchmark run %s failed: %v", runID, err)

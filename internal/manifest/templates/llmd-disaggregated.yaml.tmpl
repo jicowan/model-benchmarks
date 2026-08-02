@@ -280,8 +280,8 @@ data:
     plugins:
     - type: approx-prefix-cache-producer
       parameters:
-        maxPrefixBlocksToMatch: 256
-        lruCapacityPerServer: 31250
+        maxPrefixBlocksToMatch: {{ .MaxPrefixBlocksToMatch }}
+        lruCapacityPerServer: {{ .LRUCapacityPerServer }}
     - type: prefix-cache-scorer
     - type: queue-scorer
     - type: prefill-filter
@@ -319,17 +319,17 @@ data:
       - pluginRef: {{ if gt .BothReplicas 0 }}prefill-only-filter{{ else }}prefill-filter{{ end }}
       - pluginRef: max-score-picker
       - pluginRef: prefix-cache-scorer
-        weight: 2
+        weight: {{ .PrefixCacheScorerWeight }}
       - pluginRef: queue-scorer
-        weight: 1
+        weight: {{ .QueueScorerWeight }}
     - name: decode
       plugins:
       - pluginRef: decode-filter
       - pluginRef: max-score-picker
       - pluginRef: prefix-cache-scorer
-        weight: 2
+        weight: {{ .PrefixCacheScorerWeight }}
       - pluginRef: queue-scorer
-        weight: 1
+        weight: {{ .QueueScorerWeight }}
 ---
 apiVersion: v1
 kind: ServiceAccount

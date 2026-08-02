@@ -71,6 +71,13 @@ export interface BenchmarkRun {
   prefill_max_num_batched_tokens?: number | null;
   decode_max_num_batched_tokens?: number | null;
   both_max_num_batched_tokens?: number | null;
+  // PRD-61: EPP routing config (disaggregated only). Null ⇒ shipped default used.
+  pd_noncached_tokens?: number | null;
+  pd_prefix_cache_weight?: number | null;
+  pd_queue_scorer_weight?: number | null;
+  pd_max_prefix_blocks?: number | null;
+  pd_lru_capacity_per_server?: number | null;
+  pd_decider_strategy?: string | null;
   quantization?: string;
   concurrency: number;
   input_sequence_length: number;
@@ -246,6 +253,14 @@ export interface RunRequest {
   prefill_max_num_batched_tokens?: number;
   decode_max_num_batched_tokens?: number;
   both_max_num_batched_tokens?: number;
+  // PRD-61: optional EPP routing config (disaggregated only). Omitted ⇒ default.
+  // pd_noncached_tokens: 0 is meaningful (disable PD) — send only when user set it.
+  pd_noncached_tokens?: number;
+  pd_prefix_cache_weight?: number;
+  pd_queue_scorer_weight?: number;
+  pd_max_prefix_blocks?: number;
+  pd_lru_capacity_per_server?: number;
+  pd_decider_strategy?: string;
 }
 
 export interface RunListItem {

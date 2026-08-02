@@ -257,3 +257,113 @@ func TestCreateRun_Disaggregated_PerRoleScheduler(t *testing.T) {
 			got2.PrefillMaxNumBatchedTokens, got2.DecodeMaxNumBatchedTokens)
 	}
 }
+
+// --- PRD-61: run-tunable EPP routing config ---
+
+func intp(i int) *int { return &i }
+
+// prd61Server seeds a repo + server for routing-config tests (mirrors the
+// PersistsTopology setup).
+func prd61Server(t *testing.T) (*Server, *database.MockRepo) {
+	t.Helper()
+	repo := database.NewMockRepo()
+	repo.SeedModel(&database.Model{ID: "m-70b", HfID: "meta-llama/Llama-3.1-70B", HfRevision: "main"})
+	repo.SeedInstanceType(&database.InstanceType{
+		ID: "inst-p5", Name: "p5.48xlarge", Family: "p5",
+		AcceleratorType: "gpu", AcceleratorName: "H100",
+		AcceleratorCount: 8, AcceleratorMemoryGiB: 640, VCPUs: 192, MemoryGiB: 2048,
+	})
+	return NewServer(repo, fake.NewSimpleClientset(), "test-pod"), repo
+}
+
+// Supplied routing params validate + persist; omitted ones stay NULL.
+func TestCreateRun_Disaggregated_RoutingPersists(t *testing.T) {
+	srv, repo := prd61Server(t)
+	r := validDisaggregatedReq()
+	r.PDNonCachedTokens = intp(128)
+	r.PDPrefixCacheWeight = 5
+	r.PDQueueScorerWeight = 3
+	r.PDMaxPrefixBlocks = 512
+	r.PDLRUCapacityPerServer = 99999
+	runID, err := srv.CreateRun(context.Background(), ptrReq(r))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	got, _ := repo.GetBenchmarkRun(context.Background(), runID)
+	if got.PDNonCachedTokens == nil || *got.PDNonCachedTokens != 128 {
+		t.Errorf("pd_noncached_tokens not persisted: %v", got.PDNonCachedTokens)
+	}
+	if got.PDPrefixCacheWeight == nil || *got.PDPrefixCacheWeight != 5 {
+		t.Errorf("pd_prefix_cache_weight not persisted: %v", got.PDPrefixCacheWeight)
+	}
+	if got.PDLRUCapacityPerServer == nil || *got.PDLRUCapacityPerServer != 99999 {
+		t.Errorf("pd_lru_capacity not persisted: %v", got.PDLRUCapacityPerServer)
+	}
+
+	// Omitted → NULL (byte-identical default behavior).
+	id2, _ := srv.CreateRun(context.Background(), ptrReq(validDisaggregatedReq()))
+	got2, _ := repo.GetBenchmarkRun(context.Background(), id2)
+	if got2.PDNonCachedTokens != nil || got2.PDPrefixCacheWeight != nil || got2.PDMaxPrefixBlocks != nil {
+		t.Errorf("omitted routing params should be NULL, got %v/%v/%v",
+			got2.PDNonCachedTokens, got2.PDPrefixCacheWeight, got2.PDMaxPrefixBlocks)
+	}
+}
+
+// nonCachedTokens=0 is a MEANINGFUL value (disable PD) — must persist as 0, not
+// be dropped as "unset".
+func TestCreateRun_Disaggregated_NonCachedZeroPreserved(t *testing.T) {
+	srv, repo := prd61Server(t)
+	r := validDisaggregatedReq()
+	r.PDNonCachedTokens = intp(0)
+	runID, err := srv.CreateRun(context.Background(), ptrReq(r))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	got, _ := repo.GetBenchmarkRun(context.Background(), runID)
+	if got.PDNonCachedTokens == nil || *got.PDNonCachedTokens != 0 {
+		t.Errorf("pd_noncached_tokens=0 should persist as 0 (disable PD), got %v", got.PDNonCachedTokens)
+	}
+}
+
+// Out-of-range routing params are rejected.
+func TestCreateRun_Disaggregated_RoutingBoundsRejected(t *testing.T) {
+	mux := distServer(t)
+	cases := []struct {
+		name   string
+		mutate func(*database.RunRequest)
+		want   string
+	}{
+		{"weight>100", func(r *database.RunRequest) { r.PDPrefixCacheWeight = 101 }, "scorer weights"},
+		{"prefixBlocks>4096", func(r *database.RunRequest) { r.PDMaxPrefixBlocks = 5000 }, "pd_max_prefix_blocks"},
+		{"nonCached>32768", func(r *database.RunRequest) { r.PDNonCachedTokens = intp(40000) }, "pd_noncached_tokens"},
+		{"decider=always gated", func(r *database.RunRequest) { r.PDDeciderStrategy = "always" }, "always"},
+		{"decider bad", func(r *database.RunRequest) { r.PDDeciderStrategy = "bogus" }, "threshold"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := validDisaggregatedReq()
+			tc.mutate(&r)
+			w := postRun(mux, r)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("want 400 containing %q; got %d: %s", tc.want, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// Routing params on a NON-disaggregated run are rejected (meaningless without EPP).
+func TestCreateRun_RoutingRejectedOnNonDisaggregated(t *testing.T) {
+	mux := distServer(t)
+	// A valid distributed (co-located) run + a stray routing param.
+	r := database.RunRequest{
+		ModelHfID: "meta-llama/Llama-3.1-70B", InstanceTypeName: "p5.48xlarge",
+		Framework: "llm-d", Concurrency: 16, InputSequenceLength: 512, OutputSequenceLength: 256,
+		DatasetName: "sharegpt", RunType: "on_demand", ScenarioID: "chatbot",
+		DeploymentMode: "distributed", NodeCount: 2, PipelineParallelDegree: 2, NetworkMode: "tcp",
+		PDPrefixCacheWeight: 5,
+	}
+	w := postRun(mux, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "only valid for disaggregated") {
+		t.Errorf("routing param on distributed run should be rejected; got %d: %s", w.Code, w.Body.String())
+	}
+}

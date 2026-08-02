@@ -25,6 +25,13 @@ const (
 	defaultPDEPPImage       = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
 	defaultPDNixlModuleDir  = "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
 	defaultPDNonCachedToken = 16 // EPP disaggregation trigger (uncached prompt-suffix tokens)
+
+	// PRD-61: EPP EndpointPickerConfig defaults — the shipped values. A run that
+	// supplies no routing overrides renders byte-identically to pre-PRD-61.
+	defaultPDPrefixCacheScorerWeight = 2
+	defaultPDQueueScorerWeight       = 1
+	defaultPDMaxPrefixBlocks         = 256
+	defaultPDLRUCapacity             = 31250
 )
 
 // modelLabelValue turns a HuggingFace model id into a DNS-1123-label-safe value
@@ -159,6 +166,22 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	cpuReq := fmt.Sprintf("%d", max(1, cfg.InstanceType.VCPUs*3/4))
 	memReq := fmt.Sprintf("%dGi", max(1, cfg.InstanceType.MemoryGiB*85/100))
 
+	// PRD-61: resolve run-tunable EPP routing knobs, falling back to the shipped
+	// defaults so a run that supplies nothing renders byte-identically. The EPP
+	// ConfigMap is part of the per-run object graph applied here and torn down at
+	// the end, so each run pins its own routing config at EPP boot — the
+	// startup-only model needs no extra restart machinery.
+	// nonCachedTokens is a POINTER: 0 is a meaningful value (disable PD), so only
+	// a nil pointer means "use the default 16".
+	nonCachedTokens := defaultPDNonCachedToken
+	if cfg.PDNonCachedTokens != nil {
+		nonCachedTokens = *cfg.PDNonCachedTokens
+	}
+	prefixWeight := valOrDefault(cfg.PDPrefixCacheScorerWeight, defaultPDPrefixCacheScorerWeight)
+	queueWeight := valOrDefault(cfg.PDQueueScorerWeight, defaultPDQueueScorerWeight)
+	maxPrefixBlocks := valOrDefault(cfg.PDMaxPrefixBlocks, defaultPDMaxPrefixBlocks)
+	lruCapacity := valOrDefault(cfg.PDLRUCapacityPerServer, defaultPDLRUCapacity)
+
 	yamlStr, err := manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
 		Name:                name,
 		Namespace:           ns,
@@ -184,7 +207,11 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		NixlModuleDir:       envOr("PD_NIXL_MODULE_DIR", defaultPDNixlModuleDir),
 		EPPImage:            envOr("PD_EPP_IMAGE", defaultPDEPPImage),
 		SidecarImage:        envOr("PD_SIDECAR_IMAGE", defaultPDSidecarImage),
-		NonCachedTokens:     defaultPDNonCachedToken,
+		NonCachedTokens:         nonCachedTokens,
+		PrefixCacheScorerWeight: prefixWeight,
+		QueueScorerWeight:       queueWeight,
+		MaxPrefixBlocksToMatch:  maxPrefixBlocks,
+		LRUCapacityPerServer:    lruCapacity,
 		GPUDeviceClass:      envOr("DRA_GPU_DEVICE_CLASS", defaultGPUDeviceClass),
 		GatewayName:         envOr("LLMD_GATEWAY_NAME", defaultGatewayName),
 		GatewayNamespace:    envOr("LLMD_GATEWAY_NAMESPACE", defaultGatewayNamespace),

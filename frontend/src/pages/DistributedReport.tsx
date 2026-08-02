@@ -226,6 +226,12 @@ export default function DistributedReport() {
                         value: `prefill=${run.prefill_max_num_batched_tokens ?? "shared"} · decode=${run.decode_max_num_batched_tokens ?? "shared"} · both=${run.both_max_num_batched_tokens ?? "shared"}`,
                       }]
                     : []),
+                  // PRD-61: effective EPP routing config (NULL → the shipped
+                  // default, labeled, so the run is self-describing for Compare).
+                  {
+                    label: "Routing / EPP",
+                    value: `nonCachedTokens=${run.pd_noncached_tokens ?? "16 (default)"} · prefix/queue weight=${run.pd_prefix_cache_weight ?? 2}/${run.pd_queue_scorer_weight ?? 1} · prefixBlocks=${run.pd_max_prefix_blocks ?? 256} · lru=${run.pd_lru_capacity_per_server ?? 31250} · decider=${run.pd_decider_strategy ?? "threshold"}`,
+                  },
                 ]
               : [
                   { label: "Tensor Parallel", value: run.tensor_parallel_degree },

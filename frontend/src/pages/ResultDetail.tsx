@@ -252,6 +252,11 @@ export default function ResultDetail() {
                   { label: "KV Connector", value: run.kv_connector ?? null },
                   { label: "KV Transfer", value: run.kv_transfer_backend ?? null },
                   { label: "Network Fabric", value: run.network_mode ?? null },
+                  // PRD-61: effective EPP routing config (NULL → shipped default).
+                  {
+                    label: "Routing / EPP",
+                    value: `nonCachedTokens=${run.pd_noncached_tokens ?? "16 (default)"} · weight=${run.pd_prefix_cache_weight ?? 2}/${run.pd_queue_scorer_weight ?? 1} · prefixBlocks=${run.pd_max_prefix_blocks ?? 256} · lru=${run.pd_lru_capacity_per_server ?? 31250}`,
+                  },
                 ]
               : run.deployment_mode === "distributed"
               ? [

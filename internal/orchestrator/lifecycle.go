@@ -97,6 +97,21 @@ type RunConfig struct {
 	PrefillMaxNumBatchedTokens int
 	DecodeMaxNumBatchedTokens  int
 	BothMaxNumBatchedTokens    int
+
+	// PRD-61: run-tunable EPP routing config (disaggregated only). Each nil/0 ⇒
+	// the orchestrator applies the shipped default, so a run that sets nothing is
+	// byte-identical to pre-PRD-61. NonCachedTokens is a POINTER because 0 is a
+	// MEANINGFUL value (disable disaggregation) that must be distinguishable from
+	// "unset" — the others use 0 = unset since 0 is not a valid weight/size.
+	PDNonCachedTokens        *int
+	PDPrefixCacheScorerWeight int
+	PDQueueScorerWeight       int
+	PDMaxPrefixBlocks         int
+	PDLRUCapacityPerServer    int
+	// PDDeciderStrategy selects the disaggregation decider; only "threshold"
+	// (default) is rendered today. "always" is gated on peakPrefillThroughput
+	// calibration (out of scope) — persisted for forward-compat but not rendered.
+	PDDeciderStrategy string
 }
 
 // Deployment sub-modes (PRD-57/58). Request.DeploymentMode carries these.
@@ -1121,6 +1136,17 @@ func derefF(f *float64) float64 {
 		return 0
 	}
 	return *f
+}
+
+// valOrDefault returns v when it's a positive "set" value, else def. Used by the
+// PRD-61 routing knobs where 0 means "unset → use the shipped default" (weights
+// and sizes are never legitimately 0; nonCachedTokens, where 0 IS meaningful,
+// uses a pointer instead).
+func valOrDefault(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
 }
 
 // RecoverOrphanedRuns checks for runs stuck in "running" status and attempts

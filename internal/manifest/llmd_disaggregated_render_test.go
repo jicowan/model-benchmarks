@@ -26,6 +26,12 @@ func sampleDisaggParams() LLMDDisaggregatedParams {
 		EPPImage:            "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0",
 		SidecarImage:        "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0",
 		NonCachedTokens:     16,
+		// PRD-61: routing knobs at their shipped defaults (what the orchestrator
+		// passes when a run supplies no overrides).
+		PrefixCacheScorerWeight: 2,
+		QueueScorerWeight:       1,
+		MaxPrefixBlocksToMatch:  256,
+		LRUCapacityPerServer:    31250,
 		GPUDeviceClass:      "gpu.nvidia.com",
 		GatewayName:         "accelbench-gateway",
 		GatewayNamespace:    "envoy-gateway-system",
@@ -342,6 +348,95 @@ func TestRenderLLMDDisaggregated_BothOnly(t *testing.T) {
 	// prefill-filter which would admit the both pod and self-route.
 	if !strings.Contains(out, "prefill-only-filter") {
 		t.Error("both pool present should emit the prefill-only-filter (anti-self-route)")
+	}
+}
+
+// TestRenderLLMDDisaggregated_RoutingParams (PRD-61): custom EPP routing knobs
+// render into the pd-config.yaml EndpointPickerConfig.
+func TestRenderLLMDDisaggregated_RoutingParams(t *testing.T) {
+	p := sampleDisaggParams()
+	p.NonCachedTokens = 128
+	p.PrefixCacheScorerWeight = 5
+	p.QueueScorerWeight = 3
+	p.MaxPrefixBlocksToMatch = 512
+	p.LRUCapacityPerServer = 99999
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"nonCachedTokens: 128",
+		"maxPrefixBlocksToMatch: 512",
+		"lruCapacityPerServer: 99999",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("routing config missing %q", want)
+		}
+	}
+	// Shared weights appear in BOTH profiles → weight: 5 twice, weight: 3 twice.
+	if n := strings.Count(out, "weight: 5"); n != 2 {
+		t.Errorf("prefix-cache weight 5 should appear in both profiles (2), got %d", n)
+	}
+	if n := strings.Count(out, "weight: 3"); n != 2 {
+		t.Errorf("queue weight 3 should appear in both profiles (2), got %d", n)
+	}
+	// The old defaults must be gone.
+	if strings.Contains(out, "weight: 2") || strings.Contains(out, "nonCachedTokens: 16") {
+		t.Error("custom routing params should replace the defaults")
+	}
+}
+
+// TestRenderLLMDDisaggregated_RoutingDefaultsByteIdentical (PRD-61, load-bearing):
+// at the shipped defaults, the pd-config.yaml is byte-identical to pre-PRD-61 —
+// asserted for BOTH baselines (PD-only, and with a both pool, since PRD-63 forks
+// the prefill filter ref). The default values are hardcoded here as the frozen
+// contract; if they ever change, this test must change deliberately.
+func TestRenderLLMDDisaggregated_RoutingDefaultsByteIdentical(t *testing.T) {
+	// The exact EndpointPickerConfig lines the template shipped pre-PRD-61.
+	wantLines := []string{
+		"maxPrefixBlocksToMatch: 256",
+		"lruCapacityPerServer: 31250",
+		"nonCachedTokens: 16",
+	}
+	// PD-only baseline (BothReplicas 0 → stock prefill-filter).
+	pdOnly, err := RenderLLMDDisaggregated(sampleDisaggParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With-both baseline (BothReplicas > 0 → prefill-only-filter).
+	withBoth := sampleDisaggParams()
+	withBoth.BothReplicas = 1
+	withBoth.BothTP = 1
+	wb, err := RenderLLMDDisaggregated(withBoth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, base := range []struct {
+		name string
+		out  string
+	}{{"pd-only", pdOnly}, {"with-both", wb}} {
+		for _, want := range wantLines {
+			if !strings.Contains(base.out, want) {
+				t.Errorf("[%s] default routing config missing %q", base.name, want)
+			}
+		}
+		// Both profiles carry the default 2/1 weights → weight: 2 twice, weight: 1 twice.
+		if n := strings.Count(base.out, "weight: 2"); n != 2 {
+			t.Errorf("[%s] default prefix-cache weight 2 should appear twice, got %d", base.name, n)
+		}
+		if n := strings.Count(base.out, "weight: 1"); n != 2 {
+			t.Errorf("[%s] default queue weight 1 should appear twice, got %d", base.name, n)
+		}
+		// Exact-sequence guards (a template comment/trim must not join YAML lines —
+		// substring checks alone miss a "schedulingProfiles:- name" collapse).
+		for _, seq := range []string{
+			"    schedulingProfiles:\n    - name: prefill\n",
+			"      parameters:\n        maxPrefixBlocksToMatch: 256\n        lruCapacityPerServer: 31250\n",
+		} {
+			if !strings.Contains(base.out, seq) {
+				t.Errorf("[%s] EPP config formatting drifted; missing exact block:\n%q", base.name, seq)
+			}
+		}
 	}
 }
 

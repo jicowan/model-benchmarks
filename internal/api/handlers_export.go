@@ -189,6 +189,14 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		EPPImage:            exportPDEPPImage,
 		SidecarImage:        exportPDSidecarImage,
 		NonCachedTokens:     exportPDNonCachedToken,
+		// PRD-61: export the shipped routing defaults so the manifest is valid.
+		// (The exporter uses fixed defaults for EPP config, mirroring how it
+		// already handles nonCachedTokens; per-run routing overrides in the export
+		// are a follow-up alongside the PRD-64 per-role-override export gap.)
+		PrefixCacheScorerWeight: 2,
+		QueueScorerWeight:       1,
+		MaxPrefixBlocksToMatch:  256,
+		LRUCapacityPerServer:    31250,
 		GPUDeviceClass:      exportGPUDeviceClass,
 		GatewayName:         exportGatewayName,
 		GatewayNamespace:    exportGatewayNamespace,
