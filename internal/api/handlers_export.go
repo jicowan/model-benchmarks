@@ -34,7 +34,24 @@ const (
 	exportPDEPPImage       = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
 	exportPDNixlModuleDir  = "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
 	exportPDNonCachedToken = 16
+	// PRD-61: EPP routing defaults, mirroring the orchestrator's defaultPD*
+	// (internal/orchestrator/disaggregated.go). Applied when a run's pd_* column
+	// is NULL, so the exported EPP config matches the shipped default the run used.
+	exportPDPrefixCacheWeight = 2
+	exportPDQueueScorerWeight = 1
+	exportPDMaxPrefixBlocks   = 256
+	exportPDLRUCapacity       = 31250
 )
+
+// derefPtr returns *p when p is non-nil (PRESERVING 0), else def. Unlike the
+// local deref (which floors non-positive to def), this is for values where 0 is
+// meaningful — e.g. pd_noncached_tokens=0 (disable disaggregation).
+func derefPtr(p *int, def int) int {
+	if p != nil {
+		return *p
+	}
+	return def
+}
 
 // sanitizeDNS1123 turns a model id into a DNS-1123-label-safe name (lowercase
 // alnum + '-', no dots, no leading/trailing dashes, <=63 chars) for use as a
@@ -67,14 +84,23 @@ func sanitizeDNS1123(modelID string) string {
 
 // exportServeArgs builds the model positional + static tuning flags that both
 // llm-d render paths append coordination/TP flags onto — mirroring the llm-d
-// runtime's BuildArgs (model id + --trust-remote-code + optional knobs).
+// runtime's BuildArgs (model id + --trust-remote-code + optional knobs). Uses the
+// run's shared --max-num-batched-tokens.
 func exportServeArgs(d *database.RunExportDetails) []string {
+	return exportServeArgsWithBatchTokens(d, d.MaxNumBatchedTokens)
+}
+
+// exportServeArgsWithBatchTokens is exportServeArgs with an explicit
+// --max-num-batched-tokens override — used to build the PRD-64 per-role arg sets
+// so the exported prefill/decode/both Deployments carry the exact per-role
+// scheduler flag that was applied. maxNBT nil/<=0 ⇒ omit the flag (vLLM default).
+func exportServeArgsWithBatchTokens(d *database.RunExportDetails, maxNBT *int) []string {
 	args := []string{d.ModelHfID, "--trust-remote-code"}
 	if d.MaxModelLen > 0 {
 		args = append(args, "--max-model-len", fmt.Sprintf("%d", d.MaxModelLen))
 	}
-	if d.MaxNumBatchedTokens != nil && *d.MaxNumBatchedTokens > 0 {
-		args = append(args, "--max-num-batched-tokens", fmt.Sprintf("%d", *d.MaxNumBatchedTokens))
+	if maxNBT != nil && *maxNBT > 0 {
+		args = append(args, "--max-num-batched-tokens", fmt.Sprintf("%d", *maxNBT))
 	}
 	if d.KVCacheDtype != nil && *d.KVCacheDtype != "" {
 		args = append(args, "--kv-cache-dtype", *d.KVCacheDtype)
@@ -167,11 +193,33 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 	if prefillR == 0 && decodeR == 0 && bothR == 0 {
 		prefillR, decodeR = 1, 1
 	}
+	// PRD-64: reproduce the per-role scheduler override actually applied. The
+	// shared ServeArgs carry the run's shared --max-num-batched-tokens; a role's
+	// arg set is emitted only when that role had an override (matching the
+	// orchestrator, which leaves the per-role sets nil otherwise → template falls
+	// back to shared).
+	var prefillArgs, decodeArgs, bothArgs []string
+	if d.PrefillMaxNumBatchedTokens != nil && *d.PrefillMaxNumBatchedTokens > 0 {
+		prefillArgs = exportServeArgsWithBatchTokens(d, d.PrefillMaxNumBatchedTokens)
+	}
+	if d.DecodeMaxNumBatchedTokens != nil && *d.DecodeMaxNumBatchedTokens > 0 {
+		decodeArgs = exportServeArgsWithBatchTokens(d, d.DecodeMaxNumBatchedTokens)
+	}
+	if d.BothMaxNumBatchedTokens != nil && *d.BothMaxNumBatchedTokens > 0 {
+		bothArgs = exportServeArgsWithBatchTokens(d, d.BothMaxNumBatchedTokens)
+	}
+	// PRD-61: reproduce the run's EPP routing config. NULL ⇒ the run used the
+	// shipped default, so the export applies the SAME default the orchestrator
+	// would (deref-to-default), keeping the exported EPP config faithful to what
+	// ran. nonCachedTokens=0 is meaningful (disable PD) and preserved by deref.
 	return manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
 		Name:                name,
 		Namespace:           "accelbench",
 		Image:               exportPDModelImage,
 		ServeArgs:           exportServeArgs(d),
+		PrefillServeArgs:    prefillArgs,
+		DecodeServeArgs:     decodeArgs,
+		BothServeArgs:       bothArgs,
 		ContainerName:       "vllm",
 		ModelHfID:           d.ModelHfID,
 		ModelLabel:          sanitizeDNS1123(d.ModelHfID),
@@ -188,15 +236,12 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		NixlModuleDir:       exportPDNixlModuleDir,
 		EPPImage:            exportPDEPPImage,
 		SidecarImage:        exportPDSidecarImage,
-		NonCachedTokens:     exportPDNonCachedToken,
-		// PRD-61: export the shipped routing defaults so the manifest is valid.
-		// (The exporter uses fixed defaults for EPP config, mirroring how it
-		// already handles nonCachedTokens; per-run routing overrides in the export
-		// are a follow-up alongside the PRD-64 per-role-override export gap.)
-		PrefixCacheScorerWeight: 2,
-		QueueScorerWeight:       1,
-		MaxPrefixBlocksToMatch:  256,
-		LRUCapacityPerServer:    31250,
+		// nonCachedTokens uses a POINTER deref (0 = disable PD, distinct from unset).
+		NonCachedTokens:         derefPtr(d.PDNonCachedTokens, exportPDNonCachedToken),
+		PrefixCacheScorerWeight: deref(d.PDPrefixCacheWeight, exportPDPrefixCacheWeight),
+		QueueScorerWeight:       deref(d.PDQueueScorerWeight, exportPDQueueScorerWeight),
+		MaxPrefixBlocksToMatch:  deref(d.PDMaxPrefixBlocks, exportPDMaxPrefixBlocks),
+		LRUCapacityPerServer:    deref(d.PDLRUCapacityPerServer, exportPDLRUCapacity),
 		GPUDeviceClass:      exportGPUDeviceClass,
 		GatewayName:         exportGatewayName,
 		GatewayNamespace:    exportGatewayNamespace,

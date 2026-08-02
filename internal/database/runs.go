@@ -156,6 +156,21 @@ type RunExportDetails struct {
 	// run that used a both pool (or a both-only run). Null on PD-only runs.
 	BothReplicas *int
 	BothTP       *int
+	// PRD-64: per-role scheduler override, so the export reproduces the
+	// per-role --max-num-batched-tokens actually applied. Null ⇒ role used the
+	// shared MaxNumBatchedTokens.
+	PrefillMaxNumBatchedTokens *int
+	DecodeMaxNumBatchedTokens  *int
+	BothMaxNumBatchedTokens    *int
+	// PRD-61: the run's EPP routing config, so the exported EPP ConfigMap matches
+	// what was applied (user overrides included). Null ⇒ the shipped default was
+	// used; the export applies the same default the orchestrator would.
+	PDNonCachedTokens      *int
+	PDPrefixCacheWeight    *int
+	PDQueueScorerWeight    *int
+	PDMaxPrefixBlocks      *int
+	PDLRUCapacityPerServer *int
+	PDDeciderStrategy      *string
 }
 
 // GetRunExportDetails returns the information needed to export a run's
@@ -174,7 +189,11 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 			it.vcpus, it.memory_gib,
 			br.deployment_mode, br.node_count, br.pipeline_parallel_degree, br.network_mode,
 			br.prefill_replicas, br.prefill_tp, br.decode_replicas, br.decode_tp,
-			br.both_replicas, br.both_tp
+			br.both_replicas, br.both_tp,
+			br.prefill_max_num_batched_tokens, br.decode_max_num_batched_tokens,
+			br.both_max_num_batched_tokens,
+			br.pd_noncached_tokens, br.pd_prefix_cache_weight, br.pd_queue_scorer_weight,
+			br.pd_max_prefix_blocks, br.pd_lru_capacity_per_server, br.pd_decider_strategy
 		FROM benchmark_runs br
 		JOIN models m ON br.model_id = m.id
 		JOIN instance_types it ON br.instance_type_id = it.id
@@ -190,6 +209,9 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 		&d.DeploymentMode, &d.NodeCount, &d.PipelineParallelDegree, &d.NetworkMode,
 		&d.PrefillReplicas, &d.PrefillTP, &d.DecodeReplicas, &d.DecodeTP,
 		&d.BothReplicas, &d.BothTP,
+		&d.PrefillMaxNumBatchedTokens, &d.DecodeMaxNumBatchedTokens, &d.BothMaxNumBatchedTokens,
+		&d.PDNonCachedTokens, &d.PDPrefixCacheWeight, &d.PDQueueScorerWeight,
+		&d.PDMaxPrefixBlocks, &d.PDLRUCapacityPerServer, &d.PDDeciderStrategy,
 	)
 	if err != nil {
 		if err.Error() == "no rows in result set" {

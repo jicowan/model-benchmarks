@@ -222,3 +222,70 @@ func TestGenerateManifest_StreamerOff(t *testing.T) {
 		t.Errorf("streamer-off export missing model S3 URI:\n%s", out)
 	}
 }
+
+// TestGenerateManifest_DisaggregatedReproducesAppliedConfig (PRD-61/64): the
+// exported disaggregated manifest must reproduce what was APPLIED for the run —
+// the user's EPP routing overrides AND per-role scheduler overrides — not fixed
+// defaults.
+func TestGenerateManifest_DisaggregatedReproducesAppliedConfig(t *testing.T) {
+	mode := "disaggregated"
+	nc := 128
+	pcw, qsw, mpb, lru := 5, 3, 512, 99999
+	pR, pTP, dR, dTP := 1, 1, 1, 1
+	pMax, dMax := 16384, 2048
+	net := "tcp"
+	d := &database.RunExportDetails{
+		RunID:                "pd-run",
+		ModelHfID:            "Qwen/Qwen2.5-1.5B-Instruct",
+		InstanceTypeName:     "g6.2xlarge",
+		Framework:            "llm-d",
+		TensorParallelDegree: 1,
+		MaxModelLen:          4096,
+		AcceleratorType:      "gpu",
+		AcceleratorName:      "L4",
+		AcceleratorCount:     1,
+		AcceleratorMemoryGiB: 24,
+		VCPUs:                8,
+		MemoryGiB:            32,
+		DeploymentMode:       &mode,
+		NetworkMode:          &net,
+		PrefillReplicas:      &pR,
+		PrefillTP:            &pTP,
+		DecodeReplicas:       &dR,
+		DecodeTP:             &dTP,
+		// PRD-64 per-role scheduler overrides.
+		PrefillMaxNumBatchedTokens: &pMax,
+		DecodeMaxNumBatchedTokens:  &dMax,
+		// PRD-61 routing config.
+		PDNonCachedTokens:      &nc,
+		PDPrefixCacheWeight:    &pcw,
+		PDQueueScorerWeight:    &qsw,
+		PDMaxPrefixBlocks:      &mpb,
+		PDLRUCapacityPerServer: &lru,
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	// PRD-61 routing config as applied (NOT the defaults 16/2/1/256/31250).
+	for _, want := range []string{
+		"nonCachedTokens: 128",
+		"maxPrefixBlocksToMatch: 512",
+		"lruCapacityPerServer: 99999",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("export missing applied routing value %q", want)
+		}
+	}
+	if n := strings.Count(out, "weight: 5"); n != 2 {
+		t.Errorf("applied prefix-cache weight 5 should appear in both profiles (2), got %d", n)
+	}
+	// PRD-64 per-role scheduler: prefill 16384, decode 2048 both present.
+	if !strings.Contains(out, `"16384"`) || !strings.Contains(out, `"2048"`) {
+		t.Errorf("export missing per-role max-num-batched-tokens (16384 prefill / 2048 decode)")
+	}
+	// The shipped defaults must NOT leak in.
+	if strings.Contains(out, "nonCachedTokens: 16\n") {
+		t.Error("export used default nonCachedTokens instead of the applied 128")
+	}
+}

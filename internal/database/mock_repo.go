@@ -595,6 +595,19 @@ func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExp
 		PrefillTP:              run.PrefillTP,
 		DecodeReplicas:         run.DecodeReplicas,
 		DecodeTP:               run.DecodeTP,
+		// PRD-63/64/61: both pool, per-role scheduler override, EPP routing config
+		// — so an exported manifest reproduces exactly what was applied.
+		BothReplicas:               run.BothReplicas,
+		BothTP:                     run.BothTP,
+		PrefillMaxNumBatchedTokens: run.PrefillMaxNumBatchedTokens,
+		DecodeMaxNumBatchedTokens:  run.DecodeMaxNumBatchedTokens,
+		BothMaxNumBatchedTokens:    run.BothMaxNumBatchedTokens,
+		PDNonCachedTokens:          run.PDNonCachedTokens,
+		PDPrefixCacheWeight:        run.PDPrefixCacheWeight,
+		PDQueueScorerWeight:        run.PDQueueScorerWeight,
+		PDMaxPrefixBlocks:          run.PDMaxPrefixBlocks,
+		PDLRUCapacityPerServer:     run.PDLRUCapacityPerServer,
+		PDDeciderStrategy:          run.PDDeciderStrategy,
 	}
 	// Resolve the streamer-on decision, same as Repository.GetRunExportDetails.
 	mode := ""
