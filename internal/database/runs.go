@@ -123,6 +123,11 @@ type RunExportDetails struct {
 	// KVCacheDtype emits --kv-cache-dtype when non-nil; typically "fp8"
 	// on FP8-capable accelerators, empty otherwise.
 	KVCacheDtype *string
+	// SGLang scheduler knobs (null on vLLM/neuron + historical runs). Captured
+	// so an SGLang single-node export reproduces --chunked-prefill-size /
+	// --mem-fraction-static that were actually applied.
+	ChunkedPrefillSize *int
+	MemFractionStatic  *float64
 	// PRD-50: Run:ai streamer knobs. Null for historical runs (treated
 	// as auto / 16 / auto-sized). UseRunaiStreamer is the resolved
 	// decision — equivalent to `StreamerMode != "off" && ModelS3URI != ""`,
@@ -184,6 +189,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 			br.framework, br.framework_version,
 			br.tensor_parallel_degree, br.quantization, br.max_model_len,
 			br.max_num_batched_tokens, br.kv_cache_dtype, br.concurrency,
+			br.chunked_prefill_size, br.mem_fraction_static,
 			br.streamer_mode, br.streamer_concurrency, br.streamer_memory_limit_gib,
 			it.accelerator_type, it.accelerator_name, it.accelerator_count, it.accelerator_memory_gib,
 			it.vcpus, it.memory_gib,
@@ -203,6 +209,7 @@ func (r *Repository) GetRunExportDetails(ctx context.Context, runID string) (*Ru
 		&d.Framework, &d.FrameworkVersion,
 		&d.TensorParallelDegree, &d.Quantization, &maxModelLen,
 		&d.MaxNumBatchedTokens, &d.KVCacheDtype, &d.Concurrency,
+		&d.ChunkedPrefillSize, &d.MemFractionStatic,
 		&d.StreamerMode, &d.StreamerConcurrency, &d.StreamerMemoryLimitGiB,
 		&d.AcceleratorType, &d.AcceleratorName, &d.AcceleratorCount, &d.AcceleratorMemoryGiB,
 		&d.VCPUs, &d.MemoryGiB,

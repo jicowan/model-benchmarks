@@ -576,6 +576,8 @@ func (m *MockRepo) GetRunExportDetails(_ context.Context, runID string) (*RunExp
 		MaxModelLen:            run.MaxModelLen,
 		MaxNumBatchedTokens:    run.MaxNumBatchedTokens,
 		KVCacheDtype:           run.KVCacheDtype,
+		ChunkedPrefillSize:     run.ChunkedPrefillSize,
+		MemFractionStatic:      run.MemFractionStatic,
 		StreamerMode:           run.StreamerMode,
 		StreamerConcurrency:    run.StreamerConcurrency,
 		StreamerMemoryLimitGiB: run.StreamerMemoryLimitGiB,

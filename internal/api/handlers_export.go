@@ -11,9 +11,31 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/report"
+	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
 	"github.com/accelbench/accelbench/internal/testsuite"
 )
+
+// Small nil-deref helpers for building runtime ContainerParams from the
+// pointer-typed RunExportDetails fields.
+func derefStrExport(p *string) string {
+	if p != nil {
+		return *p
+	}
+	return ""
+}
+func derefIntExport(p *int) int {
+	if p != nil {
+		return *p
+	}
+	return 0
+}
+func derefFloatExport(p *float64) float64 {
+	if p != nil {
+		return *p
+	}
+	return 0
+}
 
 // PRD-59: export-side mirrors of the orchestrator's distributed deploy
 // constants (unexported there). Kept in sync so an exported manifest matches
@@ -313,7 +335,18 @@ type manifestData struct {
 	ModelHfID            string
 	ModelS3URI           string // non-empty when the run loaded weights from S3
 	InstanceType         string
+	Framework            string // "vllm", "vllm-neuron", or "sglang"
 	FrameworkVersion     string
+	// SGLangImageOverride mirrors VLLMImageOverride for SGLang runs (SGLANG_IMAGE).
+	SGLangImageOverride string
+	// RuntimeCommand / RuntimeArgs are the container command + args computed via
+	// the runtime interface (internal/runtime) for the SGLang path, so the export
+	// reproduces the EXACT flags the orchestrator's BuildArgs produced —
+	// including the accelerator-dependent backend + SGLang scheduler knobs —
+	// without re-encoding that logic in the template. Empty for the vLLM/neuron
+	// path (which keeps its existing inline template args).
+	RuntimeCommand []string
+	RuntimeArgs    []string
 	TensorParallelDegree int
 	Quantization         string
 	MaxModelLen          int
@@ -356,11 +389,17 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		}
 	}
 
+	namePrefix := "vllm-"
+	if d.Framework == "sglang" {
+		namePrefix = "sglang-"
+	}
 	data := manifestData{
-		Name:                 "vllm-" + sanitizeFilename(d.ModelHfID),
+		Name:                 namePrefix + sanitizeFilename(d.ModelHfID),
 		ModelHfID:            d.ModelHfID,
 		InstanceType:         d.InstanceTypeName,
+		Framework:            d.Framework,
 		FrameworkVersion:     d.FrameworkVersion,
+		SGLangImageOverride:  os.Getenv("SGLANG_IMAGE"),
 		TensorParallelDegree: d.TensorParallelDegree,
 		MaxModelLen:          d.MaxModelLen,
 		// PRD-51: PRD-46's --max-num-seqs=concurrency wiring starved
@@ -408,6 +447,26 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 		data.StreamerMemoryLimitBytes = int64(*d.StreamerMemoryLimitGiB) * 1024 * 1024 * 1024
 	}
 
+	// SGLang single-node export: reproduce the EXACT flags the orchestrator would
+	// pass by reusing the runtime's BuildArgs (rather than re-encoding SGLang's
+	// accelerator-dependent backend + scheduler-knob logic in the template). The
+	// vLLM/neuron path keeps its inline template args unchanged.
+	if d.Framework == "sglang" {
+		if rt, err := runtime.Get("sglang"); err == nil {
+			cmd, args := rt.BuildArgs(runtime.ContainerParams{
+				ModelHfID:            d.ModelHfID,
+				TensorParallelDegree: d.TensorParallelDegree,
+				MaxModelLen:          d.MaxModelLen,
+				Quantization:         derefStrExport(d.Quantization),
+				ChunkedPrefillSize:   derefIntExport(d.ChunkedPrefillSize),
+				MemFractionStatic:    derefFloatExport(d.MemFractionStatic),
+				AcceleratorName:      d.AcceleratorName,
+			})
+			data.RuntimeCommand = cmd
+			data.RuntimeArgs = args
+		}
+	}
+
 	var buf bytes.Buffer
 	if err := manifestTemplate.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("execute template: %w", err)
@@ -418,9 +477,13 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 
 var manifestFuncs = template.FuncMap{
 	"div": func(a, b int) int { return a / b },
+	// quote renders a container-arg string as a double-quoted YAML scalar,
+	// matching the inline vLLM args style (e.g. "--tp-size"). Used for the
+	// SGLang RuntimeCommand/RuntimeArgs path.
+	"quote": func(s string) string { return "\"" + strings.ReplaceAll(s, "\"", "\\\"") + "\"" },
 }
 
-var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFuncs).Parse(`# Kubernetes manifest for vLLM model deployment
+var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFuncs).Parse(`# Kubernetes manifest for {{ if eq .Framework "sglang" }}SGLang{{ else }}vLLM{{ end }} model deployment
 # Generated from AccelBench benchmark run
 #
 # Model: {{ .ModelHfID }}
@@ -442,6 +505,9 @@ var manifestTemplate = template.Must(template.New("manifest").Funcs(manifestFunc
 {{- end }}
 {{- if .Quantization }}
 # Quantization: {{ .Quantization }}
+{{- end }}
+{{- if eq .Framework "sglang" }}
+# Framework: SGLang {{ .FrameworkVersion }}
 {{- end }}
 #
 # Prerequisites:
@@ -506,8 +572,14 @@ spec:
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .InstanceType }}
       containers:
-        - name: vllm
-{{- if eq .AcceleratorType "gpu" }}
+        - name: {{ if eq .Framework "sglang" }}sglang{{ else }}vllm{{ end }}
+{{- if eq .Framework "sglang" }}
+{{- if .SGLangImageOverride }}
+          image: {{ .SGLangImageOverride }}
+{{- else }}
+          image: {{ if .PullThroughRegistry }}{{ .PullThroughRegistry }}/dockerhub/{{ end }}lmsysorg/sglang:{{ .FrameworkVersion }}
+{{- end }}
+{{- else if eq .AcceleratorType "gpu" }}
 {{- if .VLLMImageOverride }}
           image: {{ .VLLMImageOverride }}
 {{- else }}
@@ -543,7 +615,16 @@ spec:
             - name: RUNAI_STREAMER_MEMORY_LIMIT
               value: "{{ .StreamerMemoryLimitBytes }}"
 {{- end }}
-{{- if eq .AcceleratorType "gpu" }}
+{{- if eq .Framework "sglang" }}
+          command:
+{{- range .RuntimeCommand }}
+            - {{ . | quote }}
+{{- end }}
+          args:
+{{- range .RuntimeArgs }}
+            - {{ . | quote }}
+{{- end }}
+{{- else if eq .AcceleratorType "gpu" }}
           args:
 {{- if .UseRunaiStreamer }}
             - "--model"

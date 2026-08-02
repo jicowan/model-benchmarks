@@ -343,3 +343,94 @@ func TestGenerateManifest_DisaggregatedBothPool_ReproducesAppliedConfig(t *testi
 		t.Error("both-pool export missing the applied both_max_num_batched_tokens=6144")
 	}
 }
+
+// TestGenerateManifest_SGLangSingleNode_ReproducesAppliedConfig: an SGLang
+// single-node run must export an SGLang manifest (image + sglang.launch_server)
+// carrying the user-supplied vLLM-equivalent knobs AND the SGLang-specific
+// scheduler knobs (--chunked-prefill-size / --mem-fraction-static) — NOT a vLLM
+// manifest. Reuses the runtime BuildArgs so the flags match what ran.
+func TestGenerateManifest_SGLangSingleNode_ReproducesAppliedConfig(t *testing.T) {
+	cp := 4096
+	mf := 0.85
+	q := "fp8"
+	d := &database.RunExportDetails{
+		RunID:                "sgl-run",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		InstanceTypeName:     "g6.2xlarge",
+		Framework:            "sglang",
+		FrameworkVersion:     "v0.4.1",
+		TensorParallelDegree: 2,
+		MaxModelLen:          8192,
+		Quantization:         &q,
+		ChunkedPrefillSize:   &cp,
+		MemFractionStatic:    &mf,
+		AcceleratorType:      "gpu",
+		AcceleratorName:      "L4", // non-Hopper → triton backend
+		AcceleratorCount:     2,
+		VCPUs:                8,
+		MemoryGiB:            32,
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	// SGLang image + launcher, NOT vLLM.
+	if !strings.Contains(out, "lmsysorg/sglang:v0.4.1") {
+		t.Error("SGLang export must use the sglang image")
+	}
+	if strings.Contains(out, "vllm/vllm-openai") {
+		t.Error("SGLang export must NOT use the vLLM image")
+	}
+	if !strings.Contains(out, "sglang.launch_server") {
+		t.Error("SGLang export must launch sglang.launch_server")
+	}
+	// Applied knobs (vLLM-equivalent + SGLang-specific).
+	for _, want := range []string{
+		`"--tp-size"`, `"2"`,
+		`"--context-length"`, `"8192"`,
+		`"--chunked-prefill-size"`, `"4096"`,
+		`"--mem-fraction-static"`, `"0.85"`,
+		`"--quantization"`, `"fp8"`,
+		`"--attention-backend"`, `"triton"`, // L4 = non-Hopper
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("SGLang export missing applied flag %q", want)
+		}
+	}
+	// Container named sglang; still a plain single-node Deployment (no llm-d graph).
+	if !strings.Contains(out, "- name: sglang") {
+		t.Error("SGLang container should be named sglang")
+	}
+	if strings.Contains(out, "kind: LeaderWorkerSet") || strings.Contains(out, "kind: InferencePool") {
+		t.Error("SGLang single-node export must be a plain Deployment")
+	}
+}
+
+// TestGenerateManifest_SGLangNoSchedulerKnobs: an SGLang run that set no
+// scheduler knobs omits --chunked-prefill-size / --mem-fraction-static (they're
+// optional; absence = SGLang default).
+func TestGenerateManifest_SGLangNoSchedulerKnobs(t *testing.T) {
+	d := &database.RunExportDetails{
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		InstanceTypeName:     "g6.2xlarge",
+		Framework:            "sglang",
+		FrameworkVersion:     "v0.4.1",
+		TensorParallelDegree: 1,
+		AcceleratorType:      "gpu",
+		AcceleratorName:      "H100", // Hopper → no forced triton backend
+		AcceleratorCount:     1,
+		VCPUs:                8,
+		MemoryGiB:            32,
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	if strings.Contains(out, "--chunked-prefill-size") || strings.Contains(out, "--mem-fraction-static") {
+		t.Error("unset SGLang scheduler knobs should not render")
+	}
+	// Hopper keeps SGLang's default backend (no forced triton).
+	if strings.Contains(out, "--attention-backend") {
+		t.Error("Hopper GPU should not force the triton attention backend")
+	}
+}
