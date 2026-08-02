@@ -36,6 +36,54 @@ func TestGenerateManifest_Distributed(t *testing.T) {
 	}
 }
 
+// TestGenerateManifest_Distributed_ReproducesAppliedConfig (PP, user-supplied
+// values): the exported LeaderWorkerSet must reproduce the run's actual topology
+// (node_count/TP/PP) AND the user's vLLM knob overrides (max-model-len,
+// max-num-batched-tokens, kv-cache-dtype) — not defaults.
+func TestGenerateManifest_Distributed_ReproducesAppliedConfig(t *testing.T) {
+	mnbt := 24576
+	kvd := "fp8"
+	d := &database.RunExportDetails{
+		ModelHfID: "meta-llama/Llama-3.1-70B", InstanceTypeName: "p5.48xlarge",
+		Framework: "llm-d", FrameworkVersion: "v0.8.1",
+		TensorParallelDegree: 4, AcceleratorCount: 8, VCPUs: 192, MemoryGiB: 2048,
+		MaxModelLen:         8192,
+		MaxNumBatchedTokens: &mnbt,
+		KVCacheDtype:        &kvd,
+		DeploymentMode:      strptr("distributed"), NodeCount: intptr(3),
+		PipelineParallelDegree: intptr(3), NetworkMode: strptr("efa"),
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	// Topology as applied: LWS group size 3, TP=4, PP=3.
+	for _, want := range []string{
+		"kind: LeaderWorkerSet",
+		"size: 3",          // NodeCount → LWS group size
+		"TP_SIZE=4",        // user TP (not forced to fill the 8-GPU node)
+		"PP_SIZE=3",        // user PP
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("distributed export missing applied topology %q", want)
+		}
+	}
+	// User vLLM knob overrides flow through the ServeArgs.
+	for _, want := range []string{
+		"--max-model-len", "8192",
+		"--max-num-batched-tokens", "24576",
+		"--kv-cache-dtype", "fp8",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("distributed export missing applied knob %q", want)
+		}
+	}
+	// EFA mode: the EFA device class IS claimed (opposite of the tcp test).
+	if !strings.Contains(out, "efa.networking.k8s.aws") {
+		t.Error("efa-mode distributed export must claim EFA")
+	}
+}
+
 // TestGenerateManifest_Disaggregated: a PD run exports the two-group +
 // InferencePool + EPP graph.
 func TestGenerateManifest_Disaggregated(t *testing.T) {

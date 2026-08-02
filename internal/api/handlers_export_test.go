@@ -289,3 +289,57 @@ func TestGenerateManifest_DisaggregatedReproducesAppliedConfig(t *testing.T) {
 		t.Error("export used default nonCachedTokens instead of the applied 128")
 	}
 }
+
+// TestGenerateManifest_DisaggregatedBothPool_ReproducesAppliedConfig (PRD-63/64):
+// a D/P run WITH a co-located "both" pool exports the both role + its per-role
+// scheduler override, and — because a both pool is present — the anti-self-route
+// prefill-only-filter. Covers the both-pool topology with user-supplied values.
+func TestGenerateManifest_DisaggregatedBothPool_ReproducesAppliedConfig(t *testing.T) {
+	mode := "disaggregated"
+	net := "tcp"
+	pR, pTP := 1, 1
+	bR, bTP := 2, 1
+	bMax := 6144 // distinct from max-model-len so the assertion is unambiguous
+	d := &database.RunExportDetails{
+		RunID:                "pd-both-run",
+		ModelHfID:            "Qwen/Qwen2.5-1.5B-Instruct",
+		InstanceTypeName:     "g6.2xlarge",
+		Framework:            "llm-d",
+		TensorParallelDegree: 1,
+		MaxModelLen:          4096,
+		AcceleratorType:      "gpu",
+		AcceleratorName:      "L4",
+		AcceleratorCount:     1,
+		VCPUs:                8,
+		MemoryGiB:            32,
+		DeploymentMode:       &mode,
+		NetworkMode:          &net,
+		// prefill + both (decode covered by the both pool) — a valid PRD-63 combo.
+		PrefillReplicas:         &pR,
+		PrefillTP:               &pTP,
+		BothReplicas:            &bR,
+		BothTP:                  &bTP,
+		BothMaxNumBatchedTokens: &bMax,
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	// The both role Deployment + its canonical wire label render.
+	for _, want := range []string{
+		"pd-qwen-qwen2-5-1-5b-instruct-both",
+		"llm-d.ai/role: prefill-decode",
+		// PRD-63 anti-self-route filter is present because a both pool exists.
+		"prefill-only-filter",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("both-pool export missing %q", want)
+		}
+	}
+	// The both role's per-role --max-num-batched-tokens override (6144) is applied.
+	// (Shared MaxNumBatchedTokens is nil, so this flag appears ONLY via the both
+	// override — an unambiguous check.)
+	if !strings.Contains(out, "--max-num-batched-tokens") || !strings.Contains(out, `"6144"`) {
+		t.Error("both-pool export missing the applied both_max_num_batched_tokens=6144")
+	}
+}
