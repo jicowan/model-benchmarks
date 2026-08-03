@@ -244,6 +244,107 @@ func TestSelectMultinodePool_NoAZPoolViaOverride(t *testing.T) {
 	}
 }
 
+// TestSetNodePoolInstanceType: the orchestrator narrows a static pool to the
+// run's exact instance type before scale-out — replacing any instance-category
+// (family) constraint, preserving the AZ requirement, so the pool provisions
+// exactly what the run selected (and the pods' matching nodeSelector agrees).
+func TestSetNodePoolInstanceType(t *testing.T) {
+	// A pool that currently uses the family category (like the widened pools).
+	pool := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata":   map[string]any{"name": "multinode-us-east-2a"},
+		"spec": map[string]any{
+			"replicas": int64(0),
+			"template": map[string]any{
+				"spec": map[string]any{
+					"requirements": []any{
+						map[string]any{"key": "kubernetes.io/arch", "operator": "In", "values": []any{"amd64"}},
+						map[string]any{"key": "karpenter.k8s.aws/instance-category", "operator": "In", "values": []any{"g", "p"}},
+						map[string]any{"key": "topology.kubernetes.io/zone", "operator": "In", "values": []any{"us-east-2a"}},
+					},
+				},
+			},
+		},
+	}}
+	dyn := newFakeDyn(pool)
+	o := New(k8sfake.NewSimpleClientset(), database.NewMockRepo(), "pod")
+	o.SetDynamicClient(dyn)
+
+	if err := o.setNodePoolInstanceType(context.Background(), "multinode-us-east-2a", "g6.12xlarge"); err != nil {
+		t.Fatalf("setNodePoolInstanceType: %v", err)
+	}
+	got, err := dyn.Resource(gvrNodePool).Get(context.Background(), "multinode-us-east-2a", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs, _, _ := unstructured.NestedSlice(got.Object, "spec", "template", "spec", "requirements")
+	var haveType, haveZone, haveArch bool
+	for _, r := range reqs {
+		m := r.(map[string]any)
+		switch m["key"].(string) {
+		case "node.kubernetes.io/instance-type":
+			haveType = true
+			vals, _, _ := unstructured.NestedStringSlice(m, "values")
+			if len(vals) != 1 || vals[0] != "g6.12xlarge" {
+				t.Errorf("instance-type should be exactly [g6.12xlarge], got %v", vals)
+			}
+		case "karpenter.k8s.aws/instance-category":
+			t.Error("instance-category should be removed when a specific type is set")
+		case "topology.kubernetes.io/zone":
+			haveZone = true
+		case "kubernetes.io/arch":
+			haveArch = true
+		}
+	}
+	if !haveType {
+		t.Error("instance-type requirement not set")
+	}
+	if !haveZone || !haveArch {
+		t.Error("zone/arch requirements must be preserved")
+	}
+}
+
+// TestSetNodePoolNetworkMode: TCP runs repoint the pool's nodeClassRef at the
+// non-EFA multinode-tcp-<az> class (so non-EFA instances can launch); EFA runs
+// use the pool's own EFA class.
+func TestSetNodePoolNetworkMode(t *testing.T) {
+	mkPool := func() *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "karpenter.sh/v1", "kind": "NodePool",
+			"metadata": map[string]any{"name": "multinode-us-east-2a"},
+			"spec": map[string]any{"replicas": int64(0), "template": map[string]any{"spec": map[string]any{
+				"nodeClassRef": map[string]any{"group": "karpenter.k8s.aws", "kind": "EC2NodeClass", "name": "multinode-us-east-2a"},
+			}}},
+		}}
+	}
+	// TCP → multinode-tcp-us-east-2a
+	dyn := newFakeDyn(mkPool())
+	o := New(k8sfake.NewSimpleClientset(), database.NewMockRepo(), "pod")
+	o.SetDynamicClient(dyn)
+	if err := o.setNodePoolNetworkMode(context.Background(), "multinode-us-east-2a", NetworkModeTCP); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := dyn.Resource(gvrNodePool).Get(context.Background(), "multinode-us-east-2a", metav1.GetOptions{})
+	name, _, _ := unstructured.NestedString(got.Object, "spec", "template", "spec", "nodeClassRef", "name")
+	if name != "multinode-tcp" {
+		t.Errorf("TCP run should use the shared multinode-tcp node class, got %q", name)
+	}
+
+	// EFA → the pool's own class.
+	dyn2 := newFakeDyn(mkPool())
+	o2 := New(k8sfake.NewSimpleClientset(), database.NewMockRepo(), "pod")
+	o2.SetDynamicClient(dyn2)
+	if err := o2.setNodePoolNetworkMode(context.Background(), "multinode-us-east-2a", NetworkModeEFA); err != nil {
+		t.Fatal(err)
+	}
+	got2, _ := dyn2.Resource(gvrNodePool).Get(context.Background(), "multinode-us-east-2a", metav1.GetOptions{})
+	name2, _, _ := unstructured.NestedString(got2.Object, "spec", "template", "spec", "nodeClassRef", "name")
+	if name2 != "multinode-us-east-2a" {
+		t.Errorf("EFA run should use the base node class, got %q", name2)
+	}
+}
+
 func TestSelectMultinodePool_Override(t *testing.T) {
 	dyn := newFakeDyn(
 		nodePoolObj("multinode-us-east-2a"),

@@ -69,12 +69,6 @@ variable "enable_multinode" {
   default     = false
 }
 
-variable "multinode_instance_type" {
-  description = "Single EFA-capable GPU instance type pinned by every per-AZ multi-node pool."
-  type        = string
-  default     = "p5.48xlarge"
-}
-
 variable "multinode_placement_groups" {
   description = <<-EOT
     Map of AZ name -> EC2 cluster placement-group name. One static

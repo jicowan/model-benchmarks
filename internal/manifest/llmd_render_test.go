@@ -30,6 +30,19 @@ func sampleLLMDParams() LLMDDeploymentParams {
 		MultiNodeTaintValue:    "true",
 		DRANodeSelectorKey:     "accelbench.io/dra",
 		DRANodeSelectorVal:     "true",
+		InstanceTypeName:       "p5.48xlarge",
+	}
+}
+
+// TestRenderLLMDDeployment_InstanceTypePinned: the co-located (PP) group pins the
+// run's selected instance type on every pod.
+func TestRenderLLMDDeployment_InstanceTypePinned(t *testing.T) {
+	out, err := RenderLLMDDeployment(sampleLLMDParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "node.kubernetes.io/instance-type: p5.48xlarge") {
+		t.Error("LWS pods must pin the run's instance type")
 	}
 }
 

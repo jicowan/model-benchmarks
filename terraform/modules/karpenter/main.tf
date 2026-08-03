@@ -784,7 +784,11 @@ resource "helm_release" "aws_dranet" {
 
 # ---------- Multi-node static EFA GPU pools, one per AZ (PRD-55) ----------
 # For each AZ the VPC spans, a dedicated EC2NodeClass + static NodePool:
-#   - pinned to ONE instance type (var.multinode_instance_type) and ONE AZ
+#   - rests on the GPU instance-category (g/p); the orchestrator narrows the
+#     pool to the run's selected instance type per run (setNodePoolInstanceType).
+#     A static pool provisions from its OWN requirements (Karpenter ignores pods),
+#     so this per-run narrowing is what makes the run form drive the hardware.
+#   - pinned to ONE AZ (topology.kubernetes.io/zone requirement + subnet id)
 #   - bound to that AZ's cluster placement group (co-location for EFA/NCCL)
 #   - EFA network interfaces (efa-only on device index 1) for RDMA
 #   - labeled accelbench.io/dra=true so the DRA drivers land here and the
@@ -843,6 +847,56 @@ resource "kubectl_manifest" "multinode_node_class" {
   depends_on = [time_sleep.wait_for_karpenter]
 }
 
+# TCP-mode node class (SINGLE, shared across AZs): identical to the EFA
+# multinode-<az> classes EXCEPT it OMITS the efa-only networkInterfaces block AND
+# the per-AZ placement group. An efa-only interface makes Karpenter launch ONLY
+# EFA-capable instances (the scarce large g6/p types); a network_mode=tcp run
+# doesn't use EFA, so it should be free to launch small, plentiful GPU instances
+# (e.g. g6.2xlarge).
+#
+# Why ONE class, not per-AZ: AZ placement is enforced by the NodePool's own
+# topology.kubernetes.io/zone requirement, and this class uses TAG-BASED subnet
+# discovery (every AZ's private subnet carries karpenter.sh/discovery), so
+# Karpenter picks the subnet matching the pool's zone. TCP needs no cluster
+# placement group (that's an EFA/RDMA co-location optimization), so this class
+# omits placementGroupSelector and can serve any AZ. The orchestrator points a
+# pool's nodeClassRef at this class for TCP runs and at the per-AZ EFA class for
+# EFA runs (see setNodePoolNetworkMode).
+resource "kubectl_manifest" "multinode_node_class_tcp" {
+  count = var.enable_multinode ? 1 : 0
+
+  yaml_body = <<-YAML
+    apiVersion: karpenter.k8s.aws/v1
+    kind: EC2NodeClass
+    metadata:
+      name: multinode-tcp
+    spec:
+      amiFamily: AL2023
+      amiSelectorTerms:
+        - id: ${data.aws_ssm_parameter.gpu_ami.value}
+      role: ${module.karpenter.node_iam_role_name}
+      # Tag-based subnet discovery across all AZs; the NodePool's zone
+      # requirement selects which one. No efa-only interface, no placement group.
+      subnetSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      securityGroupSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      instanceStorePolicy: RAID0
+      blockDeviceMappings:
+        - deviceName: /dev/xvda
+          ebs:
+            volumeSize: 100Gi
+            volumeType: gp3
+            encrypted: true
+            throughput: 1000
+            iops: 16000
+  YAML
+
+  depends_on = [time_sleep.wait_for_karpenter]
+}
+
 resource "kubectl_manifest" "multinode_node_pool" {
   for_each = var.enable_multinode ? var.multinode_placement_groups : {}
 
@@ -874,9 +928,19 @@ resource "kubectl_manifest" "multinode_node_pool" {
             - key: kubernetes.io/arch
               operator: In
               values: ["amd64"]
-            - key: node.kubernetes.io/instance-type
+            # RESTING constraint: the GPU instance categories (g/p). This is a
+            # static pool, so it provisions from the POOL's requirements (not the
+            # pods') — the orchestrator NARROWS this to the run's exact instance
+            # type at scale-out (setNodePoolInstanceType), replacing this category
+            # key with node.kubernetes.io/instance-type=<selected>. So the run
+            # form drives the actual hardware; this category is only the at-rest
+            # superset (and the fallback if the orchestrator didn't set a type).
+            # Subject to EFA capability — the node class attaches an efa-only
+            # interface, so only EFA-capable instances launch. All of a run's
+            # nodes share one type (single AZ + PG friendly).
+            - key: karpenter.k8s.aws/instance-category
               operator: In
-              values: ["${var.multinode_instance_type}"]
+              values: ["g", "p"]
             - key: topology.kubernetes.io/zone
               operator: In
               values: ["${each.key}"]

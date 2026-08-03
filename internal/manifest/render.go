@@ -226,6 +226,11 @@ type LLMDDeploymentParams struct {
 	MultiNodeTaintValue string // e.g. "true"
 	DRANodeSelectorKey  string // e.g. "accelbench.io/dra"
 	DRANodeSelectorVal  string // e.g. "true"
+	// InstanceTypeName adds a node.kubernetes.io/instance-type nodeSelector to
+	// every group pod (belt-and-suspenders — the static pool's own requirements,
+	// set per-run by the orchestrator, are what actually drive provisioning; a
+	// static pool ignores pod constraints per the Karpenter docs). Empty ⇒ none.
+	InstanceTypeName string
 }
 
 // RenderLLMDDeployment renders the multi-node llm-d object graph as a
@@ -268,6 +273,14 @@ type LLMDDisaggregatedParams struct {
 	ModelLabel    string
 	HfToken       string
 	ModelServiceAccount string
+	// InstanceTypeName adds a node.kubernetes.io/instance-type nodeSelector to
+	// every serving pod. NOTE: a STATIC NodePool provisions from its OWN template
+	// requirements, ignoring pods (Karpenter docs), so this selector does NOT
+	// drive provisioning — the orchestrator sets the pool's instance-type per run
+	// (setNodePoolInstanceType) for that. This is a belt-and-suspenders guard so
+	// pods only bind a node of the selected type (never accidentally a leftover
+	// node of a different type). Empty ⇒ no selector.
+	InstanceTypeName string
 
 	// Per-role topology. TP is within-node GPUs per pod (drives the per-role
 	// DRA GPU count); replica counts are the xPyD ratio. PP>1 per role is a

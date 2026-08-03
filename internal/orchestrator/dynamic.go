@@ -61,6 +61,11 @@ var clusterScopedKinds = map[string]bool{
 // the static multi-node pool (PRD-56 Layer 3).
 var gvrNodePool = schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
 
+// gvrNodeClaim is the Karpenter NodeClaim resource. Used to fast-fail a
+// distributed scale-out when a claim reports InsufficientCapacityError (so the
+// caller can try the next AZ pool without waiting out the provision timeout).
+var gvrNodeClaim = schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodeclaims"}
+
 // appliedObject records a single custom resource applied for a run so teardown
 // can delete exactly what was created (PRD-56 Layer 2). clusterScoped marks
 // resources (ClusterRole/ClusterRoleBinding) that must be addressed without a

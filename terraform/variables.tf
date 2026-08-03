@@ -54,16 +54,6 @@ variable "enable_multinode" {
   default     = false
 }
 
-variable "multinode_instance_type" {
-  description = <<-EOT
-    The single EFA-capable GPU instance type for the multi-node static
-    pools (e.g. "p5.48xlarge" / "p5en.48xlarge"). A cluster placement
-    group wants one instance type; each per-AZ pool pins this type.
-  EOT
-  type        = string
-  default     = "p5.48xlarge"
-}
-
 # Serving-stack chart/CRD versions (gateway.tf). Pinned; verified against
 # each project's GitHub releases. LWS chart version has NO `v` prefix.
 variable "lws_version" {

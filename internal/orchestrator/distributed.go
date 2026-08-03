@@ -193,6 +193,26 @@ func (o *Orchestrator) acquireDistributedPool(ctx context.Context, ns, modelName
 
 	var lastErr error
 	for _, pool := range pools {
+		// Set the pool's instance type to the run's selection BEFORE scaling out.
+		// A static pool provisions from its OWN requirements, so this is what
+		// makes the run form's instance choice drive the actual hardware (the
+		// pods carry a matching nodeSelector). Failure here means the pool would
+		// provision the wrong type — treat it like a scale failure and move on.
+		if cfg.InstanceType != nil {
+			if err := o.setNodePoolInstanceType(ctx, pool, cfg.InstanceType.Name); err != nil {
+				log.Printf("[%s] set %s instance type: %v; trying next pool", cfg.RunID[:8], pool, err)
+				lastErr = err
+				continue
+			}
+		}
+		// Point the pool at the EFA vs TCP node class for the run's fabric, so a
+		// TCP run can launch non-EFA instances (the EFA node class forces
+		// EFA-capable-only). Must precede scale-out.
+		if err := o.setNodePoolNetworkMode(ctx, pool, cfg.networkMode()); err != nil {
+			log.Printf("[%s] set %s node class: %v; trying next pool", cfg.RunID[:8], pool, err)
+			lastErr = err
+			continue
+		}
 		if err := o.scaleNodePool(ctx, pool, cfg.NodeCount); err != nil {
 			lastErr = err
 			continue
@@ -299,6 +319,7 @@ func (o *Orchestrator) deployLLMD(ctx context.Context, ns, name string, cfg RunC
 		ModelHfID:              cfg.Request.ModelHfID,
 		HfToken:                o.resolveHFToken(ctx, cfg.Request.HfToken),
 		ModelServiceAccount:    modelServiceAccount,
+		InstanceTypeName:       cfg.InstanceType.Name,
 		NodeCount:              cfg.NodeCount,
 		TensorParallelDegree:   cfg.Request.TensorParallelDegree,
 		PipelineParallelDegree: cfg.PipelineParallelDegree,

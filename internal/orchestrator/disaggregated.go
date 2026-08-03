@@ -195,6 +195,7 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		ModelLabel:          modelLabelValue(cfg.Request.ModelHfID),
 		HfToken:             o.resolveHFToken(ctx, cfg.Request.HfToken),
 		ModelServiceAccount: modelServiceAccount,
+		InstanceTypeName:    cfg.InstanceType.Name,
 		PrefillReplicas:     prefillReplicas,
 		PrefillTP:           prefillTP,
 		DecodeReplicas:      decodeReplicas,

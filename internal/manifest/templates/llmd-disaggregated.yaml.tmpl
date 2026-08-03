@@ -570,6 +570,12 @@ spec:
             effect: NoSchedule
         nodeSelector:
           {{ $p.DRANodeSelectorKey }}: "{{ $p.DRANodeSelectorVal }}"
+{{- if $p.InstanceTypeName }}
+          # Belt-and-suspenders: bind only a node of the run's selected type. The
+          # static pool's own requirements (set per-run by the orchestrator) drive
+          # provisioning — a static pool ignores pod constraints (Karpenter docs).
+          node.kubernetes.io/instance-type: {{ $p.InstanceTypeName }}
+{{- end }}
         resourceClaims:
           - name: gpu
             resourceClaimTemplateName: {{ $p.Name }}-{{ $role }}-devices

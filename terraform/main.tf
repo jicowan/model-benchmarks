@@ -349,7 +349,6 @@ module "karpenter" {
   # NodePool per AZ, each bound to that AZ's cluster placement group.
   enable_multinode        = var.enable_multinode
   install_dra_drivers     = var.enable_multinode
-  multinode_instance_type = var.multinode_instance_type
   # map AZ -> placement group name, consumed by the per-AZ NodeClasses.
   multinode_placement_groups = { for az, pg in aws_placement_group.multinode : az => pg.name }
   # map AZ -> private subnet ID: NodeClasses select their subnet by id

@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -59,8 +60,138 @@ func (o *Orchestrator) scaleNodePool(ctx context.Context, name string, replicas 
 	return nil
 }
 
+// setNodePoolInstanceType sets the static multinode pool's
+// node.kubernetes.io/instance-type requirement to exactly the run's selected
+// type, BEFORE scale-out. A static pool provisions its nodes from the POOL's
+// requirements (not the pods' — static pools skip pod-driven scheduling, the
+// DRA-compat tradeoff), so this is what makes the run form's instance choice
+// actually drive provisioning. The pods carry a matching instance-type
+// nodeSelector, so pool and pods agree by construction.
+//
+// It reads the current requirements, replaces (or appends) the instance-type
+// key, and writes the whole spec.template.spec.requirements list back (a merge
+// patch can't edit one array element). Other requirement keys (arch, zone,
+// capacity-type) are preserved. Best-effort intent: on any read/shape error it
+// returns an error so the caller can surface it rather than silently provision
+// the wrong type.
+func (o *Orchestrator) setNodePoolInstanceType(ctx context.Context, name, instanceType string) error {
+	if o.dynClient == nil {
+		return fmt.Errorf("dynamic client not configured; cannot set NodePool %q instance type", name)
+	}
+	if instanceType == "" {
+		return nil // nothing to pin
+	}
+	np, err := o.dynClient.Resource(gvrNodePool).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get NodePool %q: %w", name, err)
+	}
+	reqs, found, err := unstructured.NestedSlice(np.Object, "spec", "template", "spec", "requirements")
+	if err != nil || !found {
+		return fmt.Errorf("NodePool %q has no requirements list", name)
+	}
+	// Rebuild the list: drop any instance-type / instance-category constraint,
+	// then append the run's exact type. Preserves arch / zone / capacity-type.
+	const itKey = "node.kubernetes.io/instance-type"
+	const catKey = "karpenter.k8s.aws/instance-category"
+	out := make([]any, 0, len(reqs)+1)
+	for _, r := range reqs {
+		m, ok := r.(map[string]any)
+		if !ok {
+			out = append(out, r)
+			continue
+		}
+		if key, _ := m["key"].(string); key == itKey || key == catKey {
+			continue // drop old instance-type / family-category — the run pins one type
+		}
+		out = append(out, r)
+	}
+	out = append(out, map[string]any{
+		"key":      itKey,
+		"operator": "In",
+		"values":   []any{instanceType},
+	})
+	// Merge-patch the whole requirements array (not Update) so we only need the
+	// "patch" verb the orchestrator SA already holds for the replicas scale — a
+	// merge patch replaces the array wholesale, which is exactly what we want.
+	body := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{"requirements": out},
+			},
+		},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	_, err = o.dynClient.Resource(gvrNodePool).Patch(ctx, name, types.MergePatchType, raw,
+		metav1.PatchOptions{FieldManager: "accelbench-orchestrator"})
+	if err != nil {
+		return fmt.Errorf("patch NodePool %q instance type=%s: %w", name, instanceType, err)
+	}
+	log.Printf("[nodepool] set %s instance-type=%s", name, instanceType)
+	return nil
+}
+
+// errInsufficientCapacity signals that a pool cannot provision its nodes because
+// AWS has no capacity for the requested instance type in that AZ. The caller
+// (acquireDistributedPool) treats it as a fast fallthrough to the next AZ pool
+// rather than waiting out the full provision timeout.
+var errInsufficientCapacity = fmt.Errorf("insufficient capacity")
+
+// setNodePoolNetworkMode points the static pool's nodeClassRef at the EC2NodeClass
+// matching the run's network mode, BEFORE scale-out. The EFA node class
+// (multinode-<az>) declares an efa-only interface → Karpenter launches ONLY
+// EFA-capable (scarce, large) instances; the shared TCP node class
+// ("multinode-tcp") omits it → any GPU instance (e.g. g6.2xlarge) can launch.
+//
+// The TCP node class is a SINGLE shared class (not per-AZ): AZ placement is
+// enforced by the NodePool's own topology.kubernetes.io/zone requirement, and
+// the TCP class uses tag-based subnet discovery (all AZ subnets carry the
+// karpenter.sh/discovery tag), so Karpenter picks the subnet matching the pool's
+// zone. (The per-AZ EFA classes exist because they pin a specific PG + subnet for
+// RDMA co-location; TCP needs neither.) Safe because distributed runs serialize.
+func (o *Orchestrator) setNodePoolNetworkMode(ctx context.Context, poolName, networkMode string) error {
+	if o.dynClient == nil {
+		return fmt.Errorf("dynamic client not configured; cannot set NodePool %q node class", poolName)
+	}
+	// Default (efa) → the pool's own per-AZ EFA class; tcp → the shared TCP class.
+	className := poolName
+	if networkMode == NetworkModeTCP {
+		className = "multinode-tcp"
+	}
+	body := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"nodeClassRef": map[string]any{
+						"group": "karpenter.k8s.aws",
+						"kind":  "EC2NodeClass",
+						"name":  className,
+					},
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	_, err = o.dynClient.Resource(gvrNodePool).Patch(ctx, poolName, types.MergePatchType, raw,
+		metav1.PatchOptions{FieldManager: "accelbench-orchestrator"})
+	if err != nil {
+		return fmt.Errorf("patch NodePool %q nodeClassRef=%s: %w", poolName, className, err)
+	}
+	log.Printf("[nodepool] set %s nodeClassRef=%s (network=%s)", poolName, className, networkMode)
+	return nil
+}
+
 // waitForNodes blocks until at least `count` nodes provisioned by NodePool
-// `poolName` are Ready and carry the DRA label, or the timeout elapses.
+// `poolName` are Ready and carry the DRA label, or the timeout elapses. It
+// FAILS FAST with errInsufficientCapacity when Karpenter reports it can't launch
+// the instance type in this AZ — so the caller can try the next AZ in seconds
+// instead of grinding through the full nodeProvisionTimeout (a run pins one
+// instance type, so a capacity error won't self-resolve within this pool).
 func (o *Orchestrator) waitForNodes(ctx context.Context, poolName string, count int) error {
 	deadline := time.Now().Add(nodeProvisionTimeout)
 	for time.Now().Before(deadline) {
@@ -68,6 +199,13 @@ func (o *Orchestrator) waitForNodes(ctx context.Context, poolName string, count 
 		if ready >= count {
 			log.Printf("[nodepool] %s: %d/%d nodes ready", poolName, ready, count)
 			return nil
+		}
+		// Fast-fail on an AWS capacity shortage: no point waiting 20 min for a
+		// node that can't launch. Only trip when NO node is ready yet (a partial
+		// scale-out that's mid-provision shouldn't be aborted on a stale event).
+		if ready == 0 && o.poolHitCapacityError(ctx, poolName) {
+			log.Printf("[nodepool] %s: insufficient capacity — failing fast to try the next AZ", poolName)
+			return errInsufficientCapacity
 		}
 		select {
 		case <-ctx.Done():
@@ -77,6 +215,42 @@ func (o *Orchestrator) waitForNodes(ctx context.Context, poolName string, count 
 	}
 	return fmt.Errorf("NodePool %q: only %d of %d nodes became ready after %v",
 		poolName, o.countReadyDRANodes(ctx, poolName), count, nodeProvisionTimeout)
+}
+
+// poolHitCapacityError reports whether any of the pool's NodeClaims has a recent
+// InsufficientCapacityError event — Karpenter's signal that the AZ can't launch
+// the requested instance type. NodeClaims carry the karpenter.sh/nodepool label;
+// their events carry reason=InsufficientCapacityError.
+func (o *Orchestrator) poolHitCapacityError(ctx context.Context, poolName string) bool {
+	// NodeClaim names are what the events reference (involvedObject). List the
+	// pool's nodeclaims, then scan events by reason for any of them.
+	ncs, err := o.dynClient.Resource(gvrNodeClaim).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("%s=%s", nodePoolLabel, poolName),
+	})
+	if err != nil {
+		return false
+	}
+	claimNames := map[string]bool{}
+	for _, nc := range ncs.Items {
+		claimNames[nc.GetName()] = true
+	}
+	if len(claimNames) == 0 {
+		return false
+	}
+	// Events for NodeClaims live in the default namespace (cluster-scoped
+	// objects' events land there). Filter by the capacity reason.
+	events, err := o.client.CoreV1().Events("default").List(ctx, metav1.ListOptions{
+		FieldSelector: "reason=InsufficientCapacityError",
+	})
+	if err != nil {
+		return false
+	}
+	for _, ev := range events.Items {
+		if claimNames[ev.InvolvedObject.Name] {
+			return true
+		}
+	}
+	return false
 }
 
 // countReadyDRANodes counts Ready nodes from the given NodePool that carry the

@@ -39,6 +39,24 @@ func sampleDisaggParams() LLMDDisaggregatedParams {
 		MultiNodeTaintValue: "true",
 		DRANodeSelectorKey:  "accelbench.io/dra",
 		DRANodeSelectorVal:  "true",
+		InstanceTypeName:    "g6.48xlarge",
+	}
+}
+
+// TestRenderLLMDDisaggregated_InstanceTypePinned: every serving pod pins the
+// run's selected instance type so the AZ pool (which provisions from the GPU
+// instance-category) lands the right hardware.
+func TestRenderLLMDDisaggregated_InstanceTypePinned(t *testing.T) {
+	out, err := RenderLLMDDisaggregated(sampleDisaggParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "node.kubernetes.io/instance-type: g6.48xlarge") {
+		t.Error("serving pods must pin the run's instance type")
+	}
+	// prefill + decode each pin it (2 role pods in the default sample).
+	if n := strings.Count(out, "node.kubernetes.io/instance-type: g6.48xlarge"); n != 2 {
+		t.Errorf("expected instance-type selector on both role pods (2), got %d", n)
 	}
 }
 
