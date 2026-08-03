@@ -207,6 +207,18 @@ func TestRenderLLMDDisaggregated_EPPAndRouting(t *testing.T) {
 	if !strings.Contains(out, `request: "3600s"`) {
 		t.Error("HTTPRoute must raise the request timeout")
 	}
+	// The CPU-only EPP must schedule on the general-purpose (system) Karpenter
+	// pool like the loadgen: tolerate the dedicated taint + select node-type=system.
+	// Otherwise it can't tolerate that pool's taint and stalls Pending when the
+	// managed system nodegroup is full.
+	for _, want := range []string{
+		"key: accelbench.io/dedicated",
+		"key: accelbench/node-type",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("EPP pod must be schedulable on the system pool; missing %q", want)
+		}
+	}
 }
 
 func TestRenderLLMDDisaggregated_EFAMode(t *testing.T) {

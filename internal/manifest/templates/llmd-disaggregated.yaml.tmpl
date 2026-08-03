@@ -428,6 +428,25 @@ spec:
     spec:
       serviceAccountName: {{ .Name }}-epp
       terminationGracePeriodSeconds: 130
+      # The EPP is CPU-only. Land it on the general-purpose (system) Karpenter
+      # pool — which auto-provisions — the same way the loadgen does: tolerate
+      # the accelbench.io/dedicated taint and select accelbench/node-type=system.
+      # Without this the EPP can't tolerate that pool's taint, falls back to the
+      # managed system nodegroup, and stalls Pending when the MNG is full.
+      tolerations:
+        - key: accelbench.io/dedicated
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: accelbench/node-type
+                    operator: In
+                    values:
+                      - system
       containers:
         - name: epp
           image: {{ .EPPImage }}
