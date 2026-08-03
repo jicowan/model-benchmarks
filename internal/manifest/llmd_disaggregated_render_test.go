@@ -219,6 +219,24 @@ func TestRenderLLMDDisaggregated_EPPAndRouting(t *testing.T) {
 			t.Errorf("EPP pod must be schedulable on the system pool; missing %q", want)
 		}
 	}
+	// No EPPZone set in the sample → no zone constraint on the EPP.
+	if strings.Contains(out, "topology.kubernetes.io/zone") {
+		t.Error("EPP should have no zone constraint when EPPZone is empty")
+	}
+}
+
+// TestRenderLLMDDisaggregated_EPPZone: when EPPZone is set, the EPP gets a
+// topology.kubernetes.io/zone nodeSelector to co-locate it with the serving AZ.
+func TestRenderLLMDDisaggregated_EPPZone(t *testing.T) {
+	p := sampleDisaggParams()
+	p.EPPZone = "us-east-2a"
+	out, err := RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "topology.kubernetes.io/zone") || !strings.Contains(out, "- us-east-2a") {
+		t.Error("EPP should carry a zone nodeSelector for EPPZone=us-east-2a")
+	}
 }
 
 func TestRenderLLMDDisaggregated_EFAMode(t *testing.T) {

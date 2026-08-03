@@ -63,6 +63,33 @@ func modelLabelValue(hfID string) string {
 	return s
 }
 
+// azFromPoolName extracts the AZ from a static multinode pool name of the form
+// "multinode-<az>" (e.g. "multinode-us-east-2a" → "us-east-2a"). Returns "" for
+// a name that doesn't encode an AZ (e.g. an override/scratch pool), so the
+// caller leaves the EPP zone-unconstrained. The AZ suffix must look like a
+// region+zone-letter (contains a digit and ends in a letter) to avoid
+// mis-parsing an arbitrary suffix.
+func azFromPoolName(pool string) string {
+	const prefix = "multinode-"
+	if !strings.HasPrefix(pool, prefix) {
+		return ""
+	}
+	az := strings.TrimPrefix(pool, prefix)
+	// A real AZ looks like "us-east-2a": has a digit and ends with a lowercase
+	// zone letter. This rejects "tcp" and other non-AZ suffixes.
+	if az == "" {
+		return ""
+	}
+	last := az[len(az)-1]
+	if last < 'a' || last > 'z' {
+		return ""
+	}
+	if !strings.ContainsAny(az, "0123456789") {
+		return ""
+	}
+	return az
+}
+
 // deployLLMDDisaggregated renders the PD-disaggregated object graph (two pod
 // groups + InferencePool + EPP) from the run's per-role topology and applies it
 // via the dynamic client, tracking every object for teardown. Called from
@@ -182,6 +209,19 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	maxPrefixBlocks := valOrDefault(cfg.PDMaxPrefixBlocks, defaultPDMaxPrefixBlocks)
 	lruCapacity := valOrDefault(cfg.PDLRUCapacityPerServer, defaultPDLRUCapacity)
 
+	// Co-locate the EPP with the serving pods' AZ. The pool was selected +
+	// recorded in distributedState by acquireDistributedPool (runs before this),
+	// and its name encodes the AZ (multinode-<az> / multinode-tcp is name-only —
+	// so azFromPoolName returns "" for a non-AZ pool and the EPP stays
+	// unconstrained). Empty ⇒ no zone nodeSelector.
+	o.mu.Lock()
+	var selectedPool string
+	if st := o.distributed[name]; st != nil {
+		selectedPool = st.poolName
+	}
+	o.mu.Unlock()
+	eppZone := azFromPoolName(selectedPool)
+
 	yamlStr, err := manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
 		Name:                name,
 		Namespace:           ns,
@@ -208,6 +248,7 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		NixlModuleDir:       envOr("PD_NIXL_MODULE_DIR", defaultPDNixlModuleDir),
 		EPPImage:            envOr("PD_EPP_IMAGE", defaultPDEPPImage),
 		SidecarImage:        envOr("PD_SIDECAR_IMAGE", defaultPDSidecarImage),
+		EPPZone:                 eppZone,
 		NonCachedTokens:         nonCachedTokens,
 		PrefixCacheScorerWeight: prefixWeight,
 		QueueScorerWeight:       queueWeight,

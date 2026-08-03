@@ -147,6 +147,22 @@ func TestIsDisaggregated(t *testing.T) {
 	}
 }
 
+func TestAZFromPoolName(t *testing.T) {
+	cases := map[string]string{
+		"multinode-us-east-2a": "us-east-2a",
+		"multinode-us-east-2c": "us-east-2c",
+		"multinode-tcp":        "", // name-only, no AZ → EPP unconstrained
+		"multinode-test":       "", // scratch pool → no AZ
+		"gpu":                  "", // not a multinode pool
+		"":                     "",
+	}
+	for in, want := range cases {
+		if got := azFromPoolName(in); got != want {
+			t.Errorf("azFromPoolName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestModelLabelValue(t *testing.T) {
 	cases := map[string]string{
 		"Qwen/Qwen2.5-1.5B-Instruct":  "qwen-qwen2-5-1-5b-instruct",

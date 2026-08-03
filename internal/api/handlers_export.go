@@ -266,6 +266,10 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		QueueScorerWeight:       deref(d.PDQueueScorerWeight, exportPDQueueScorerWeight),
 		MaxPrefixBlocksToMatch:  deref(d.PDMaxPrefixBlocks, exportPDMaxPrefixBlocks),
 		LRUCapacityPerServer:    deref(d.PDLRUCapacityPerServer, exportPDLRUCapacity),
+		// EPPZone is intentionally left empty: the run's AZ is a runtime capacity
+		// decision (never persisted), and a re-applied manifest picks its own AZ.
+		// Pinning the EPP to this run's AZ would be wrong for a fresh re-apply, so
+		// the exported EPP stays AZ-unconstrained (schedules on any system node).
 		GPUDeviceClass:      exportGPUDeviceClass,
 		GatewayName:         exportGatewayName,
 		GatewayNamespace:    exportGatewayNamespace,

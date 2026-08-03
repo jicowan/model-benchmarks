@@ -315,6 +315,11 @@ type LLMDDisaggregatedParams struct {
 	EPPImage        string
 	SidecarImage    string
 	NonCachedTokens int
+	// EPPZone, when set, pins the (CPU-only) EPP to the same AZ as the serving
+	// pods via a topology.kubernetes.io/zone nodeSelector — the EPP is on the
+	// request path (ext-proc gRPC per request), so co-locating it with the
+	// endpoints it scores avoids a cross-AZ hop. Empty ⇒ no zone constraint.
+	EPPZone string
 
 	// PRD-61: run-tunable EPP EndpointPickerConfig knobs. The orchestrator
 	// defaults these to the shipped values (2/1/256/31250), so at the defaults

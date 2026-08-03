@@ -447,6 +447,14 @@ spec:
                     operator: In
                     values:
                       - system
+{{- if .EPPZone }}
+                  # Co-locate the EPP with the serving pods' AZ — it's on the
+                  # request path (ext-proc per request), so same-AZ avoids a hop.
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      - {{ .EPPZone }}
+{{- end }}
       containers:
         - name: epp
           image: {{ .EPPImage }}
