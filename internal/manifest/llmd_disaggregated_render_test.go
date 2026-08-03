@@ -212,11 +212,12 @@ func TestRenderLLMDDisaggregated_EPPAndRouting(t *testing.T) {
 	// Otherwise it can't tolerate that pool's taint and stalls Pending when the
 	// managed system nodegroup is full.
 	for _, want := range []string{
-		"key: accelbench.io/dedicated",
-		"key: accelbench/node-type",
+		"key: accelbench.io/dedicated",       // tolerate the general pool's taint
+		"key: karpenter.sh/nodepool",         // pin to the Karpenter general pool (excludes the MNG)
+		"- general-purpose",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("EPP pod must be schedulable on the system pool; missing %q", want)
+			t.Errorf("EPP pod must target the Karpenter general pool; missing %q", want)
 		}
 	}
 	// No EPPZone set in the sample → no zone constraint on the EPP.

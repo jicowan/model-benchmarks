@@ -428,11 +428,13 @@ spec:
     spec:
       serviceAccountName: {{ .Name }}-epp
       terminationGracePeriodSeconds: 130
-      # The EPP is CPU-only. Land it on the general-purpose (system) Karpenter
-      # pool — which auto-provisions — the same way the loadgen does: tolerate
-      # the accelbench.io/dedicated taint and select accelbench/node-type=system.
-      # Without this the EPP can't tolerate that pool's taint, falls back to the
-      # managed system nodegroup, and stalls Pending when the MNG is full.
+      # The EPP is CPU-only. Pin it to the general-purpose KARPENTER pool (which
+      # auto-provisions) via its karpenter.sh/nodepool label — NOT just
+      # node-type=system, which the managed system nodegroup (MNG) also carries.
+      # Selecting the Karpenter pool label excludes the MNG (MNG nodes have no
+      # karpenter.sh/nodepool label), so the EPP always lands on a fresh
+      # auto-provisioned node instead of competing for MNG capacity. Tolerate the
+      # pool's dedicated taint.
       tolerations:
         - key: accelbench.io/dedicated
           operator: Equal
@@ -443,10 +445,10 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: accelbench/node-type
+                  - key: karpenter.sh/nodepool
                     operator: In
                     values:
-                      - system
+                      - general-purpose
 {{- if .EPPZone }}
                   # Co-locate the EPP with the serving pods' AZ — it's on the
                   # request path (ext-proc per request), so same-AZ avoids a hop.
