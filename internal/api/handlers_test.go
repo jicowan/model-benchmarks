@@ -232,6 +232,12 @@ func TestHandleGetMetrics_Found(t *testing.T) {
 	ttft := 42.0
 	repo.PersistMetrics(context.Background(), runID, &database.BenchmarkMetrics{
 		TTFTP50Ms: &ttft,
+		// PRD-59: a distributed run's per-node shard breakdown. The /metrics
+		// endpoint must attach these, matching the detail endpoint.
+		Shards: []database.ShardMetric{
+			{Node: "10.0.0.1", Role: "prefill"},
+			{Node: "10.0.0.2", Role: "decode"},
+		},
 	})
 
 	req := httptest.NewRequest("GET", "/api/v1/runs/"+runID+"/metrics", nil)
@@ -247,6 +253,10 @@ func TestHandleGetMetrics_Found(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.TTFTP50Ms == nil || *resp.TTFTP50Ms != 42.0 {
 		t.Errorf("ttft_p50 = %v, want 42.0", resp.TTFTP50Ms)
+	}
+	// The /metrics endpoint must include shards (consistency with the detail endpoint).
+	if len(resp.Shards) != 2 {
+		t.Errorf("expected 2 shards from /metrics endpoint, got %d", len(resp.Shards))
 	}
 }
 

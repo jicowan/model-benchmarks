@@ -1055,6 +1055,12 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "metrics not found")
 		return
 	}
+	// PRD-59: attach the per-node/per-role GPU breakdown, matching the detail
+	// endpoint (GET /runs/{id}?include=metrics). Empty for single-instance runs
+	// (no shard rows), so single-node responses are unchanged.
+	if shards, serr := s.repo.GetShardMetrics(r.Context(), runID); serr == nil {
+		m.Shards = shards
+	}
 	writeJSON(w, http.StatusOK, m)
 }
 
