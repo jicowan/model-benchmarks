@@ -649,7 +649,11 @@ spec:
               - "--tensor-parallel-size={{ if eq $role "prefill" }}{{ $p.PrefillTP }}{{ else if eq $role "both" }}{{ $p.BothTP }}{{ else }}{{ $p.DecodeTP }}{{ end }}"
               - "--block-size=128"
               - "--kv-transfer-config"
-              - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
+              # enable_cross_layers_blocks reduces the KV data moved prefill→decode
+              # over NIXL (a KV-block-layout optimization, transport-agnostic — works
+              # on TCP + EFA). Matches the AWS+llm-d reference config; measurable via
+              # the PRD-62 kv_transfer_bytes_total metric.
+              - '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_connector_extra_config":{"enable_cross_layers_blocks":"True"}}'
               - "--no-disable-hybrid-kv-cache-manager"
               - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
 {{- if or (eq $role "decode") (eq $role "both") }}

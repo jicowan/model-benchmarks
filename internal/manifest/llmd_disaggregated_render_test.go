@@ -138,6 +138,11 @@ func TestRenderLLMDDisaggregated_KVAndSidecar(t *testing.T) {
 	if !strings.Contains(out, `"kv_connector":"NixlConnector","kv_role":"kv_both"`) {
 		t.Error("NIXL kv-transfer-config missing")
 	}
+	// enable_cross_layers_blocks (AWS+llm-d reference) reduces KV bytes moved
+	// prefill→decode; default-on for all disaggregated runs, transport-agnostic.
+	if !strings.Contains(out, `"kv_connector_extra_config":{"enable_cross_layers_blocks":"True"}`) {
+		t.Error("kv_connector_extra_config with enable_cross_layers_blocks missing")
+	}
 	// The three live-discovered fixes must be present.
 	for _, want := range []string{
 		"UCX_TLS",
