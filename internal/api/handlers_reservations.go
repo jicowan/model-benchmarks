@@ -38,7 +38,10 @@ type DynamicClient = dynamic.Interface
 // Hard-coded NodeClass/NodePool mapping for AccelBench. Both happen to share
 // the same name per resource kind. This list is what the GET response
 // enumerates.
-var reservationNodePools = []nodePoolConfig{
+// staticReservationNodePools are the single-node pools, always present.
+// The multinode-<az> EFA pools are discovered dynamically (see
+// reservationNodePoolsFor) since their set depends on the cluster's AZs.
+var staticReservationNodePools = []nodePoolConfig{
 	{NodeClass: "gpu", NodePool: "gpu"},
 	{NodeClass: "neuron", NodePool: "neuron"},
 }
@@ -46,6 +49,36 @@ var reservationNodePools = []nodePoolConfig{
 type nodePoolConfig struct {
 	NodeClass string
 	NodePool  string
+}
+
+// reservationNodePoolsFor returns the pools eligible for capacity reservations:
+// the static gpu/neuron pools plus every per-AZ multinode EFA pool
+// (multinode-<az>) discovered live. The shared non-EFA "multinode-tcp" class is
+// intentionally excluded — reservations target the EFA (per-AZ, PG-bound) pools
+// that distributed/disaggregated runs use for guaranteed capacity; the TCP class
+// uses plentiful small instances and isn't 1:1 with a NodePool (PRD-66 §Part 1).
+// Discovery failures degrade to the static list rather than erroring.
+func (s *Server) reservationNodePoolsFor(ctx context.Context) []nodePoolConfig {
+	out := append([]nodePoolConfig(nil), staticReservationNodePools...)
+	if s.dynClient == nil {
+		return out
+	}
+	pools, err := s.dynClient.Resource(gvrNodePool).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return out
+	}
+	for _, p := range pools.Items {
+		name := p.GetName()
+		// Per-AZ EFA pools are "multinode-<az>". Exclude the shared
+		// "multinode-tcp" scratch/non-EFA class.
+		if !strings.HasPrefix(name, "multinode-") || name == "multinode-tcp" {
+			continue
+		}
+		// NodeClass == NodePool name for the static per-AZ pools (both are
+		// "multinode-<az>").
+		out = append(out, nodePoolConfig{NodeClass: name, NodePool: name})
+	}
+	return out
 }
 
 var (
@@ -144,8 +177,9 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx := r.Context()
 
-	out := make([]nodePoolReservations, 0, len(reservationNodePools))
-	for _, np := range reservationNodePools {
+	pools := s.reservationNodePoolsFor(ctx)
+	out := make([]nodePoolReservations, 0, len(pools))
+	for _, np := range pools {
 		entry := nodePoolReservations{
 			NodeClass:    np.NodeClass,
 			NodePool:     np.NodePool,
@@ -223,14 +257,14 @@ func (s *Server) handlePostReservation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	np, ok := findNodePoolConfig(req.NodeClass)
+	ctx := r.Context()
+
+	np, ok := s.findNodePoolConfig(ctx, req.NodeClass)
 	if !ok {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown node_class %q (must be one of: %s)",
-			req.NodeClass, strings.Join(knownNodeClasses(), ", ")))
+			req.NodeClass, strings.Join(s.knownNodeClasses(ctx), ", ")))
 		return
 	}
-
-	ctx := r.Context()
 
 	// Live-validate the reservation against EC2.
 	live, err := s.ec2Client.DescribeCapacityReservations(ctx, &ec2.DescribeCapacityReservationsInput{
@@ -277,12 +311,30 @@ func (s *Server) handlePostReservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get NodePool: "+err.Error())
 		return
 	}
+	// A NodePool constrains instances EITHER by instance-family (single-node
+	// gpu/neuron pools) OR by instance-category (the multinode pools, which rest
+	// on [g,p] and let the orchestrator narrow the exact type per run — PRD-61).
+	// Accept the reservation if it satisfies whichever constraint the pool uses.
 	allowedFamilies := instanceFamiliesFromNodePool(pool)
-	if !containsString(allowedFamilies, family) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"instance family %s not allowed by NodePool %s (allowed: %s)",
-			family, np.NodePool, strings.Join(allowedFamilies, ", ")))
-		return
+	allowedCategories := instanceCategoriesFromNodePool(pool)
+	switch {
+	case len(allowedFamilies) > 0:
+		if !containsString(allowedFamilies, family) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"instance family %s not allowed by NodePool %s (allowed families: %s)",
+				family, np.NodePool, strings.Join(allowedFamilies, ", ")))
+			return
+		}
+	case len(allowedCategories) > 0:
+		if cat := instanceCategoryOf(instType); !containsString(allowedCategories, cat) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"instance category %s (from %s) not allowed by NodePool %s (allowed categories: %s)",
+				cat, instType, np.NodePool, strings.Join(allowedCategories, ", ")))
+			return
+		}
+	default:
+		// Pool constrains by neither family nor category (unusual) — don't block
+		// on family; the AZ check above already scoped it to the pool's zone.
 	}
 
 	// Duplicate check.
@@ -326,11 +378,11 @@ func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request)
 	}
 	nodeClass := r.PathValue("node_class")
 	id := r.PathValue("reservation_id")
-	if _, ok := findNodePoolConfig(nodeClass); !ok {
+	ctx := r.Context()
+	if _, ok := s.findNodePoolConfig(ctx, nodeClass); !ok {
 		writeError(w, http.StatusBadRequest, "unknown node_class: "+nodeClass)
 		return
 	}
-	ctx := r.Context()
 
 	nc, err := s.dynClient.Resource(gvrEC2NodeClass).Get(ctx, nodeClass, metav1.GetOptions{})
 	if err != nil {
@@ -555,8 +607,8 @@ func summarizeReservation(cr *ec2types.CapacityReservation) reservationSummary {
 	return s
 }
 
-func findNodePoolConfig(nodeClass string) (nodePoolConfig, bool) {
-	for _, np := range reservationNodePools {
+func (s *Server) findNodePoolConfig(ctx context.Context, nodeClass string) (nodePoolConfig, bool) {
+	for _, np := range s.reservationNodePoolsFor(ctx) {
 		if np.NodeClass == nodeClass {
 			return np, true
 		}
@@ -564,9 +616,10 @@ func findNodePoolConfig(nodeClass string) (nodePoolConfig, bool) {
 	return nodePoolConfig{}, false
 }
 
-func knownNodeClasses() []string {
-	out := make([]string, len(reservationNodePools))
-	for i, np := range reservationNodePools {
+func (s *Server) knownNodeClasses(ctx context.Context) []string {
+	pools := s.reservationNodePoolsFor(ctx)
+	out := make([]string, len(pools))
+	for i, np := range pools {
 		out[i] = np.NodeClass
 	}
 	return out
@@ -578,6 +631,41 @@ func instanceFamilyOf(instanceType string) string {
 		return instanceType
 	}
 	return instanceType[:i]
+}
+
+// instanceCategoryOf returns the leading letters of an instance family — the
+// Karpenter "instance-category" (e.g. "g6.48xlarge" → family "g6" → category
+// "g"; "p5.48xlarge" → "p"). Used to validate a reservation against a NodePool
+// that constrains by karpenter.k8s.aws/instance-category rather than a specific
+// instance-family (the multinode pools do this — PRD-61: they rest on category
+// [g,p] and the orchestrator narrows the type per run).
+func instanceCategoryOf(instanceType string) string {
+	fam := instanceFamilyOf(instanceType)
+	for i := 0; i < len(fam); i++ {
+		if fam[i] < 'a' || fam[i] > 'z' {
+			return fam[:i]
+		}
+	}
+	return fam
+}
+
+// instanceCategoriesFromNodePool returns the NodePool's
+// karpenter.k8s.aws/instance-category values (e.g. ["g","p"]), or nil if the
+// pool constrains by instance-family/type instead.
+func instanceCategoriesFromNodePool(u *unstructured.Unstructured) []string {
+	for _, r := range requirementsFromNodePool(u) {
+		if key, _ := r["key"].(string); key == "karpenter.k8s.aws/instance-category" {
+			vs, _ := r["values"].([]any)
+			out := make([]string, 0, len(vs))
+			for _, v := range vs {
+				if str, ok := v.(string); ok {
+					out = append(out, str)
+				}
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 func stringPtrValue(p *string) string {

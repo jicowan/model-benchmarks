@@ -483,3 +483,129 @@ func TestReservations_List_DescribeNotCalledWhenNoIDs(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+// --- PRD-66 Part 1: multinode capacity reservations ------------------------
+
+// multinodeNodeClass/Pool build a per-AZ EFA multinode pool that rests on
+// instance-category [g,p] (the PRD-61 shape), pinned to one AZ.
+func multinodeNodeClass(az string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.k8s.aws/v1",
+		"kind":       "EC2NodeClass",
+		"metadata":   map[string]any{"name": "multinode-" + az},
+		"spec":       map[string]any{"amiSelectorTerms": []any{map[string]any{"alias": "al2023@latest"}}},
+		"status": map[string]any{
+			"subnets": []any{map[string]any{"id": "subnet-" + az, "zone": az}},
+		},
+	}}
+}
+
+func multinodeNodePool(az string, capacityTypeValues ...any) *unstructured.Unstructured {
+	if len(capacityTypeValues) == 0 {
+		capacityTypeValues = []any{"reserved", "on-demand"}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata":   map[string]any{"name": "multinode-" + az},
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"requirements": []any{
+						map[string]any{"key": "karpenter.k8s.aws/instance-category", "operator": "In", "values": []any{"g", "p"}},
+						map[string]any{"key": "topology.kubernetes.io/zone", "operator": "In", "values": []any{az}},
+						map[string]any{"key": "karpenter.sh/capacity-type", "operator": "In", "values": capacityTypeValues},
+					},
+				},
+			},
+		},
+	}}
+}
+
+// multinode-tcp: shared non-EFA class that must be EXCLUDED from the reservation list.
+func multinodeTCPNodePool() *unstructured.Unstructured {
+	np := multinodeNodePool("us-east-2a")
+	np.Object["metadata"] = map[string]any{"name": "multinode-tcp"}
+	return np
+}
+
+// The reservations list must include discovered per-AZ multinode pools and
+// exclude gpu-adjacent non-multinode + the shared multinode-tcp class.
+func TestReservations_List_IncludesMultinodePools(t *testing.T) {
+	_, mux := setupReservationsServer(
+		&fakeEC2{},
+		gpuNodeClass(), gpuNodePool(),
+		multinodeNodeClass("us-east-2a"), multinodeNodePool("us-east-2a"),
+		multinodeNodeClass("us-east-2b"), multinodeNodePool("us-east-2b"),
+		multinodeTCPNodePool(), // must be excluded
+	)
+	req := httptest.NewRequest("GET", "/api/v1/config/capacity-reservations", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got []nodePoolReservations
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, e := range got {
+		names[e.NodePool] = true
+	}
+	for _, want := range []string{"gpu", "multinode-us-east-2a", "multinode-us-east-2b"} {
+		if !names[want] {
+			t.Errorf("reservations list missing pool %q; got %v", want, names)
+		}
+	}
+	if names["multinode-tcp"] {
+		t.Error("multinode-tcp must be excluded from the reservation list")
+	}
+}
+
+// Attaching a reservation to a multinode pool (which constrains by
+// instance-category, not instance-family) must pass validation via the category.
+func TestReservations_Post_MultinodeCategoryMatch(t *testing.T) {
+	cr := reservation("cr-mn", "g6.12xlarge", "us-east-2a", "active") // g6 → category g ∈ [g,p]
+	_, mux := setupReservationsServer(
+		&fakeEC2{byID: map[string]ec2types.CapacityReservation{"cr-mn": cr}},
+		multinodeNodeClass("us-east-2a"), multinodeNodePool("us-east-2a"),
+	)
+	body := strings.NewReader(`{"node_class":"multinode-us-east-2a","reservation_id":"cr-mn"}`)
+	req := httptest.NewRequest("POST", "/api/v1/config/capacity-reservations", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("category-matched attach should succeed; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A reservation in the wrong AZ for a per-AZ multinode pool is rejected.
+func TestReservations_Post_MultinodeWrongAZ(t *testing.T) {
+	cr := reservation("cr-mn2", "g6.12xlarge", "us-east-2c", "active") // pool is 2a
+	_, mux := setupReservationsServer(
+		&fakeEC2{byID: map[string]ec2types.CapacityReservation{"cr-mn2": cr}},
+		multinodeNodeClass("us-east-2a"), multinodeNodePool("us-east-2a"),
+	)
+	body := strings.NewReader(`{"node_class":"multinode-us-east-2a","reservation_id":"cr-mn2"}`)
+	req := httptest.NewRequest("POST", "/api/v1/config/capacity-reservations", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("wrong-AZ attach should be rejected; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestInstanceCategoryOf(t *testing.T) {
+	tests := map[string]string{
+		"g6.12xlarge":      "g",
+		"p5.48xlarge":      "p",
+		"p6-b200.48xlarge": "p",
+		"m6i.large":        "m",
+	}
+	for in, want := range tests {
+		if got := instanceCategoryOf(in); got != want {
+			t.Errorf("instanceCategoryOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
