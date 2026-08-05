@@ -114,6 +114,40 @@ func TestGenerateManifest_Disaggregated(t *testing.T) {
 	}
 }
 
+// TestGenerateManifest_Disaggregated_PullThrough: when PULL_THROUGH_REGISTRY is
+// set, the exported D/P vLLM image is routed through the Docker Hub ECR
+// pull-through cache (matching the deploy path); unset → bare Docker Hub image.
+func TestGenerateManifest_Disaggregated_PullThrough(t *testing.T) {
+	d := &database.RunExportDetails{
+		ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct", InstanceTypeName: "g6.2xlarge",
+		Framework: "llm-d", FrameworkVersion: "v0.8.1",
+		TensorParallelDegree: 1, AcceleratorCount: 1, VCPUs: 8, MemoryGiB: 32,
+		DeploymentMode: strptr("disaggregated"), NodeCount: intptr(2), NetworkMode: strptr("tcp"),
+		PrefillReplicas: intptr(1), PrefillTP: intptr(1), DecodeReplicas: intptr(1), DecodeTP: intptr(1),
+	}
+
+	t.Setenv("PULL_THROUGH_REGISTRY", "820537372947.dkr.ecr.us-east-2.amazonaws.com")
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "820537372947.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai:v0.25.0") {
+		t.Error("with PULL_THROUGH_REGISTRY set, D/P image must route through the pull-through cache")
+	}
+
+	t.Setenv("PULL_THROUGH_REGISTRY", "")
+	out2, err := generateManifest(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out2, "/dockerhub/vllm/vllm-openai") {
+		t.Error("without PULL_THROUGH_REGISTRY, D/P image must be the bare Docker Hub ref")
+	}
+	if !strings.Contains(out2, "vllm/vllm-openai:v0.25.0") {
+		t.Error("D/P export missing the vLLM model image")
+	}
+}
+
 // TestGenerateManifest_SingleNode: a normal single-instance run still exports
 // the plain vLLM Deployment (unchanged behavior — no deployment_mode).
 func TestGenerateManifest_SingleNode(t *testing.T) {

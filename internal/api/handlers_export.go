@@ -231,6 +231,13 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 	if d.BothMaxNumBatchedTokens != nil && *d.BothMaxNumBatchedTokens > 0 {
 		bothArgs = exportServeArgsWithBatchTokens(d, d.BothMaxNumBatchedTokens)
 	}
+	// Route the default vLLM image through the Docker Hub ECR pull-through cache
+	// when one is configured, matching the orchestrator's deploy path
+	// (deployLLMDDisaggregated) so the exported manifest reproduces what ran.
+	pdImage := exportPDModelImage
+	if pt := os.Getenv("PULL_THROUGH_REGISTRY"); pt != "" {
+		pdImage = fmt.Sprintf("%s/dockerhub/%s", pt, exportPDModelImage)
+	}
 	// PRD-61: reproduce the run's EPP routing config. NULL ⇒ the run used the
 	// shipped default, so the export applies the SAME default the orchestrator
 	// would (deref-to-default), keeping the exported EPP config faithful to what
@@ -238,7 +245,7 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 	return manifest.RenderLLMDDisaggregated(manifest.LLMDDisaggregatedParams{
 		Name:                name,
 		Namespace:           "accelbench",
-		Image:               exportPDModelImage,
+		Image:               pdImage,
 		ServeArgs:           exportServeArgs(d),
 		PrefillServeArgs:    prefillArgs,
 		DecodeServeArgs:     decodeArgs,

@@ -184,10 +184,22 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	}
 
 	// The PD path uses the upstream vLLM image (cu13 NIXL modules), not
-	// llm-d-aws. Honor a runtime image override if the operator set one.
+	// llm-d-aws. Honor a runtime image override if the operator set one; an
+	// explicit override is used verbatim (it's an exact image ref). Otherwise use
+	// the default and, when a pull-through registry is configured, route it
+	// through the Docker Hub ECR pull-through cache — same as the single-node
+	// path (vllm_gpu.go) — to avoid a slow/rate-limited direct Docker Hub pull.
 	image := rt.ResolveImageOverride()
 	if image == "" {
 		image = envOr("PD_MODEL_IMAGE", defaultPDModelImage)
+		// When using the DEFAULT image (no PD_MODEL_IMAGE override) and a
+		// pull-through registry is configured, route the Docker Hub image through
+		// the ECR pull-through cache, same as the single-node path.
+		if image == defaultPDModelImage {
+			if pt := envOr("PULL_THROUGH_REGISTRY", ""); pt != "" {
+				image = fmt.Sprintf("%s/dockerhub/%s", pt, defaultPDModelImage)
+			}
+		}
 	}
 
 	cpuReq := fmt.Sprintf("%d", max(1, cfg.InstanceType.VCPUs*3/4))
