@@ -197,6 +197,11 @@ func (o *Orchestrator) reapLeakedDistributedPools(ctx context.Context, livePods 
 		if err := o.scaleNodePool(ctx, pool, 0); err != nil {
 			log.Printf("[recovery] scale %s to 0: %v", pool, err)
 		}
+		// Restore the broad instance-category so an orphaned run's pin doesn't
+		// outlive it and narrow the next run's provisioning.
+		if err := o.resetNodePoolInstanceType(ctx, pool); err != nil {
+			log.Printf("[recovery] reset %s instance-category: %v", pool, err)
+		}
 	}
 }
 

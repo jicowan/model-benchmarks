@@ -321,6 +321,67 @@ func TestSetNodePoolInstanceType(t *testing.T) {
 	}
 }
 
+// TestResetNodePoolInstanceType: after a run pins one instance-type, reset drops
+// it and restores the broad instance-category In [g,p] constraint, preserving
+// zone/arch. This is what keeps a pool from staying pinned to the last run's
+// type (which would silently narrow the next run's provisioning).
+func TestResetNodePoolInstanceType(t *testing.T) {
+	// A pool left pinned to one type by a prior run (no category key).
+	pool := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata":   map[string]any{"name": "multinode-us-east-2a"},
+		"spec": map[string]any{
+			"replicas": int64(0),
+			"template": map[string]any{
+				"spec": map[string]any{
+					"requirements": []any{
+						map[string]any{"key": "kubernetes.io/arch", "operator": "In", "values": []any{"amd64"}},
+						map[string]any{"key": "node.kubernetes.io/instance-type", "operator": "In", "values": []any{"g6.12xlarge"}},
+						map[string]any{"key": "topology.kubernetes.io/zone", "operator": "In", "values": []any{"us-east-2a"}},
+					},
+				},
+			},
+		},
+	}}
+	dyn := newFakeDyn(pool)
+	o := New(k8sfake.NewSimpleClientset(), database.NewMockRepo(), "pod")
+	o.SetDynamicClient(dyn)
+
+	if err := o.resetNodePoolInstanceType(context.Background(), "multinode-us-east-2a"); err != nil {
+		t.Fatalf("resetNodePoolInstanceType: %v", err)
+	}
+	got, err := dyn.Resource(gvrNodePool).Get(context.Background(), "multinode-us-east-2a", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs, _, _ := unstructured.NestedSlice(got.Object, "spec", "template", "spec", "requirements")
+	var haveCat, haveZone, haveArch bool
+	for _, r := range reqs {
+		m := r.(map[string]any)
+		switch m["key"].(string) {
+		case "node.kubernetes.io/instance-type":
+			t.Error("instance-type pin should be removed on reset")
+		case "karpenter.k8s.aws/instance-category":
+			haveCat = true
+			vals, _, _ := unstructured.NestedStringSlice(m, "values")
+			if len(vals) != 2 || vals[0] != "g" || vals[1] != "p" {
+				t.Errorf("instance-category should be [g p], got %v", vals)
+			}
+		case "topology.kubernetes.io/zone":
+			haveZone = true
+		case "kubernetes.io/arch":
+			haveArch = true
+		}
+	}
+	if !haveCat {
+		t.Error("instance-category requirement not restored")
+	}
+	if !haveZone || !haveArch {
+		t.Error("zone/arch requirements must be preserved")
+	}
+}
+
 // TestSetNodePoolNetworkMode: TCP runs repoint the pool's nodeClassRef at the
 // non-EFA multinode-tcp-<az> class (so non-EFA instances can launch); EFA runs
 // use the pool's own EFA class.

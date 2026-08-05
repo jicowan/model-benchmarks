@@ -133,6 +133,73 @@ func (o *Orchestrator) setNodePoolInstanceType(ctx context.Context, name, instan
 	return nil
 }
 
+// defaultMultinodeCategories is the at-rest instance-category constraint the
+// static multinode pools carry between runs. A run narrows the pool to one
+// exact instance-type (setNodePoolInstanceType); teardown/recovery restores
+// this broad category set so the pool is not left pinned to the last run's
+// type (which would silently constrain the NEXT run's auto-provisioning and
+// hide capacity in other families). "g" and "p" cover the GPU families the
+// multinode pools draw from.
+var defaultMultinodeCategories = []any{"g", "p"}
+
+// resetNodePoolInstanceType restores a static multinode pool's requirements to
+// the broad at-rest state: it drops the run's pinned instance-type (and any
+// stale category key) and re-adds the instance-category In [g,p] constraint.
+// This is the inverse of setNodePoolInstanceType and runs on teardown (success
+// OR failure) and in orphan recovery, so a pool is never left pinned to the
+// last run's exact type. Best-effort — the merge patch replaces the whole
+// requirements array (only the "patch" verb the SA already holds is needed).
+func (o *Orchestrator) resetNodePoolInstanceType(ctx context.Context, name string) error {
+	if o.dynClient == nil {
+		return fmt.Errorf("dynamic client not configured; cannot reset NodePool %q", name)
+	}
+	np, err := o.dynClient.Resource(gvrNodePool).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get NodePool %q: %w", name, err)
+	}
+	reqs, found, err := unstructured.NestedSlice(np.Object, "spec", "template", "spec", "requirements")
+	if err != nil || !found {
+		return fmt.Errorf("NodePool %q has no requirements list", name)
+	}
+	const itKey = "node.kubernetes.io/instance-type"
+	const catKey = "karpenter.k8s.aws/instance-category"
+	out := make([]any, 0, len(reqs)+1)
+	for _, r := range reqs {
+		m, ok := r.(map[string]any)
+		if !ok {
+			out = append(out, r)
+			continue
+		}
+		if key, _ := m["key"].(string); key == itKey || key == catKey {
+			continue // drop the run's pinned type / any stale category — re-add below
+		}
+		out = append(out, r)
+	}
+	out = append(out, map[string]any{
+		"key":      catKey,
+		"operator": "In",
+		"values":   append([]any(nil), defaultMultinodeCategories...),
+	})
+	body := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{"requirements": out},
+			},
+		},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	_, err = o.dynClient.Resource(gvrNodePool).Patch(ctx, name, types.MergePatchType, raw,
+		metav1.PatchOptions{FieldManager: "accelbench-orchestrator"})
+	if err != nil {
+		return fmt.Errorf("patch NodePool %q reset categories: %w", name, err)
+	}
+	log.Printf("[nodepool] reset %s instance-category=%v", name, defaultMultinodeCategories)
+	return nil
+}
+
 // errInsufficientCapacity signals that a pool cannot provision its nodes because
 // AWS has no capacity for the requested instance type in that AZ. The caller
 // (acquireDistributedPool) treats it as a fast fallthrough to the next AZ pool

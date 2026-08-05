@@ -232,6 +232,11 @@ func (o *Orchestrator) acquireDistributedPool(ctx context.Context, ns, modelName
 			if serr := o.scaleNodePool(context.WithoutCancel(ctx), pool, 0); serr != nil {
 				log.Printf("[%s] warning: scale %s back to 0: %v", cfg.RunID[:8], pool, serr)
 			}
+			// Undo the instance-type pin we set above so this abandoned pool
+			// returns to the broad category constraint for the next run.
+			if serr := o.resetNodePoolInstanceType(context.WithoutCancel(ctx), pool); serr != nil {
+				log.Printf("[%s] warning: reset %s instance-category: %v", cfg.RunID[:8], pool, serr)
+			}
 			o.mu.Lock()
 			st.poolName = ""
 			o.mu.Unlock()
@@ -604,6 +609,13 @@ func (o *Orchestrator) teardownDistributed(ctx context.Context, ns, modelName st
 	if st.poolName != "" {
 		if err := o.scaleNodePool(ctx, st.poolName, 0); err != nil {
 			log.Printf("[distributed] scale %s back to 0: %v", st.poolName, err)
+		}
+		// Restore the broad instance-category constraint so the pool isn't left
+		// pinned to this run's exact instance-type (which would silently narrow
+		// the next run's auto-provisioning). Best-effort — a leftover pin is a
+		// provisioning-scope wart, not a cost leak, so it never blocks teardown.
+		if err := o.resetNodePoolInstanceType(ctx, st.poolName); err != nil {
+			log.Printf("[distributed] reset %s instance-category: %v", st.poolName, err)
 		}
 	}
 }
