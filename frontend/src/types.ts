@@ -870,6 +870,7 @@ export interface NodePoolReservations {
   node_class: string;
   node_pool: string;
   instance_families: string[];
+  instance_categories: string[]; // set instead of families for the multinode pools (PRD-66)
   subnet_azs: string[];
   capacity_type_includes_reserved: boolean;
   reservations: ReservationSummary[];

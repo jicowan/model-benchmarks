@@ -107,6 +107,7 @@ type nodePoolReservations struct {
 	NodeClass                    string               `json:"node_class"`
 	NodePool                     string               `json:"node_pool"`
 	InstanceFamilies             []string             `json:"instance_families"`
+	InstanceCategories           []string             `json:"instance_categories"`
 	SubnetAZs                    []string             `json:"subnet_azs"`
 	CapacityTypeIncludesReserved bool                 `json:"capacity_type_includes_reserved"`
 	Reservations                 []reservationSummary `json:"reservations"`
@@ -198,6 +199,7 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 		pool, err := s.dynClient.Resource(gvrNodePool).Get(ctx, np.NodePool, metav1.GetOptions{})
 		if err == nil {
 			entry.InstanceFamilies = instanceFamiliesFromNodePool(pool)
+			entry.InstanceCategories = instanceCategoriesFromNodePool(pool)
 			entry.CapacityTypeIncludesReserved = capacityTypeIncludesReserved(pool)
 		}
 

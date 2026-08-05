@@ -863,8 +863,9 @@ function CapacityReservationsCard() {
       <div className="panel p-5">
         <p className="meta mb-4 max-w-2xl">
           Attach EC2 on-demand capacity reservations (ODCRs) or Capacity Blocks for ML (CBRs) to the
-          GPU and Neuron Karpenter NodeClasses. Karpenter prioritizes reserved capacity over
-          on-demand; fallback to on-demand happens automatically when reservations are exhausted.
+          GPU, Neuron, and per-AZ multi-node Karpenter NodeClasses. Karpenter prioritizes reserved
+          capacity over on-demand; fallback to on-demand happens automatically when reservations are
+          exhausted. For a per-AZ multi-node pool, the reservation must be in that pool's AZ.
         </p>
         {error && <p className="caption text-danger mb-3">{error}</p>}
 
@@ -932,7 +933,17 @@ function NodePoolReservationsBlock({
       </div>
 
       <div className="caption mb-3">
-        <span className="text-ink-2">families:</span> {(pool.instance_families ?? []).join(", ") || "—"}
+        {/* Multinode pools constrain by instance-category (g/p) rather than a
+            specific family; show whichever the pool uses (PRD-66). */}
+        {(pool.instance_categories ?? []).length > 0 ? (
+          <>
+            <span className="text-ink-2">categories:</span> {pool.instance_categories.join(", ")}
+          </>
+        ) : (
+          <>
+            <span className="text-ink-2">families:</span> {(pool.instance_families ?? []).join(", ") || "—"}
+          </>
+        )}
         <span className="mx-2 text-ink-2">·</span>
         <span className="text-ink-2">AZs:</span> {(pool.subnet_azs ?? []).join(", ") || "—"}
         {!pool.capacity_type_includes_reserved && (
