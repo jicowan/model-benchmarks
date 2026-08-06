@@ -664,6 +664,13 @@ spec:
             env:
               - name: HF_TOKEN
                 value: "{{ $p.HfToken }}"
+{{- /* PRD-65 Layer 3: cap the Run:ai streamer's shared CPU buffer during
+       weight load, mirroring the single-node model-deployment template. Only
+       emitted for a streamed (S3) load with a configured/auto-sized limit. */ -}}
+{{- if gt $p.StreamerMemoryLimitGiB 0 }}
+              - name: RUNAI_STREAMER_MEMORY_LIMIT
+                value: "{{ gibBytes $p.StreamerMemoryLimitGiB }}"
+{{- end }}
               # NIXL side channel MUST advertise the pod IP (localhost default
               # breaks cross-pod discovery → 120s timeouts, vLLM #30153).
               - name: VLLM_NIXL_SIDE_CHANNEL_HOST

@@ -5,6 +5,35 @@ import (
 	"testing"
 )
 
+// TestRenderLLMDDisaggregated_StreamerMemoryLimit (PRD-65 Layer 3): the
+// RUNAI_STREAMER_MEMORY_LIMIT env is emitted (in bytes) on the model containers
+// when StreamerMemoryLimitGiB > 0, and omitted otherwise (byte-identical to
+// pre-PRD-65 for an HF run).
+func TestRenderLLMDDisaggregated_StreamerMemoryLimit(t *testing.T) {
+	// Default (0) → no env.
+	out, err := RenderLLMDDisaggregated(sampleDisaggParams())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(out, "RUNAI_STREAMER_MEMORY_LIMIT") {
+		t.Error("no memory-limit env expected when StreamerMemoryLimitGiB == 0")
+	}
+
+	// Set → env present in bytes (16 GiB = 17179869184).
+	p := sampleDisaggParams()
+	p.StreamerMemoryLimitGiB = 16
+	out, err = RenderLLMDDisaggregated(p)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(out, "RUNAI_STREAMER_MEMORY_LIMIT") {
+		t.Error("memory-limit env expected when StreamerMemoryLimitGiB > 0")
+	}
+	if !strings.Contains(out, "17179869184") {
+		t.Errorf("memory-limit should render as bytes (16 GiB = 17179869184)")
+	}
+}
+
 func sampleDisaggParams() LLMDDisaggregatedParams {
 	return LLMDDisaggregatedParams{
 		Name:                "bench-abc12345",

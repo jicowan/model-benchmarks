@@ -83,3 +83,17 @@ func streamerConcurrencyOrDefault(c int) int {
 	}
 	return 16
 }
+
+// streamerExtraConfig builds the --model-loader-extra-config JSON for a Run:ai
+// streamed load: always concurrency, plus memory_limit (in BYTES) when
+// StreamerMemoryLimitGiB > 0. Matches the single-node model-deployment template's
+// JSON so a streamed load is tuned identically wherever BuildArgs feeds the args
+// (PRD-65 Layer 3). 0 memory-limit ⇒ omit the key (inherit the upstream default).
+func streamerExtraConfig(p ContainerParams) string {
+	if p.StreamerMemoryLimitGiB > 0 {
+		return fmt.Sprintf(`{"concurrency":%d,"memory_limit":%d}`,
+			streamerConcurrencyOrDefault(p.StreamerConcurrency),
+			int64(p.StreamerMemoryLimitGiB)*1024*1024*1024)
+	}
+	return fmt.Sprintf(`{"concurrency":%d}`, streamerConcurrencyOrDefault(p.StreamerConcurrency))
+}

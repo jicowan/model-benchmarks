@@ -2,13 +2,65 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
+
+// TestDeployLLMDDisaggregated_StreamerParity (PRD-65 Layers 2+3): a D/P deploy
+// of a CACHED model auto-detects the S3 URI + Run:ai, and threads the
+// memory-limit through to the rendered pod (env + extra-config). End-to-end:
+// cfg → resolveS3Model → buildServeArgs → render → applied Deployment.
+func TestDeployLLMDDisaggregated_StreamerParity(t *testing.T) {
+	strptr := func(s string) *string { return &s }
+	repo := database.NewMockRepo()
+	_, _ = repo.CreateModelCache(context.Background(), &database.ModelCache{
+		HfID: strptr("Qwen/Qwen2.5-1.5B-Instruct"), HfRevision: "main",
+		S3URI: "s3://accelbench-models/qwen", Status: "cached",
+	})
+	dyn := newFakeDyn()
+	o := &Orchestrator{client: k8sfake.NewSimpleClientset(), repo: repo, dynClient: dyn}
+
+	cfg := RunConfig{
+		RunID: "run-pd-0001",
+		Request: &database.RunRequest{
+			Framework:              "llm-d",
+			ModelHfID:              "Qwen/Qwen2.5-1.5B-Instruct",
+			DeploymentMode:         "disaggregated",
+			StreamerMemoryLimitGiB: 16, // explicit → 16 GiB = 17179869184 bytes
+		},
+		InstanceType:    &database.InstanceType{Name: "g6.2xlarge", MemoryGiB: 32, VCPUs: 8, AcceleratorName: "L4"},
+		PrefillReplicas: 1, PrefillTP: 1, DecodeReplicas: 1, DecodeTP: 1,
+	}
+
+	if err := o.deployLLMDDisaggregated(context.Background(), "accelbench", "bench-run-pd-0001", cfg); err != nil {
+		t.Fatalf("deployLLMDDisaggregated: %v", err)
+	}
+
+	// Read back a role Deployment and assert the streamer wiring landed.
+	list, err := dyn.Resource(crdGVRTable["apps/v1|Deployment"]).Namespace("accelbench").List(context.Background(), metav1.ListOptions{})
+	if err != nil || len(list.Items) == 0 {
+		t.Fatalf("no Deployments applied: err=%v", err)
+	}
+	blob, _ := list.Items[0].MarshalJSON()
+	s := string(blob)
+	for _, want := range []string{
+		"runai_streamer",              // auto-detected cached model → streamer on
+		"s3://accelbench-models/qwen", // the cached S3 URI as the model arg
+		"memory_limit",                // Layer 3: memory-limit in extra-config
+		"RUNAI_STREAMER_MEMORY_LIMIT", // Layer 3: env on the container
+		"17179869184",                 // 16 GiB in bytes (extra-config + env value)
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("applied D/P Deployment missing %q", want)
+		}
+	}
+}
 
 // TestPDModelImage covers the D/P vLLM image resolver (PRD-66 Part 2): composes
 // vllm/vllm-openai from the version, defaults an empty version, and prefixes the

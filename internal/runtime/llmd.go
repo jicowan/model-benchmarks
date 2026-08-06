@@ -99,8 +99,7 @@ func (l *LLMD) BuildArgs(p ContainerParams) (command []string, args []string) {
 	if p.UseRunaiStreamer {
 		args = append(args, p.ModelS3URI)
 		args = append(args, "--load-format", "runai_streamer")
-		args = append(args, "--model-loader-extra-config",
-			fmt.Sprintf(`{"concurrency":%d}`, streamerConcurrencyOrDefault(p.StreamerConcurrency)))
+		args = append(args, "--model-loader-extra-config", streamerExtraConfig(p))
 	} else {
 		args = append(args, p.ModelHfID)
 	}

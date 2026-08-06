@@ -273,6 +273,12 @@ type LLMDDisaggregatedParams struct {
 	ModelLabel    string
 	HfToken       string
 	ModelServiceAccount string
+	// PRD-65 Layer 3: RUNAI_STREAMER_MEMORY_LIMIT env (GiB) on every model
+	// container when > 0. Caps the streamer's shared CPU buffer during weight
+	// load, mirroring the single-node model-deployment template. 0 ⇒ emit no
+	// env var (inherit the upstream default). Only meaningful when the run
+	// streams from S3 (ServeArgs carry --load-format runai_streamer).
+	StreamerMemoryLimitGiB int
 	// InstanceTypeName adds a node.kubernetes.io/instance-type nodeSelector to
 	// every serving pod. NOTE: a STATIC NodePool provisions from its OWN template
 	// requirements, ignoring pods (Karpenter docs), so this selector does NOT

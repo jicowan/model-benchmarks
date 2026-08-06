@@ -182,17 +182,25 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	// model-identity knobs (MaxModelLen, KVCacheDtype, Quantization) are shared
 	// across roles — only MaxNumBatchedTokens (the scheduler knob) may differ
 	// per role (PRD-64). buildServeArgs holds everything but that one knob fixed.
+	// PRD-65 Layer 3: streamer memory-limit parity with single-node. 0 →
+	// auto-size to half the node RAM (the streamer caps its shared CPU buffer
+	// against the weight size at load). Only meaningful when the streamer is on.
+	streamerMemLimitGiB := cfg.Request.StreamerMemoryLimitGiB
+	if streamerMemLimitGiB == 0 {
+		streamerMemLimitGiB = max(1, cfg.InstanceType.MemoryGiB/2)
+	}
 	buildServeArgs := func(maxNumBatchedTokens int) []string {
 		_, args := rt.BuildArgs(runtime.ContainerParams{
-			ModelHfID:           cfg.Request.ModelHfID,
-			ModelS3URI:          modelS3URI,
-			UseRunaiStreamer:    useRunai,
-			MaxModelLen:         cfg.Request.MaxModelLen,
-			MaxNumBatchedTokens: maxNumBatchedTokens,
-			KVCacheDtype:        cfg.Request.KVCacheDtype,
-			Quantization:        derefStr(cfg.Request.Quantization),
-			StreamerConcurrency: cfg.Request.StreamerConcurrency,
-			AcceleratorName:     cfg.InstanceType.AcceleratorName,
+			ModelHfID:              cfg.Request.ModelHfID,
+			ModelS3URI:             modelS3URI,
+			UseRunaiStreamer:       useRunai,
+			MaxModelLen:            cfg.Request.MaxModelLen,
+			MaxNumBatchedTokens:    maxNumBatchedTokens,
+			KVCacheDtype:           cfg.Request.KVCacheDtype,
+			Quantization:           derefStr(cfg.Request.Quantization),
+			StreamerConcurrency:    cfg.Request.StreamerConcurrency,
+			StreamerMemoryLimitGiB: streamerMemLimitGiB,
+			AcceleratorName:        cfg.InstanceType.AcceleratorName,
 		})
 		return args
 	}
@@ -281,6 +289,12 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		ModelLabel:          modelLabelValue(cfg.Request.ModelHfID),
 		HfToken:             o.resolveHFToken(ctx, cfg.Request.HfToken),
 		ModelServiceAccount: modelServiceAccount,
+		StreamerMemoryLimitGiB: func() int {
+			if useRunai {
+				return streamerMemLimitGiB
+			}
+			return 0
+		}(),
 		InstanceTypeName:    cfg.InstanceType.Name,
 		PrefillReplicas:     prefillReplicas,
 		PrefillTP:           prefillTP,
