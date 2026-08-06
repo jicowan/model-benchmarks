@@ -176,6 +176,14 @@ type RunExportDetails struct {
 	PDMaxPrefixBlocks      *int
 	PDLRUCapacityPerServer *int
 	PDDeciderStrategy      *string
+	// PRD-66 Part 2: configured multi-node image tags, injected by the export
+	// handler from tool_versions (NOT persisted per-run — the tag is a
+	// platform setting, and llm-d/pd-vLLM versions aren't the run's
+	// framework_version). Empty ⇒ the generator falls back to the shipped
+	// default, so the export stays byte-identical to today for callers that
+	// don't set them.
+	LLMDVersion   string
+	PDVLLMVersion string
 }
 
 // GetRunExportDetails returns the information needed to export a run's

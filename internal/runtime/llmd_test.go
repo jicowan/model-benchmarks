@@ -21,6 +21,35 @@ func TestLLMD_Registered(t *testing.T) {
 	}
 }
 
+// TestLLMD_ImageAndVersion covers PRD-66 Part 2: the llm-d-aws image tag comes
+// from ToolVersions.LLMDVersion (its own release line), NOT FrameworkVersion
+// (which for an llm-d run is the bundled vLLM engine version). DefaultImage
+// composes the repo + configured tag; an empty version falls back to the pin.
+func TestLLMD_ImageAndVersion(t *testing.T) {
+	rt := &LLMD{}
+	// ResolveVersion reads LLMDVersion, not FrameworkVersion.
+	tv := ToolVersions{FrameworkVersion: "v0.19.0", LLMDVersion: "v0.9.0"}
+	if got := rt.ResolveVersion(tv); got != "v0.9.0" {
+		t.Errorf("ResolveVersion = %q, want v0.9.0 (LLMDVersion, not FrameworkVersion)", got)
+	}
+	// DefaultImage composes repo + tag.
+	if got := rt.DefaultImage("v0.9.0", ""); got != "ghcr.io/llm-d/llm-d-aws:v0.9.0" {
+		t.Errorf("DefaultImage(v0.9.0) = %q", got)
+	}
+	// Empty version → the shipped default pin.
+	if got := rt.DefaultImage("", ""); got != "ghcr.io/llm-d/llm-d-aws:"+DefaultLLMDVersion {
+		t.Errorf("DefaultImage(\"\") = %q, want default pin", got)
+	}
+	// Pull-through registry is intentionally ignored (GHCR, not Docker Hub).
+	if got := rt.DefaultImage("v0.9.0", "123.dkr.ecr.us-east-2.amazonaws.com"); got != "ghcr.io/llm-d/llm-d-aws:v0.9.0" {
+		t.Errorf("DefaultImage should ignore pull-through for llm-d, got %q", got)
+	}
+	// LLMDImage helper matches.
+	if got := LLMDImage("v1.2.3"); got != "ghcr.io/llm-d/llm-d-aws:v1.2.3" {
+		t.Errorf("LLMDImage = %q", got)
+	}
+}
+
 func TestSingleNodeRuntimes_NotMultiNode(t *testing.T) {
 	for _, name := range []string{"vllm", "vllm-neuron", "sglang"} {
 		rt, err := Get(name)

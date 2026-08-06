@@ -19,6 +19,10 @@ type Runtime interface {
 type ToolVersions struct {
 	FrameworkVersion string
 	SGLangVersion    string
+	// LLMDVersion is the co-located PP image (llm-d-aws) tag — versions
+	// independently of the bundled vLLM engine, so it's NOT FrameworkVersion
+	// (PRD-66 Part 2).
+	LLMDVersion string
 }
 
 // ContainerParams carries the knobs that BuildArgs needs.

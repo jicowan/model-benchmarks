@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/accelbench/accelbench/internal/database"
+	"github.com/accelbench/accelbench/internal/runtime"
 )
 
 func strptr(s string) *string { return &s }
@@ -81,6 +82,43 @@ func TestGenerateManifest_Distributed_ReproducesAppliedConfig(t *testing.T) {
 	// EFA mode: the EFA device class IS claimed (opposite of the tcp test).
 	if !strings.Contains(out, "efa.networking.k8s.aws") {
 		t.Error("efa-mode distributed export must claim EFA")
+	}
+}
+
+// TestGenerateManifest_Distributed_LLMDVersion (PRD-66 Part 2): the co-located
+// PP export uses the CONFIGURED llm-d-aws tag (RunExportDetails.LLMDVersion),
+// not a stale hardcode; an unset version falls back to the shipped default.
+func TestGenerateManifest_Distributed_LLMDVersion(t *testing.T) {
+	base := func() *database.RunExportDetails {
+		return &database.RunExportDetails{
+			ModelHfID: "meta-llama/Llama-3.1-70B", InstanceTypeName: "p5.48xlarge",
+			Framework: "llm-d", FrameworkVersion: "v0.19.0", // vLLM engine — must NOT tag the image
+			TensorParallelDegree: 8, AcceleratorCount: 8, VCPUs: 192, MemoryGiB: 2048,
+			DeploymentMode: strptr("distributed"), NodeCount: intptr(2),
+			PipelineParallelDegree: intptr(2), NetworkMode: strptr("tcp"),
+		}
+	}
+	// Configured tag flows through.
+	d := base()
+	d.LLMDVersion = "v0.9.3"
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	if !strings.Contains(out, "ghcr.io/llm-d/llm-d-aws:v0.9.3") {
+		t.Error("PP export must use the configured llm-d-aws tag v0.9.3")
+	}
+	if strings.Contains(out, "llm-d-aws:v0.19.0") {
+		t.Error("PP image tag must NOT be the run's vLLM FrameworkVersion")
+	}
+	// Unset → shipped default pin (byte-identical to pre-PRD-66).
+	d2 := base()
+	out2, err := generateManifest(d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out2, "ghcr.io/llm-d/llm-d-aws:"+runtime.DefaultLLMDVersion) {
+		t.Error("PP export with no configured version must fall back to the default pin")
 	}
 }
 

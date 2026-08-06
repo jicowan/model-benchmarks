@@ -255,6 +255,17 @@ func (o *Orchestrator) acquireDistributedPool(ctx context.Context, ns, modelName
 // deployLLMD renders the multi-node llm-d object graph from the run's topology
 // and applies it via the dynamic client, tracking every object for teardown
 // (PRD-56 Layer 4). Called from deployModel when cfg.IsDistributed().
+// resolveLLMDVersion returns the configured llm-d-aws image tag (PRD-66 Part 2),
+// falling back to the shipped default when tool_versions is unavailable or
+// unset. This is the co-located PP image's OWN release line, distinct from the
+// run's vLLM FrameworkVersion.
+func (o *Orchestrator) resolveLLMDVersion(ctx context.Context) string {
+	if tv, err := o.repo.GetToolVersions(ctx); err == nil && tv != nil && tv.LLMDVersion != "" {
+		return tv.LLMDVersion
+	}
+	return runtime.DefaultLLMDVersion
+}
+
 func (o *Orchestrator) deployLLMD(ctx context.Context, ns, name string, cfg RunConfig) error {
 	rt, err := runtime.Get(cfg.Request.Framework)
 	if err != nil {
@@ -274,9 +285,14 @@ func (o *Orchestrator) deployLLMD(ctx context.Context, ns, name string, cfg RunC
 		gpusPerNode = cfg.InstanceType.AcceleratorCount
 	}
 
+	// The co-located PP image is llm-d-aws, tagged by the configured
+	// LLMDVersion (PRD-66 Part 2) — NOT the run's vLLM FrameworkVersion (an
+	// llm-d run persists framework_version = the bundled vLLM engine version,
+	// which has no matching GHCR tag). An LLMD_IMAGE / VLLM_IMAGE override wins
+	// verbatim.
 	image := rt.ResolveImageOverride()
 	if image == "" {
-		image = rt.DefaultImage(cfg.Request.FrameworkVersion, "")
+		image = rt.DefaultImage(o.resolveLLMDVersion(ctx), "")
 	}
 
 	// ServeArgs = model positional + static tuning flags. The multi-node

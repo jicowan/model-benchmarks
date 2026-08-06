@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -50,7 +51,6 @@ const (
 	exportMultiNodeTaintV  = "true"
 	exportDRASelectorK     = "accelbench.io/dra"
 	exportDRASelectorV     = "true"
-	exportLLMDImage        = "ghcr.io/llm-d/llm-d-aws:v0.8.1"
 	exportPDModelImage     = "vllm/vllm-openai:v0.25.0"
 	exportPDSidecarImage   = "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0"
 	exportPDEPPImage       = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
@@ -137,6 +137,19 @@ func exportNetworkMode(d *database.RunExportDetails) string {
 	return "efa"
 }
 
+// exportLLMDImageFor resolves the co-located PP image the same way the
+// orchestrator's deploy path does (PRD-66 Part 2): an LLMD_IMAGE / VLLM_IMAGE
+// override wins verbatim; otherwise compose ghcr.io/llm-d/llm-d-aws from the
+// configured LLMDVersion (empty ⇒ shipped default). One resolver so the export
+// can't drift from what ran.
+func exportLLMDImageFor(d *database.RunExportDetails) string {
+	rt := &runtime.LLMD{}
+	if ov := rt.ResolveImageOverride(); ov != "" {
+		return ov
+	}
+	return runtime.LLMDImage(d.LLMDVersion)
+}
+
 // generateDistributedManifest renders the co-located multi-node llm-d object
 // graph (LeaderWorkerSet + Service + HTTPRoute + DRA claims) for a distributed
 // run (PRD-56 shape), reusing the orchestrator's renderer (PRD-59 fix — the old
@@ -164,7 +177,7 @@ func generateDistributedManifest(d *database.RunExportDetails) (string, error) {
 	return manifest.RenderLLMDDeployment(manifest.LLMDDeploymentParams{
 		Name:                   name,
 		Namespace:              "accelbench",
-		Image:                  exportLLMDImage,
+		Image:                  exportLLMDImageFor(d),
 		ServeArgs:              exportServeArgs(d),
 		ContainerName:          "vllm",
 		ModelHfID:              d.ModelHfID,
@@ -317,6 +330,9 @@ func (s *Server) handleExportManifest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "run details not found")
 		return
 	}
+	// PRD-66 Part 2: inject the configured multi-node image tags so the exported
+	// manifest names the image that would actually deploy (not a stale hardcode).
+	s.injectMultinodeImageVersions(r.Context(), details)
 
 	// Generate the manifest.
 	manifest, err := generateManifest(details)
@@ -331,6 +347,21 @@ func (s *Server) handleExportManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(manifest))
+}
+
+// injectMultinodeImageVersions fills the configured llm-d-aws + D/P vLLM image
+// tags onto the export details from tool_versions (PRD-66 Part 2), so the
+// generators compose the same image the orchestrator would deploy. Best-effort:
+// on any lookup failure the fields stay empty and the generators fall back to
+// the shipped defaults (byte-identical to pre-PRD-66 exports).
+func (s *Server) injectMultinodeImageVersions(ctx context.Context, d *database.RunExportDetails) {
+	if d == nil {
+		return
+	}
+	if tv, err := s.repo.GetToolVersions(ctx); err == nil && tv != nil {
+		d.LLMDVersion = tv.LLMDVersion
+		d.PDVLLMVersion = tv.PDVLLMVersion
+	}
 }
 
 // sanitizeFilename converts a model ID to a safe filename.
@@ -983,6 +1014,7 @@ func (s *Server) handleExportSuiteManifest(w http.ResponseWriter, r *http.Reques
 	if suite.FrameworkVersion != nil {
 		details.FrameworkVersion = *suite.FrameworkVersion
 	}
+	s.injectMultinodeImageVersions(r.Context(), details)
 
 	manifest, err := generateManifest(details)
 	if err != nil {
