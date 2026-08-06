@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createRun, listInstanceTypes, listScenarios } from "../api";
-import type { InstanceType, Scenario, RunRequest } from "../types";
+import { createRun, listInstanceTypes, listModelCache, listScenarios } from "../api";
+import type { InstanceType, ModelCache, Scenario, RunRequest } from "../types";
 import ModelCombobox from "../components/ModelCombobox";
 
 // PRD-57: dedicated composer for a multi-node DISTRIBUTED (llm-d) benchmark.
@@ -18,6 +18,11 @@ export default function Distributed() {
 
   // PRD-58: co-located (PRD-57) vs disaggregated (prefill/decode split).
   const [mode, setMode] = useState<"distributed" | "disaggregated">("distributed");
+
+  // PRD-65 Layer 5: the selected model's S3 cache entry, if any. Populated on
+  // model change. Drives the D/P Run:ai streamer UI + request (D/P auto-streams
+  // a cached model; PP cannot — llm-d-aws lacks the runai package).
+  const [cachedModel, setCachedModel] = useState<ModelCache | null>(null);
 
   const [form, setForm] = useState({
     model_hf_id: "",
@@ -59,6 +64,11 @@ export default function Distributed() {
     pd_queue_scorer_weight: 0,
     pd_max_prefix_blocks: 0,
     pd_lru_capacity_per_server: 0,
+    // PRD-65 Layer 5: Run:ai streamer knobs for a D/P cached-model run. 0 =
+    // default (concurrency 16 / memory-limit auto-sized). Only sent for D/P +
+    // cached (see submit()).
+    streamer_concurrency: 0,
+    streamer_memory_limit_gib: 0,
   });
   // PRD-61: the advanced routing panel defaults collapsed so the common path is
   // visually unchanged.
@@ -72,6 +82,30 @@ export default function Distributed() {
       .then(setScenarios)
       .catch(() => setScenarios([]));
   }, []);
+
+  // PRD-65 Layer 5: track whether the selected model is S3-cached (so a D/P run
+  // can stream it via Run:ai). Look up on model change; onCachedModelSelect
+  // covers the dropdown pick, this covers a typed/pasted HF id.
+  useEffect(() => {
+    const hf = form.model_hf_id.trim();
+    if (!hf) {
+      setCachedModel(null);
+      return;
+    }
+    let stale = false;
+    listModelCache()
+      .then((resp) => {
+        if (stale) return;
+        const match = resp.rows.find((c) => c.hf_id === hf && c.status === "cached");
+        setCachedModel(match ?? null);
+      })
+      .catch(() => {
+        if (!stale) setCachedModel(null);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [form.model_hf_id]);
 
   const selectedInstance = useMemo(
     () => instanceTypes.find((t) => t.name === form.instance_type_name),
@@ -170,6 +204,12 @@ export default function Distributed() {
         pd_queue_scorer_weight: form.pd_queue_scorer_weight || undefined,
         pd_max_prefix_blocks: form.pd_max_prefix_blocks || undefined,
         pd_lru_capacity_per_server: form.pd_lru_capacity_per_server || undefined,
+        // PRD-65 Layer 5: D/P streams a cached model via Run:ai. Send the S3 URI
+        // + streamer knobs ONLY when the model is cached (else the backend
+        // auto-detect / HF path applies). PP never reaches this branch.
+        model_s3_uri: cachedModel?.s3_uri || undefined,
+        streamer_concurrency: cachedModel ? form.streamer_concurrency || undefined : undefined,
+        streamer_memory_limit_gib: cachedModel ? form.streamer_memory_limit_gib || undefined : undefined,
       };
     } else {
       if (form.node_count < 2) return setError("Distributed runs need at least 2 nodes.");
@@ -215,6 +255,7 @@ export default function Distributed() {
           <ModelCombobox
             value={form.model_hf_id}
             onChange={(v) => set("model_hf_id", v)}
+            onCachedModelSelect={(c) => setCachedModel(c)}
           />
         </label>
 
@@ -623,6 +664,48 @@ export default function Distributed() {
             {mode === "disaggregated" ? " Model-identity knobs apply identically to prefill + decode." : ""}
           </span>
         </div>
+
+        {/* PRD-65 Layer 5: Run:ai streamer knobs. Shown ONLY for disaggregated
+            (D/P) AND a cached model — D/P streams a cached model from S3 via
+            Run:ai; co-located PP can't (llm-d-aws lacks the streamer package), so
+            these never appear for PP. */}
+        {mode === "disaggregated" && cachedModel && (
+          <div className="border border-line bg-surface-1 p-3 flex flex-col gap-3">
+            <div className="font-mono text-[11px] tracking-mech uppercase text-ink-0">
+              Weight loading (Run:ai streamer)
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10.5px] text-ink-2 uppercase">Memory limit (GiB)</span>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="0 = auto-size"
+                  className="input w-full"
+                  value={form.streamer_memory_limit_gib || ""}
+                  onChange={(e) => set("streamer_memory_limit_gib", Math.max(0, Number(e.target.value) || 0))}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10.5px] text-ink-2 uppercase">Concurrency</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={32}
+                  placeholder="0 = default (16)"
+                  className="input w-full"
+                  value={form.streamer_concurrency || ""}
+                  onChange={(e) => set("streamer_concurrency", Math.max(0, Number(e.target.value) || 0))}
+                />
+              </label>
+            </div>
+            <span className="font-mono text-[9.5px] text-ink-2">
+              Model is S3-cached → prefill/decode pods stream weights via the Run:ai streamer.
+              Memory limit caps the streamer's shared CPU buffer (0 = auto-size to node RAM / 2);
+              concurrency is the fill-thread count (0 = 16). Co-located (PP) runs load from HuggingFace.
+            </span>
+          </div>
+        )}
 
         {/* Scenario + load knobs */}
         <div className="grid grid-cols-2 gap-4">
