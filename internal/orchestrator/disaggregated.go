@@ -136,13 +136,11 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 		return err
 	}
 
-	// S3-backed models load via the Run:ai streamer, same as elsewhere.
-	var modelS3URI string
-	useRunai := false
-	if cfg.Request.ModelS3URI != "" {
-		modelS3URI = cfg.Request.ModelS3URI
-		useRunai = true
-	}
+	// S3-backed models load via the Run:ai streamer, same as single-node
+	// (PRD-65 Layer 2): explicit URI wins, else auto-detect a cached model.
+	// Safe on D/P because the upstream vllm/vllm-openai image bundles
+	// runai-model-streamer. (PP/llm-d-aws does NOT bundle it — deferred.)
+	modelS3URI, useRunai := o.resolveS3Model(ctx, cfg)
 
 	prefillTP := cfg.PrefillTP
 	if prefillTP < 1 {

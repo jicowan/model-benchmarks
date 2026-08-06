@@ -566,6 +566,34 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	return nil
 }
 
+// resolveS3Model decides how a run loads its model weights (PRD-65 Layer 2).
+// Precedence, matching the single-node reference:
+//  1. an explicit Request.ModelS3URI wins (stream from that S3 path);
+//  2. else, if the HF model is cached in S3 (GetModelCacheByHfID, status
+//     "cached"), auto-detect it and stream;
+//  3. else HF download, no streamer.
+// Returns (s3URI, useRunai). Path-agnostic so single-node, D/P, and (later) PP
+// all share one cached-model policy — the multi-node paths previously only
+// honored an explicit URI and never consulted the cache.
+func (o *Orchestrator) resolveS3Model(ctx context.Context, cfg RunConfig) (string, bool) {
+	if cfg.Request.ModelS3URI != "" {
+		log.Printf("[%s] using S3 model: %s", cfg.RunID[:8], cfg.Request.ModelS3URI)
+		return cfg.Request.ModelS3URI, true
+	}
+	if cfg.Request.ModelHfID != "" {
+		revision := cfg.Request.ModelHfRevision
+		if revision == "" {
+			revision = "main"
+		}
+		cached, _ := o.repo.GetModelCacheByHfID(ctx, cfg.Request.ModelHfID, revision)
+		if cached != nil && cached.Status == "cached" {
+			log.Printf("[%s] auto-detected cached model: %s", cfg.RunID[:8], cached.S3URI)
+			return cached.S3URI, true
+		}
+	}
+	return "", false
+}
+
 func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg RunConfig) error {
 	// PRD-58: disaggregated runs render the prefill/decode object graph
 	// (two Deployments + InferencePool + EPP). PRD-56: co-located multi-node
@@ -585,26 +613,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 	cpuReq := fmt.Sprintf("%d", max(1, vcpus*3/4))
 	memReq := fmt.Sprintf("%dGi", max(1, memGiB*85/100))
 
-	var modelS3URI string
-	var useRunai bool
-	if cfg.Request.ModelS3URI != "" {
-		modelS3URI = cfg.Request.ModelS3URI
-		useRunai = true
-		log.Printf("[%s] using S3 model: %s", cfg.RunID[:8], modelS3URI)
-	}
-
-	if modelS3URI == "" && cfg.Request.ModelHfID != "" {
-		revision := cfg.Request.ModelHfRevision
-		if revision == "" {
-			revision = "main"
-		}
-		cached, _ := o.repo.GetModelCacheByHfID(ctx, cfg.Request.ModelHfID, revision)
-		if cached != nil && cached.Status == "cached" {
-			modelS3URI = cached.S3URI
-			useRunai = true
-			log.Printf("[%s] auto-detected cached model: %s", cfg.RunID[:8], modelS3URI)
-		}
-	}
+	modelS3URI, useRunai := o.resolveS3Model(ctx, cfg)
 
 	// PRD-50 follow-up: the streamer is always used for S3-backed
 	// models. vLLM's default loader against an S3 URI fails in
