@@ -42,6 +42,10 @@ image:
     tag: "latest"
     pullPolicy: IfNotPresent
   cacheJob:
+    # Model-cache Job image. Registry-agnostic like api/web/migration — the
+    # operator supplies this at deploy time (--set image.cacheJob.repository=...,
+    # see README). Drives CACHE_JOB_IMAGE on the API; model caching (POST
+    # /model-cache) returns "CACHE_JOB_IMAGE not configured" if it's left unset.
     repository: ""  # Optional: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-cache-job
     tag: "latest"
 

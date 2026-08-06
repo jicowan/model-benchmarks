@@ -55,6 +55,24 @@ var (
 	registryCacheLifetime = 60 * time.Second
 )
 
+// pullThroughPrefixes are the ECR-side repository prefixes for our configured
+// pull-through cache rules (terraform/main.tf): "dockerhub" mirrors Docker Hub
+// (single-node + D/P vllm-openai), "ghcr" mirrors GitHub Container Registry
+// (PRD-66 Part 2a: the co-located PP llm-d-aws image). A repo under any of these
+// is a cached upstream image the Registry card should surface. ECR only creates
+// the repo on the first pull, so e.g. ghcr/llm-d/llm-d-aws appears only after a
+// PP run has pulled it.
+var pullThroughPrefixes = []string{"dockerhub/", "ghcr/"}
+
+func isPullThroughRepo(name string) bool {
+	for _, p := range pullThroughPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
 	registryCacheMu.Lock()
 	if registryCached != nil && time.Since(registryCachedAt) < registryCacheLifetime {
@@ -83,7 +101,10 @@ func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Paginate through dockerhub/* repositories. Expect a small count.
+	// Paginate through pull-through-cache repositories. ECR auto-creates a repo
+	// under the rule's prefix on first pull, so we list every configured
+	// pull-through prefix — Docker Hub (single-node + D/P vLLM) and GHCR (PRD-66
+	// Part 2a: the co-located PP llm-d-aws image). Expect a small count.
 	var repoNames []string
 	var next *string
 	for {
@@ -99,7 +120,7 @@ func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
 			if repo.RepositoryName == nil {
 				continue
 			}
-			if strings.HasPrefix(*repo.RepositoryName, "dockerhub/") {
+			if isPullThroughRepo(*repo.RepositoryName) {
 				repoNames = append(repoNames, *repo.RepositoryName)
 			}
 		}

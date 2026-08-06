@@ -806,7 +806,7 @@ function RegistryCard() {
             <span className="font-mono text-[11px] tracking-mech uppercase text-ink-2">DISABLED</span>
           </div>
           <p className="meta mb-3 max-w-xl">
-            PRD-29's Docker Hub pull-through cache is not currently enabled on this cluster. To enable:
+            The ECR pull-through cache (Docker Hub + GHCR) is not currently enabled on this cluster. To enable:
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 bg-surface-0 border border-line p-2 font-mono text-[11px] text-ink-1 whitespace-pre-wrap">
