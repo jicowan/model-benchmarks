@@ -32,6 +32,63 @@ func TestToolVersions_GetReturnsDefaults(t *testing.T) {
 	if resp.InferencePerfVersion == "" {
 		t.Error("inference_perf_version should be populated")
 	}
+	// PRD-66 Part 2: the two multi-node image tags default to the current pins.
+	if resp.LLMDVersion != "v0.8.1" {
+		t.Errorf("llmd_version = %q, want v0.8.1", resp.LLMDVersion)
+	}
+	if resp.PDVLLMVersion != "v0.25.0" {
+		t.Errorf("pd_vllm_version = %q, want v0.25.0", resp.PDVLLMVersion)
+	}
+}
+
+// TestToolVersions_PutRoundTripsMultinodeVersions verifies a PUT that sets the
+// llm-d-aws + D/P vLLM tags persists them (PRD-66 Part 2).
+func TestToolVersions_PutRoundTripsMultinodeVersions(t *testing.T) {
+	_, mux := setupPRD32Server(nil)
+
+	body := strings.NewReader(`{"framework_version":"v0.19.0","inference_perf_version":"v0.2.0","llmd_version":"v0.9.0","pd_vllm_version":"v0.26.1"}`)
+	req := httptest.NewRequest("PUT", "/api/v1/config/tool-versions", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp toolVersionsResponse
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.LLMDVersion != "v0.9.0" {
+		t.Errorf("llmd_version = %q, want v0.9.0", resp.LLMDVersion)
+	}
+	if resp.PDVLLMVersion != "v0.26.1" {
+		t.Errorf("pd_vllm_version = %q, want v0.26.1", resp.PDVLLMVersion)
+	}
+}
+
+// TestToolVersions_PutKeepsExistingMultinodeVersions verifies that omitting the
+// llm-d / D-P fields on a PUT keeps their prior values (they're not required).
+func TestToolVersions_PutKeepsExistingMultinodeVersions(t *testing.T) {
+	repo, mux := setupPRD32Server(nil)
+	repo.SeedToolVersions(&database.ToolVersions{
+		FrameworkVersion:     "v0.19.0",
+		InferencePerfVersion: "v0.2.0",
+		LLMDVersion:          "v0.8.1",
+		PDVLLMVersion:        "v0.25.0",
+	})
+
+	body := strings.NewReader(`{"framework_version":"v0.20.0","inference_perf_version":"v0.3.0"}`)
+	req := httptest.NewRequest("PUT", "/api/v1/config/tool-versions", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp toolVersionsResponse
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.LLMDVersion != "v0.8.1" {
+		t.Errorf("llmd_version = %q, want kept v0.8.1", resp.LLMDVersion)
+	}
+	if resp.PDVLLMVersion != "v0.25.0" {
+		t.Errorf("pd_vllm_version = %q, want kept v0.25.0", resp.PDVLLMVersion)
+	}
 }
 
 // TestToolVersions_PutUpdatesAndAudits round-trips a PUT and verifies the

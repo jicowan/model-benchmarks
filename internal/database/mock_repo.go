@@ -1487,6 +1487,8 @@ func (m *MockRepo) GetToolVersions(_ context.Context) (*ToolVersions, error) {
 			FrameworkVersion:     "v0.19.0",
 			SGLangVersion:        "v0.4.10.post2-cu126",
 			InferencePerfVersion: "v0.2.0",
+			LLMDVersion:          "v0.8.1",
+			PDVLLMVersion:        "v0.25.0",
 			UpdatedAt:            time.Now(),
 		}, nil
 	}

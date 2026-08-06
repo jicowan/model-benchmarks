@@ -437,6 +437,9 @@ type toolVersionsResponse struct {
 	FrameworkVersion     string    `json:"framework_version"`
 	SGLangVersion        string    `json:"sglang_version"`
 	InferencePerfVersion string    `json:"inference_perf_version"`
+	// PRD-66 Part 2: settable multi-node image tags.
+	LLMDVersion   string `json:"llmd_version"`
+	PDVLLMVersion string `json:"pd_vllm_version"`
 	UpdatedAt            time.Time `json:"updated_at"`
 	// EnvOverrideActive is true when the orchestrator will ignore
 	// inference_perf_version in favor of the INFERENCE_PERF_IMAGE env var.
@@ -452,6 +455,14 @@ type toolVersionsResponse struct {
 	// runs. Same semantics: when set, sglang_version is only audit data.
 	SGLangEnvOverrideActive bool   `json:"sglang_env_override_active"`
 	SGLangEnvOverrideImage  string `json:"sglang_env_override_image,omitempty"`
+	// PRD-66 Part 2: LLMD_IMAGE / PD_MODEL_IMAGE env var status. When set, the
+	// orchestrator uses the override verbatim and llmd_version / pd_vllm_version
+	// are only audit data (same semantics as VLLM_IMAGE). LLMD_IMAGE also falls
+	// back to VLLM_IMAGE in the runtime, but we report the specific var here.
+	LLMDEnvOverrideActive  bool   `json:"llmd_env_override_active"`
+	LLMDEnvOverrideImage   string `json:"llmd_env_override_image,omitempty"`
+	PDVLLMEnvOverrideActive bool  `json:"pd_vllm_env_override_active"`
+	PDVLLMEnvOverrideImage  string `json:"pd_vllm_env_override_image,omitempty"`
 }
 
 func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
@@ -465,13 +476,32 @@ func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "load tool versions: "+err.Error())
 		return
 	}
+	s.writeCachedJSON(w, cacheKey, http.StatusOK, toolVersionsResp(tv))
+}
+
+// toolVersionsResp builds the API response for a tool_versions row, folding in
+// the current env-override status for every image var. Shared by GET and PUT so
+// the two responses can't drift.
+func toolVersionsResp(tv *database.ToolVersions) toolVersionsResponse {
 	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
 	vllmEnvImage := os.Getenv("VLLM_IMAGE")
 	sglangEnvImage := os.Getenv("SGLANG_IMAGE")
-	s.writeCachedJSON(w, cacheKey, http.StatusOK, toolVersionsResponse{
+	// LLMD_IMAGE falls back to VLLM_IMAGE in the runtime (llmd.go), so the
+	// llm-d override is active if EITHER is set; report the effective image.
+	llmdEnvImage := os.Getenv("LLMD_IMAGE")
+	if llmdEnvImage == "" {
+		llmdEnvImage = vllmEnvImage
+	}
+	pdEnvImage := os.Getenv("PD_MODEL_IMAGE")
+	if pdEnvImage == "" {
+		pdEnvImage = vllmEnvImage
+	}
+	return toolVersionsResponse{
 		FrameworkVersion:        tv.FrameworkVersion,
 		SGLangVersion:           tv.SGLangVersion,
 		InferencePerfVersion:    tv.InferencePerfVersion,
+		LLMDVersion:             tv.LLMDVersion,
+		PDVLLMVersion:           tv.PDVLLMVersion,
 		UpdatedAt:               tv.UpdatedAt,
 		EnvOverrideActive:       envImage != "",
 		EnvOverrideImage:        envImage,
@@ -479,13 +509,19 @@ func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
 		VLLMEnvOverrideImage:    vllmEnvImage,
 		SGLangEnvOverrideActive: sglangEnvImage != "",
 		SGLangEnvOverrideImage:  sglangEnvImage,
-	})
+		LLMDEnvOverrideActive:   llmdEnvImage != "",
+		LLMDEnvOverrideImage:    llmdEnvImage,
+		PDVLLMEnvOverrideActive: pdEnvImage != "",
+		PDVLLMEnvOverrideImage:  pdEnvImage,
+	}
 }
 
 type putToolVersionsRequest struct {
 	FrameworkVersion     string `json:"framework_version"`
 	SGLangVersion        string `json:"sglang_version"`
 	InferencePerfVersion string `json:"inference_perf_version"`
+	LLMDVersion          string `json:"llmd_version"`
+	PDVLLMVersion        string `json:"pd_vllm_version"`
 }
 
 func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
@@ -497,6 +533,8 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 	req.FrameworkVersion = strings.TrimSpace(req.FrameworkVersion)
 	req.SGLangVersion = strings.TrimSpace(req.SGLangVersion)
 	req.InferencePerfVersion = strings.TrimSpace(req.InferencePerfVersion)
+	req.LLMDVersion = strings.TrimSpace(req.LLMDVersion)
+	req.PDVLLMVersion = strings.TrimSpace(req.PDVLLMVersion)
 	if req.FrameworkVersion == "" {
 		writeError(w, http.StatusBadRequest, "framework_version is required")
 		return
@@ -505,11 +543,19 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "inference_perf_version is required")
 		return
 	}
-	// SGLang version: empty means "keep existing". The migration seeds
-	// a default so a missing field on a fresh PUT is benign.
-	if req.SGLangVersion == "" {
+	// SGLang / llm-d / D-P vLLM versions: empty means "keep existing". The
+	// migration seeds defaults so a missing field on a fresh PUT is benign.
+	if req.SGLangVersion == "" || req.LLMDVersion == "" || req.PDVLLMVersion == "" {
 		if cur, err := s.repo.GetToolVersions(r.Context()); err == nil && cur != nil {
-			req.SGLangVersion = cur.SGLangVersion
+			if req.SGLangVersion == "" {
+				req.SGLangVersion = cur.SGLangVersion
+			}
+			if req.LLMDVersion == "" {
+				req.LLMDVersion = cur.LLMDVersion
+			}
+			if req.PDVLLMVersion == "" {
+				req.PDVLLMVersion = cur.PDVLLMVersion
+			}
 		}
 	}
 
@@ -517,30 +563,18 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		FrameworkVersion:     req.FrameworkVersion,
 		SGLangVersion:        req.SGLangVersion,
 		InferencePerfVersion: req.InferencePerfVersion,
+		LLMDVersion:          req.LLMDVersion,
+		PDVLLMVersion:        req.PDVLLMVersion,
 	}
 	if err := s.repo.PutToolVersions(r.Context(), tv); err != nil {
 		writeError(w, http.StatusInternalServerError, "update tool versions: "+err.Error())
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/tool-versions",
-		fmt.Sprintf("framework_version=%s sglang_version=%s inference_perf_version=%s",
-			req.FrameworkVersion, req.SGLangVersion, req.InferencePerfVersion))
+		fmt.Sprintf("framework_version=%s sglang_version=%s inference_perf_version=%s llmd_version=%s pd_vllm_version=%s",
+			req.FrameworkVersion, req.SGLangVersion, req.InferencePerfVersion, req.LLMDVersion, req.PDVLLMVersion))
 	s.cache.Invalidate("tool-versions")
 
 	fresh, _ := s.repo.GetToolVersions(r.Context())
-	envImage := os.Getenv("INFERENCE_PERF_IMAGE")
-	vllmEnvImage := os.Getenv("VLLM_IMAGE")
-	sglangEnvImage := os.Getenv("SGLANG_IMAGE")
-	writeJSON(w, http.StatusOK, toolVersionsResponse{
-		FrameworkVersion:        fresh.FrameworkVersion,
-		SGLangVersion:           fresh.SGLangVersion,
-		InferencePerfVersion:    fresh.InferencePerfVersion,
-		UpdatedAt:               fresh.UpdatedAt,
-		EnvOverrideActive:       envImage != "",
-		EnvOverrideImage:        envImage,
-		VLLMEnvOverrideActive:   vllmEnvImage != "",
-		VLLMEnvOverrideImage:    vllmEnvImage,
-		SGLangEnvOverrideActive: sglangEnvImage != "",
-		SGLangEnvOverrideImage:  sglangEnvImage,
-	})
+	writeJSON(w, http.StatusOK, toolVersionsResp(fresh))
 }

@@ -503,7 +503,13 @@ type ToolVersions struct {
 	FrameworkVersion     string    `json:"framework_version"`
 	SGLangVersion        string    `json:"sglang_version"`
 	InferencePerfVersion string    `json:"inference_perf_version"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	// PRD-66 Part 2: settable tags for the two multi-node images.
+	// LLMDVersion is the co-located PP image (llm-d-aws) tag; PDVLLMVersion is
+	// the disaggregated D/P image (vllm/vllm-openai) tag — DISTINCT from
+	// FrameworkVersion because D/P pins a cu13/NIXL-specific vLLM.
+	LLMDVersion   string    `json:"llmd_version"`
+	PDVLLMVersion string    `json:"pd_vllm_version"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // CatalogMatrix bundles the full matrix for the seeder.
