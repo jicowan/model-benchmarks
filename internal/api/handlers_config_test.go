@@ -22,6 +22,8 @@ type fakeSecrets struct {
 	hfUpdated time.Time
 	dhSet     bool
 	dhUpdated time.Time
+	ghSet     bool
+	ghUpdated time.Time
 }
 
 func (f *fakeSecrets) Describe(_ context.Context, id string) (secrets.Metadata, error) {
@@ -37,6 +39,12 @@ func (f *fakeSecrets) Describe(_ context.Context, id string) (secrets.Metadata, 
 			return secrets.Metadata{Set: false}, nil
 		}
 		t := f.dhUpdated
+		return secrets.Metadata{Set: true, UpdatedAt: &t}, nil
+	case secrets.GHCRSecretID:
+		if !f.ghSet {
+			return secrets.Metadata{Set: false}, nil
+		}
+		t := f.ghUpdated
 		return secrets.Metadata{Set: true, UpdatedAt: &t}, nil
 	}
 	return secrets.Metadata{}, nil
@@ -60,6 +68,15 @@ func (f *fakeSecrets) PutDockerHub(_ context.Context, _, _ string) error {
 }
 func (f *fakeSecrets) DeleteDockerHub(_ context.Context) error {
 	f.dhSet = false
+	return nil
+}
+func (f *fakeSecrets) PutGHCR(_ context.Context, _, _ string) error {
+	f.ghSet = true
+	f.ghUpdated = time.Now()
+	return nil
+}
+func (f *fakeSecrets) DeleteGHCR(_ context.Context) error {
+	f.ghSet = false
 	return nil
 }
 
@@ -162,6 +179,53 @@ func TestCredentials_PutDockerHubRequiresBothFields(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+// PRD-66 Part 2a: GHCR credential round-trips like Docker Hub.
+func TestCredentials_GHCRRoundTrip(t *testing.T) {
+	fs := &fakeSecrets{}
+	mux := setupConfigServer(fs)
+
+	// PUT sets it.
+	body := strings.NewReader(`{"username":"jicowan","access_token":"ghp_abc"}`)
+	req := httptest.NewRequest("PUT", "/api/v1/config/credentials/ghcr-token", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("PUT status = %d, want 204", w.Code)
+	}
+
+	// GET reflects set.
+	req = httptest.NewRequest("GET", "/api/v1/config/credentials", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var resp credentialsStatus
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.GHCRToken.Set {
+		t.Error("ghcr_token should be set after PUT")
+	}
+
+	// DELETE clears it.
+	req = httptest.NewRequest("DELETE", "/api/v1/config/credentials/ghcr-token", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, want 204", w.Code)
+	}
+	if fs.ghSet {
+		t.Error("ghcr_token should be cleared after DELETE")
+	}
+}
+
+func TestCredentials_PutGHCRRequiresBothFields(t *testing.T) {
+	mux := setupConfigServer(&fakeSecrets{})
+	body := strings.NewReader(`{"username":"jicowan","access_token":""}`)
+	req := httptest.NewRequest("PUT", "/api/v1/config/credentials/ghcr-token", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}

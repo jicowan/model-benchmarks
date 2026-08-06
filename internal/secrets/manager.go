@@ -1,9 +1,10 @@
 // Package secrets wraps AWS Secrets Manager for AccelBench's platform
 // credentials (PRD-31).
 //
-// Two secrets are managed:
+// Managed secrets:
 //   - accelbench/config/hf-token      — { "token": "hf_..." }
 //   - ecr-pullthroughcache/dockerhub  — { "username": "...", "accessToken": "..." }
+//   - ecr-pullthroughcache/ghcr       — { "username": "...", "accessToken": "..." }
 //
 // The Manager creates secrets on first PUT if they don't exist, mirrors the
 // "describe-only" read surface the /api/config/credentials GET endpoint needs,
@@ -27,6 +28,11 @@ import (
 const (
 	HFSecretID        = "accelbench/config/hf-token"
 	DockerHubSecretID = "ecr-pullthroughcache/dockerhub"
+	// GHCRSecretID backs the GitHub Container Registry pull-through cache
+	// (PRD-66 Part 2a). Same {username, accessToken} shape as Docker Hub; the
+	// token is a GitHub PAT with read:packages. Created by terraform
+	// (aws_secretsmanager_secret.ghcr_credential); PutGHCR is the UI rotation path.
+	GHCRSecretID = "ecr-pullthroughcache/ghcr"
 )
 
 // Manager is the concrete implementation backed by Secrets Manager.
@@ -155,6 +161,36 @@ func (m *Manager) DeleteDockerHub(ctx context.Context) error {
 			return nil
 		}
 		return fmt.Errorf("delete %s: %w", DockerHubSecretID, err)
+	}
+	return nil
+}
+
+// PutGHCR stores (username, accessToken) for the GHCR pull-through cache
+// (PRD-66 Part 2a). Same shape + create-if-missing semantics as PutDockerHub;
+// terraform already creates the secret, this is the UI rotation path.
+func (m *Manager) PutGHCR(ctx context.Context, username, accessToken string) error {
+	payload, err := json.Marshal(DockerHubValue{Username: username, AccessToken: accessToken})
+	if err != nil {
+		return err
+	}
+	return m.putSecretString(ctx, GHCRSecretID, string(payload),
+		"GitHub Container Registry credentials consumed by the ECR pull-through cache")
+}
+
+// DeleteGHCR removes the GHCR credential (no recovery window). The pull-through
+// cache can't hydrate new llm-d-aws images without it; re-PUT before the next
+// fresh pull.
+func (m *Manager) DeleteGHCR(ctx context.Context) error {
+	_, err := m.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
+		SecretId:                   aws.String(GHCRSecretID),
+		ForceDeleteWithoutRecovery: aws.Bool(true),
+	})
+	if err != nil {
+		var nf *smtypes.ResourceNotFoundException
+		if errors.As(err, &nf) {
+			return nil
+		}
+		return fmt.Errorf("delete %s: %w", GHCRSecretID, err)
 	}
 	return nil
 }

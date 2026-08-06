@@ -24,6 +24,8 @@ type SecretsStore interface {
 	DeleteHFToken(ctx context.Context) error
 	PutDockerHub(ctx context.Context, username, accessToken string) error
 	DeleteDockerHub(ctx context.Context) error
+	PutGHCR(ctx context.Context, username, accessToken string) error
+	DeleteGHCR(ctx context.Context) error
 }
 
 // --- GET /api/config/credentials -------------------------------------------
@@ -31,6 +33,7 @@ type SecretsStore interface {
 type credentialsStatus struct {
 	HFToken        secrets.Metadata `json:"hf_token"`
 	DockerHubToken secrets.Metadata `json:"dockerhub_token"`
+	GHCRToken      secrets.Metadata `json:"ghcr_token"`
 }
 
 func (s *Server) handleGetCredentials(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +51,12 @@ func (s *Server) handleGetCredentials(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "describe dockerhub-token: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, credentialsStatus{HFToken: hf, DockerHubToken: dh})
+	gh, err := s.secrets.Describe(r.Context(), secrets.GHCRSecretID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "describe ghcr-token: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, credentialsStatus{HFToken: hf, DockerHubToken: dh, GHCRToken: gh})
 }
 
 // --- PUT /api/config/credentials/hf-token ----------------------------------
@@ -136,6 +144,47 @@ func (s *Server) handlePutDockerHubToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/credentials/dockerhub-token", "rotated")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- PUT/DELETE /api/config/credentials/ghcr-token (PRD-66 Part 2a) ---------
+// GHCR uses the same {username, accessToken} shape as Docker Hub; the token is
+// a GitHub PAT with read:packages.
+
+func (s *Server) handleDeleteGHCRToken(w http.ResponseWriter, r *http.Request) {
+	if s.secrets == nil {
+		writeError(w, http.StatusInternalServerError, "secrets manager not configured")
+		return
+	}
+	if err := s.secrets.DeleteGHCR(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete ghcr-token: "+err.Error())
+		return
+	}
+	s.audit(r.Context(), "DELETE /api/v1/config/credentials/ghcr-token", "cleared")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePutGHCRToken(w http.ResponseWriter, r *http.Request) {
+	if s.secrets == nil {
+		writeError(w, http.StatusInternalServerError, "secrets manager not configured")
+		return
+	}
+	var req putDockerHubRequest // same {username, access_token} shape
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	req.AccessToken = strings.TrimSpace(req.AccessToken)
+	if req.Username == "" || req.AccessToken == "" {
+		writeError(w, http.StatusBadRequest, "username and access_token are required")
+		return
+	}
+	if err := s.secrets.PutGHCR(r.Context(), req.Username, req.AccessToken); err != nil {
+		writeError(w, http.StatusInternalServerError, "store ghcr-token: "+err.Error())
+		return
+	}
+	s.audit(r.Context(), "PUT /api/v1/config/credentials/ghcr-token", "rotated")
 	w.WriteHeader(http.StatusNoContent)
 }
 

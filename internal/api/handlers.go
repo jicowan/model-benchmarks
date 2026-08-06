@@ -274,6 +274,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	p.Handle("DELETE /api/v1/config/credentials/hf-token", admin(http.HandlerFunc(s.handleDeleteHFToken)))
 	p.Handle("PUT /api/v1/config/credentials/dockerhub-token", admin(http.HandlerFunc(s.handlePutDockerHubToken)))
 	p.Handle("DELETE /api/v1/config/credentials/dockerhub-token", admin(http.HandlerFunc(s.handleDeleteDockerHubToken)))
+	// PRD-66 Part 2a: GHCR token (llm-d-aws pull-through cache)
+	p.Handle("PUT /api/v1/config/credentials/ghcr-token", admin(http.HandlerFunc(s.handlePutGHCRToken)))
+	p.Handle("DELETE /api/v1/config/credentials/ghcr-token", admin(http.HandlerFunc(s.handleDeleteGHCRToken)))
 	// PRD-32: Catalog matrix editor, scenario overrides, registry, audit log
 	p.Handle("GET /api/v1/config/catalog-matrix", admin(http.HandlerFunc(s.handleGetCatalogMatrix)))
 	p.Handle("PUT /api/v1/config/catalog-matrix", admin(http.HandlerFunc(s.handlePutCatalogMatrix)))

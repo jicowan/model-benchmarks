@@ -5,6 +5,8 @@ import {
   deleteHFToken,
   putDockerHubToken,
   deleteDockerHubToken,
+  putGHCRToken,
+  deleteGHCRToken,
   getCatalogMatrix,
   putCatalogMatrix,
   listScenarioOverrides,
@@ -112,6 +114,7 @@ function formatDate(iso?: string): string {
 type RotateModal =
   | { kind: "hf" }
   | { kind: "dockerhub" }
+  | { kind: "ghcr" }
   | null;
 
 function RotateModalComponent({
@@ -147,6 +150,8 @@ function RotateModalComponent({
       if (!modal) return;
       if (modal.kind === "hf") {
         await putHFToken(token);
+      } else if (modal.kind === "ghcr") {
+        await putGHCRToken(username, token);
       } else {
         await putDockerHubToken(username, token);
       }
@@ -159,7 +164,13 @@ function RotateModalComponent({
     }
   }
 
-  const title = modal.kind === "hf" ? "Rotate HuggingFace Token" : "Rotate Docker Hub Token";
+  const needsUsername = modal.kind === "dockerhub" || modal.kind === "ghcr";
+  const title =
+    modal.kind === "hf"
+      ? "Rotate HuggingFace Token"
+      : modal.kind === "ghcr"
+        ? "Rotate GHCR Token"
+        : "Rotate Docker Hub Token";
 
   return (
     <div
@@ -182,7 +193,7 @@ function RotateModalComponent({
           </button>
         </div>
 
-        {modal.kind === "dockerhub" && (
+        {needsUsername && (
           <label className="block mb-4">
             <div className="eyebrow mb-1">Username</div>
             <input
@@ -209,7 +220,7 @@ function RotateModalComponent({
               autoComplete="off"
               spellCheck={false}
               className="flex-1 bg-surface-0 border border-line px-3 py-2 font-mono text-[12.5px] text-ink-0 focus:outline-none focus:border-signal"
-              placeholder={modal.kind === "hf" ? "hf_..." : "dckr_pat_..."}
+              placeholder={modal.kind === "hf" ? "hf_..." : modal.kind === "ghcr" ? "ghp_... (read:packages)" : "dckr_pat_..."}
             />
             <button
               type="button"
@@ -234,7 +245,7 @@ function RotateModalComponent({
           </button>
           <button
             type="submit"
-            disabled={submitting || !token || (modal.kind === "dockerhub" && !username)}
+            disabled={submitting || !token || (needsUsername && !username)}
             className="btn btn-primary"
           >
             {submitting ? "SAVING…" : "SAVE"}
@@ -321,6 +332,19 @@ function CredentialsCard({
     }
   }
 
+  async function handleClearGHCR() {
+    if (!confirm("Delete the platform GHCR token? The ECR pull-through cache will fail to hydrate new llm-d-aws (multi-node PP) images until a new token is provided.")) {
+      return;
+    }
+    setClearing(true);
+    try {
+      await deleteGHCRToken();
+      onChanged();
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
     <CollapsibleSection index="A" label="Credentials" defaultOpen>
       <div className="panel px-5">
@@ -335,6 +359,12 @@ function CredentialsCard({
           meta={creds?.dockerhub_token}
           onRotate={() => setModal({ kind: "dockerhub" })}
           onDelete={clearing ? undefined : handleClearDockerHub}
+        />
+        <CredentialRow
+          label="GHCR token (llm-d-aws)"
+          meta={creds?.ghcr_token}
+          onRotate={() => setModal({ kind: "ghcr" })}
+          onDelete={clearing ? undefined : handleClearGHCR}
         />
       </div>
       <p className="meta mt-3 max-w-xl">

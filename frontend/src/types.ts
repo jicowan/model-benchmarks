@@ -756,6 +756,8 @@ export interface CredentialMetadata {
 export interface CredentialsStatus {
   hf_token: CredentialMetadata;
   dockerhub_token: CredentialMetadata;
+  // PRD-66 Part 2a: GitHub Container Registry token (llm-d-aws pull-through).
+  ghcr_token: CredentialMetadata;
 }
 
 // PRD-32: catalog matrix editor

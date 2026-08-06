@@ -544,6 +544,24 @@ export async function deleteDockerHubToken(): Promise<void> {
   if (!res.ok) throw new Error(`DELETE dockerhub-token failed: ${res.status}`);
 }
 
+// PRD-66 Part 2a: GHCR token for the llm-d-aws pull-through cache.
+export async function putGHCRToken(username: string, access_token: string): Promise<void> {
+  const res = await fetch(`${BASE}/config/credentials/ghcr-token`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, access_token }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `PUT ghcr-token failed: ${res.status}`);
+  }
+}
+
+export async function deleteGHCRToken(): Promise<void> {
+  const res = await fetch(`${BASE}/config/credentials/ghcr-token`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`DELETE ghcr-token failed: ${res.status}`);
+}
+
 // PRD-35: aggregate stats endpoints.
 export async function getDashboardStats(): Promise<DashboardStats> {
   return fetchJSON<DashboardStats>(`${BASE}/dashboard/stats`);
