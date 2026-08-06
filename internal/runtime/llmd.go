@@ -27,19 +27,30 @@ type LLMD struct{}
 // FrameworkVersion (that would ask GHCR for e.g. v0.19.0, which doesn't exist).
 const llmdImageRepo = "ghcr.io/llm-d/llm-d-aws"
 
+// llmdImagePath is the repo path WITHOUT the ghcr.io host — used when routing
+// through the ECR pull-through cache, whose "ghcr" prefix already maps to
+// ghcr.io (PRD-66 Part 2a). i.e. <registry>/ghcr/llm-d/llm-d-aws.
+const llmdImagePath = "llm-d/llm-d-aws"
+
 // DefaultLLMDVersion is the known-good llm-d-aws tag used when tool_versions
 // hasn't set one; bump deliberately. Kept in sync with migration 042's default
 // and the export path.
 const DefaultLLMDVersion = "v0.8.1"
 
-// LLMDImage composes the llm-d-aws image ref from a version tag. Exported so the
-// export handler renders the exact image the orchestrator deploys (one resolver,
-// no drifting hardcode). An empty version falls back to DefaultLLMDVersion.
-// (llm-d ships from GHCR, so the Docker Hub pull-through cache doesn't apply;
-// the pull-through arg is intentionally not consumed here.)
-func LLMDImage(version string) string {
+// LLMDImage composes the llm-d-aws image ref from a version tag, optionally
+// routed through the GHCR ECR pull-through cache (PRD-66 Part 2a). Exported so
+// the export handler renders the exact image the orchestrator deploys (one
+// resolver, no drifting hardcode). An empty version falls back to
+// DefaultLLMDVersion. When pullThroughRegistry is set, the image becomes
+// <registry>/ghcr/llm-d/llm-d-aws:<ver> — the "ghcr" prefix is the ECR
+// pull-through rule that maps to ghcr.io (mirrors the D/P dockerhub prefix).
+// Empty pullThroughRegistry ⇒ direct GHCR pull (backwards-compatible).
+func LLMDImage(version, pullThroughRegistry string) string {
 	if version == "" {
 		version = DefaultLLMDVersion
+	}
+	if pullThroughRegistry != "" {
+		return fmt.Sprintf("%s/ghcr/%s:%s", pullThroughRegistry, llmdImagePath, version)
 	}
 	return llmdImageRepo + ":" + version
 }
@@ -64,10 +75,10 @@ func (l *LLMD) ResolveImageOverride() string {
 func (l *LLMD) DefaultImage(version, pullThroughRegistry string) string {
 	// `version` here is the llm-d-aws tag (ToolVersions.LLMDVersion via
 	// ResolveVersion), NOT the run's vLLM FrameworkVersion. Use LLMD_IMAGE to
-	// pin a specific llm-d image; otherwise compose the repo + configured tag.
-	// (llm-d ships from GHCR, so the Docker Hub pull-through cache doesn't apply
-	// — pullThroughRegistry is intentionally unused.)
-	return LLMDImage(version)
+	// pin a specific llm-d image; otherwise compose the repo + configured tag,
+	// routed through the GHCR pull-through cache when one is configured
+	// (PRD-66 Part 2a).
+	return LLMDImage(version, pullThroughRegistry)
 }
 
 func (l *LLMD) ResolveVersion(tv ToolVersions) string {

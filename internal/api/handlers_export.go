@@ -140,14 +140,15 @@ func exportNetworkMode(d *database.RunExportDetails) string {
 // exportLLMDImageFor resolves the co-located PP image the same way the
 // orchestrator's deploy path does (PRD-66 Part 2): an LLMD_IMAGE / VLLM_IMAGE
 // override wins verbatim; otherwise compose ghcr.io/llm-d/llm-d-aws from the
-// configured LLMDVersion (empty ⇒ shipped default). One resolver so the export
-// can't drift from what ran.
+// configured LLMDVersion (empty ⇒ shipped default), routed through the GHCR
+// pull-through cache when one is configured (PRD-66 Part 2a). One resolver so
+// the export can't drift from what ran.
 func exportLLMDImageFor(d *database.RunExportDetails) string {
 	rt := &runtime.LLMD{}
 	if ov := rt.ResolveImageOverride(); ov != "" {
 		return ov
 	}
-	return runtime.LLMDImage(d.LLMDVersion)
+	return runtime.LLMDImage(d.LLMDVersion, os.Getenv("PULL_THROUGH_REGISTRY"))
 }
 
 // exportPDModelImageFor resolves the D/P vLLM image the same way the

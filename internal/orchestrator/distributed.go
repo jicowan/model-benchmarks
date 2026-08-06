@@ -288,11 +288,12 @@ func (o *Orchestrator) deployLLMD(ctx context.Context, ns, name string, cfg RunC
 	// The co-located PP image is llm-d-aws, tagged by the configured
 	// LLMDVersion (PRD-66 Part 2) — NOT the run's vLLM FrameworkVersion (an
 	// llm-d run persists framework_version = the bundled vLLM engine version,
-	// which has no matching GHCR tag). An LLMD_IMAGE / VLLM_IMAGE override wins
-	// verbatim.
+	// which has no matching GHCR tag). Routed through the GHCR pull-through
+	// cache when configured (PRD-66 Part 2a). An LLMD_IMAGE / VLLM_IMAGE
+	// override wins verbatim.
 	image := rt.ResolveImageOverride()
 	if image == "" {
-		image = rt.DefaultImage(o.resolveLLMDVersion(ctx), "")
+		image = rt.DefaultImage(o.resolveLLMDVersion(ctx), envOr("PULL_THROUGH_REGISTRY", ""))
 	}
 
 	// ServeArgs = model positional + static tuning flags. The multi-node

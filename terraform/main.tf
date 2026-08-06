@@ -892,3 +892,37 @@ resource "aws_ecr_pull_through_cache_rule" "dockerhub" {
   upstream_registry_url = "registry-1.docker.io"
   credential_arn        = aws_secretsmanager_secret.dockerhub_credential[0].arn
 }
+
+# PRD-66 Part 2a: GHCR pull-through for the co-located PP image
+# (ghcr.io/llm-d/llm-d-aws, 8.9 GB). Mirrors docker.io into ECR on first pull.
+# GHCR IS a supported ECR pull-through upstream (upstream URL "ghcr.io", verified
+# against the CreatePullThroughCacheRule API ref), but — unlike the no-auth
+# ecr-public/quay/k8s upstreams — it REQUIRES an auth secret even though
+# llm-d-aws is a PUBLIC image: a GitHub username + a PAT with read:packages.
+# Secret name must use the ecr-pullthroughcache/ prefix (AWS requirement).
+#
+# No node-IAM or SM-read policy change needed: karpenter_node_ecr_pullthrough
+# uses Resource="*" for CreateRepository + BatchImportUpstreamImage, and the SM
+# read policy is scoped to ecr-pullthroughcache/* — both already cover ghcr.
+resource "aws_secretsmanager_secret" "ghcr_credential" {
+  count       = var.manage_pull_through_cache ? 1 : 0
+  name        = "ecr-pullthroughcache/ghcr"
+  description = "GitHub Container Registry credentials consumed by the ECR pull-through cache"
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "ghcr_credential" {
+  count     = var.manage_pull_through_cache ? 1 : 0
+  secret_id = aws_secretsmanager_secret.ghcr_credential[0].id
+  secret_string = jsonencode({
+    username    = var.github_username
+    accessToken = var.github_token
+  })
+}
+
+resource "aws_ecr_pull_through_cache_rule" "ghcr" {
+  count                 = var.manage_pull_through_cache ? 1 : 0
+  ecr_repository_prefix = "ghcr"
+  upstream_registry_url = "ghcr.io"
+  credential_arn        = aws_secretsmanager_secret.ghcr_credential[0].arn
+}

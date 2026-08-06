@@ -40,13 +40,21 @@ func TestLLMD_ImageAndVersion(t *testing.T) {
 	if got := rt.DefaultImage("", ""); got != "ghcr.io/llm-d/llm-d-aws:"+DefaultLLMDVersion {
 		t.Errorf("DefaultImage(\"\") = %q, want default pin", got)
 	}
-	// Pull-through registry is intentionally ignored (GHCR, not Docker Hub).
-	if got := rt.DefaultImage("v0.9.0", "123.dkr.ecr.us-east-2.amazonaws.com"); got != "ghcr.io/llm-d/llm-d-aws:v0.9.0" {
-		t.Errorf("DefaultImage should ignore pull-through for llm-d, got %q", got)
+	// PRD-66 Part 2a: with a pull-through registry, the image routes through the
+	// GHCR ECR pull-through cache (ghcr prefix maps to ghcr.io).
+	if got := rt.DefaultImage("v0.9.0", "123.dkr.ecr.us-east-2.amazonaws.com"); got != "123.dkr.ecr.us-east-2.amazonaws.com/ghcr/llm-d/llm-d-aws:v0.9.0" {
+		t.Errorf("DefaultImage with pull-through = %q", got)
 	}
-	// LLMDImage helper matches.
-	if got := LLMDImage("v1.2.3"); got != "ghcr.io/llm-d/llm-d-aws:v1.2.3" {
-		t.Errorf("LLMDImage = %q", got)
+	// LLMDImage helper: direct (no pull-through) and cached forms.
+	if got := LLMDImage("v1.2.3", ""); got != "ghcr.io/llm-d/llm-d-aws:v1.2.3" {
+		t.Errorf("LLMDImage direct = %q", got)
+	}
+	if got := LLMDImage("v1.2.3", "123.dkr.ecr.us-east-2.amazonaws.com"); got != "123.dkr.ecr.us-east-2.amazonaws.com/ghcr/llm-d/llm-d-aws:v1.2.3" {
+		t.Errorf("LLMDImage pull-through = %q", got)
+	}
+	// Empty version + pull-through → default pin, still cached.
+	if got := LLMDImage("", "123.dkr.ecr.us-east-2.amazonaws.com"); got != "123.dkr.ecr.us-east-2.amazonaws.com/ghcr/llm-d/llm-d-aws:"+DefaultLLMDVersion {
+		t.Errorf("LLMDImage empty+pull-through = %q", got)
 	}
 }
 

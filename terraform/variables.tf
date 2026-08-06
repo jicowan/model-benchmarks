@@ -129,6 +129,22 @@ variable "dockerhub_access_token" {
   default     = ""
 }
 
+# PRD-66 Part 2a: GHCR pull-through for the co-located PP image (llm-d-aws).
+# GHCR requires auth even for public images. The token is a GitHub PAT with the
+# read:packages scope; secret → gitignored tfvars like dockerhub_access_token.
+variable "github_username" {
+  description = "GitHub username for the GHCR ECR pull-through cache. Set via terraform.tfvars or -var."
+  type        = string
+  default     = ""
+}
+
+variable "github_token" {
+  description = "GitHub PAT (read:packages scope) for the GHCR ECR pull-through cache. Set via terraform.tfvars or -var."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "enable_cluster_creator_admin_permissions" {
   description = <<-EOT
     Whether the EKS module creates a cluster-admin access entry for the IAM

@@ -121,6 +121,21 @@ func TestGenerateManifest_Distributed_LLMDVersion(t *testing.T) {
 	if !strings.Contains(out2, "ghcr.io/llm-d/llm-d-aws:"+runtime.DefaultLLMDVersion) {
 		t.Error("PP export with no configured version must fall back to the default pin")
 	}
+	// PRD-66 Part 2a: with PULL_THROUGH_REGISTRY set, the PP image routes through
+	// the GHCR ECR pull-through cache (ghcr prefix), NOT a direct ghcr.io pull.
+	d3 := base()
+	d3.LLMDVersion = "v0.9.3"
+	t.Setenv("PULL_THROUGH_REGISTRY", "820537372947.dkr.ecr.us-east-2.amazonaws.com")
+	out3, err := generateManifest(d3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out3, "820537372947.dkr.ecr.us-east-2.amazonaws.com/ghcr/llm-d/llm-d-aws:v0.9.3") {
+		t.Error("PP export must route the configured tag through the GHCR pull-through cache")
+	}
+	if strings.Contains(out3, "image: ghcr.io/llm-d/llm-d-aws") {
+		t.Error("with pull-through set, PP image must NOT be a direct ghcr.io pull")
+	}
 }
 
 // TestGenerateManifest_Disaggregated: a PD run exports the two-group +
