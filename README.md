@@ -1,19 +1,21 @@
 # AccelBench
 
-A self-hosted benchmarking platform for LLM inference on AWS accelerated instances. Deploy any HuggingFace model onto GPU or Neuron instances, run standardized load tests, and compare latency, throughput, GPU utilization, and cost across configurations.
+A self-hosted benchmarking platform for LLM inference on AWS accelerated instances. Deploy any HuggingFace model onto GPU or Neuron instances — single-node or multi-node — run standardized load tests, and compare latency, throughput, GPU utilization, and cost across configurations.
 
 ## Features
 
 - **Benchmarks catalog** — Browse and compare pre-computed results, filterable by model, instance family, and accelerator type. Side-by-side comparison of up to 4 runs.
 - **On-demand benchmarks** — Run against any HuggingFace model on any supported accelerated instance type. Pick a scenario (chatbot, batch, stress, production, long-context) or customize parameters.
+- **Multi-node distributed inference** — For models too large (or too latency-sensitive) for one node, run [llm-d](https://github.com/llm-d/llm-d) across GPU nodes from the **Distributed** page: **co-located pipeline-parallel** (one serving group spanning N nodes via a LeaderWorkerSet) or **prefill/decode disaggregation** (separate prefill + decode pools with NIXL KV transfer over TCP or EFA, routed by a Gateway API InferencePool + Endpoint Picker). Per-role replica/TP ratios, EPP routing knobs, and network fabric are all tunable.
+- **Pluggable inference runtimes** — vLLM and SGLang on GPU, vLLM-Neuron on Inferentia/Trainium, and llm-d for the multi-node paths. Selected per run; the orchestrator renders the right manifest set per runtime.
 - **Test suites** — Run a series of scenarios against one model+instance in a single deployment. The model stays loaded; each scenario runs sequentially with its own load profile.
 - **Configuration recommender** — Deterministic recommendations for tensor parallelism, quantization, `max_model_len`, and concurrency based on model architecture and accelerator memory. Surfaces OOM history and memory breakdown explanations.
 - **Estimate page** — Predicted TTFT, throughput, and cost for a (model × instance × scenario) combination before you run it.
 - **Model cache** — Pre-cache HuggingFace models to S3. Cached models load on GPU via [Run:ai Streamer](https://github.com/run-ai/runai-model-streamer) instead of downloading from HF on every run, cutting deploy time for large models.
 - **Seed automation** — Matrix-seed the Benchmarks catalog from the Configuration page. The seeder walks model × instance pairs, dedups against existing runs, and dispatches runs in-process (no bash, no ConfigMap).
-- **Configuration page** — UI for credentials (HF + Docker Hub in AWS Secrets Manager), the seeding matrix, per-scenario inference-perf overrides, registry/pull-through state, capacity reservations (ODCR + Capacity Block), and an audit log of config changes.
-- **Capacity reservations** — Attach EC2 ODCRs or Capacity Blocks for ML to the GPU/Neuron Karpenter NodeClasses so benchmarks can target reserved capacity when on-demand is tight.
-- **Exports** — Export a completed run's vLLM Kubernetes manifest; export single-run HTML reports or comparison reports as HTML/CSV.
+- **Configuration page** — UI for credentials (HF + Docker Hub + GHCR in AWS Secrets Manager), **tool versions** (settable image tags for vLLM, SGLang, inference-perf, the llm-d-aws PP image, and the D/P vLLM image), the seeding matrix, per-scenario inference-perf overrides, registry/pull-through state, capacity reservations (ODCR + Capacity Block), and an audit log of config changes.
+- **Capacity reservations** — Attach EC2 ODCRs or Capacity Blocks for ML to the GPU/Neuron/multi-node Karpenter NodeClasses so benchmarks can target reserved capacity when on-demand is tight.
+- **Exports** — Export a completed run's Kubernetes manifest (single-node vLLM Deployment, or the full llm-d LeaderWorkerSet / prefill-decode object graph for distributed runs — reproducing the applied config); export single-run HTML reports or comparison reports as HTML/CSV.
 - **Pricing comparison** — Benchmark results joined with on-demand and reserved pricing across 9 AWS regions.
 - **Job management** — Monitor, cancel, and delete running benchmarks; view rendered inference-perf config and vLLM logs.
 
@@ -50,7 +52,7 @@ Benchmark lifecycle:
 1. **Recommend / submit** — User picks model + instance + scenario from the Run form, or POSTs `/api/v1/runs` directly.
 2. **Deploy** — Orchestrator renders a Deployment + Service running vLLM (weights from HF or, for cached models, from S3 via Run:ai Streamer).
 3. **Ready** — Wait for the model to load and pass `/health` (up to 25 min — long for p5.48xlarge with 70B models).
-4. **Load test** — Launch a Job running [inference-perf](https://github.com/intel/inference-perf) with a per-scenario config rendered into a ConfigMap.
+4. **Load test** — Launch a Job running [inference-perf](https://github.com/kubernetes-sigs/inference-perf) with a per-scenario config rendered into a ConfigMap.
 5. **Collect** — Load generator uploads JSON results to S3 (`accelbench-results-<account>`); orchestrator downloads and parses percentiles.
 6. **Persist** — Metrics written to Postgres; DCGM / OOM events scraped if relevant.
 7. **Teardown** — Deployment, Service, and Job deleted; Karpenter consolidates the node.
@@ -63,19 +65,20 @@ Benchmark lifecycle:
 | NVIDIA GPU (Ada/Hopper/Blackwell) | g6, g6e, g7e, gr6, p5, p5e, p5en, p6-b200, p6-b300 | L4, L40S, H100, H200, B200, B300 |
 | AWS Neuron | inf2, trn1, trn1n, trn2 | Inferentia2 / Trainium |
 
-Instance selection in the Run form pulls live pricing and filters by accelerator type.
+Instance selection in the Run form pulls live pricing and filters by accelerator type. Multi-node (distributed) runs are GPU-only and use the same GPU families across N nodes; the Distributed page sets the per-run instance type, which the orchestrator pins on the static multi-node NodePool before scale-out.
 
 ## Tech stack
 
 | Component | Technology |
 |-----------|------------|
-| API server | Go 1.24, stdlib `net/http`, `jackc/pgx/v5`, k8s `client-go` (typed + dynamic), AWS SDK v2 (Secrets Manager, EC2, ECR, S3, Pricing) |
+| API server | Go 1.25, stdlib `net/http`, `jackc/pgx/v5`, k8s `client-go` (typed + dynamic), AWS SDK v2 (Secrets Manager, EC2, ECR, S3, Pricing) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite, Recharts |
-| Load generator | [inference-perf](https://github.com/intel/inference-perf) (Python 3.12) |
-| Inference | vLLM (GPU), SGLang (GPU), vLLM-Neuron (Inferentia/Trainium) |
+| Load generator | [inference-perf](https://github.com/kubernetes-sigs/inference-perf) (Python 3.12) |
+| Inference | vLLM (GPU), SGLang (GPU), vLLM-Neuron (Inferentia/Trainium), [llm-d](https://github.com/llm-d/llm-d) (multi-node PP + prefill/decode disaggregation) |
 | Database | Aurora PostgreSQL Serverless v2 |
-| Infrastructure | Terraform, Helm, Karpenter 1.9 (SOCI parallel-pull, NVMe instance store, reserved-capacity beta) |
-| Cluster | EKS 1.31, AL2023 NVIDIA-optimized AMIs for GPU nodes |
+| Multi-node | LeaderWorkerSet, Gateway API Inference Extension (InferencePool + Endpoint Picker), DRA + NVIDIA DRA driver, EFA (efa-only interface) / TCP NIXL KV transfer |
+| Infrastructure | Terraform, Helm, Karpenter 1.9 (SOCI parallel-pull, NVMe instance store, reserved-capacity, static multi-node pools) |
+| Cluster | EKS 1.36, AL2023 NVIDIA-optimized AMIs for GPU nodes |
 
 ## Prerequisites
 
@@ -85,6 +88,7 @@ Instance selection in the Run form pulls live pricing and filters by accelerator
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) configured for your cluster
 - [Docker](https://www.docker.com/) for building images (BuildKit required — cache mounts are used)
 - **Docker Hub account + access token** — required by default because Terraform sets up an ECR pull-through cache that mirrors the vLLM image. Skippable via `manage_pull_through_cache=false` if you'd rather point AccelBench at a public-ECR vLLM mirror (e.g. the AWS DLC image) via `image.vllm.repository`. See [`docs/deployment.md`](docs/deployment.md#swapping-the-loadgen-and-vllm-images).
+- **GitHub account + PAT (`read:packages`)** — only if you run **multi-node co-located (pipeline-parallel)** benchmarks. The `llm-d-aws` image ships from GitHub Container Registry, so its pull-through cache needs a GitHub credential (GHCR requires auth even for public images). Set `github_username` / `github_token` in `terraform.tfvars`. Not needed for single-node or prefill/decode runs (those use the Docker Hub `vllm/vllm-openai` image).
 
 ## Deployment
 
@@ -106,10 +110,10 @@ Default apply creates the EKS cluster, Aurora, ECR repos, the AWS Load Balancer 
 The Terraform config creates:
 
 - VPC with public/private subnets across 3 AZs
-- EKS 1.31 cluster with a managed `system` node group + Karpenter for accelerated workloads
+- EKS 1.36 cluster with a managed `system` node group + Karpenter for accelerated workloads
 - Aurora PostgreSQL Serverless v2
-- Karpenter `EC2NodeClass` + `NodePool` for `gpu` and `neuron` (SOCI parallel-pull + NVMe RAID0 on GPU; `capacity-type: [reserved, on-demand]` so attached reservations are consumed)
-- ECR repos for all app images + a pull-through cache rule at `<account>.dkr.ecr.<region>.amazonaws.com/dockerhub/*` pointing at Docker Hub
+- Karpenter `EC2NodeClass` + `NodePool` for `gpu` and `neuron`, plus (when `enable_multinode=true`) per-AZ `multinode-<az>` EFA classes + a shared `multinode-tcp` class for distributed runs. GPU classes enable SOCI parallel-pull userData; `capacity-type: [reserved, on-demand]` so attached reservations are consumed
+- ECR repos for all app images + pull-through cache rules at `<account>.dkr.ecr.<region>.amazonaws.com/dockerhub/*` (Docker Hub) and, when enabled, `/ghcr/*` (GitHub Container Registry, for the llm-d-aws PP image)
 - S3 buckets for results and cached model weights
 - IAM roles for API/loadgen/cache-job/model pods via EKS Pod Identity (Secrets Manager, EC2 describe, ECR describe, S3, Pricing)
 - AWS Load Balancer Controller (chart v3.2.2) in `kube-system` via Pod Identity — provisions ALBs for any `Ingress` with `ingressClassName: alb`. Skip via `install_alb_controller=false` if your cluster already has it.
@@ -204,15 +208,17 @@ The migration Job applies every SQL file in `db/migrations/` on startup. Migrati
 
 Once the cluster is up, open the app (via port-forward or your public hostname) and open **Configuration** (left nav, gear icon). This is where operators set up the runtime knobs that aren't baked into the Helm chart:
 
-**Credentials** — save an HF token once (for gated models like `meta-llama/*`) and a Docker Hub access token (the pull-through cache needs this to hydrate new images). If you skipped the Docker Hub tfvars at install time, set it here first — the secret entry exists but is empty until someone writes to it. Tokens go to AWS Secrets Manager (`accelbench/config/hf-token`, `ecr-pullthroughcache/dockerhub`) and auto-inject into every benchmark run, model-cache job, and catalog seed. Values are never shown after save.
+**Credentials** — save an HF token once (for gated models like `meta-llama/*`), a Docker Hub access token (the pull-through cache needs this to hydrate new images), and — if you run multi-node PP benchmarks — a GHCR token (GitHub PAT with `read:packages`, for the llm-d-aws image). Rotate or clear each from here. If you skipped the tfvars at install time, set them here first — the secret entries exist but are empty until someone writes to them. Tokens go to AWS Secrets Manager (`accelbench/config/hf-token`, `ecr-pullthroughcache/dockerhub`, `ecr-pullthroughcache/ghcr`) and auto-inject into every benchmark run, model-cache job, and catalog seed. Values are never shown after save.
+
+**Tool Versions** — settable image tags applied to new runs: the vLLM `framework_version` (single-node), `sglang_version`, `inference_perf_version`, `llmd_version` (the co-located PP `llm-d-aws` image), and `pd_vllm_version` (the disaggregated D/P `vllm/vllm-openai` image — kept distinct from single-node's because D/P pins a NIXL-specific vLLM build). Env overrides (`VLLM_IMAGE`, `SGLANG_IMAGE`, `LLMD_IMAGE`, `PD_MODEL_IMAGE`) still win when set; the UI flags when one is active.
 
 **Seeding Matrix** — edit the models × instance types the "Seed Benchmarks" button explores. Models use a HuggingFace autocomplete; instance types are a dropdown populated from `/api/v1/instance-types`. Presence in the list = enabled.
 
 **Scenario Overrides** — scenarios (chatbot, batch, stress, production, long-context) are code-defined in `internal/scenario/builtin.go`. This card lets operators override a scenario's `num_workers`, `streaming`, `input_mean`, or `output_mean` per scenario without a rebuild. Empty = inherit from code. Overriding `input_mean` or `output_mean` re-derives `std_dev/min/max` via the same formula scenarios use.
 
-**Registry** — read-only view of the Docker Hub pull-through cache. Shows each `dockerhub/*` repo's size and last-pulled timestamp. When disabled, shows a `helm upgrade` snippet to turn it on.
+**Registry** — read-only view of the ECR pull-through cache. Shows each cached repo's size and last-pulled timestamp across every configured pull-through prefix — `dockerhub/*` (single-node + D/P vLLM) and `ghcr/*` (the llm-d-aws PP image). A repo appears after its first pull. When disabled, shows a `helm upgrade` snippet to turn it on.
 
-**Capacity Reservations** — attach existing ODCRs or Capacity Blocks for ML to the GPU/Neuron Karpenter `EC2NodeClass`. Validates against EC2 live state (AZ match, instance family match, not cancelled/expired). Capacity Blocks show a drain warning ~40 min before end (when Karpenter pre-empts). Karpenter prioritizes reserved capacity and falls back to on-demand when reservations are exhausted.
+**Capacity Reservations** — attach existing ODCRs or Capacity Blocks for ML to the GPU / Neuron / per-AZ multi-node Karpenter `EC2NodeClass`. Validates against EC2 live state (AZ match, instance family/category match, not cancelled/expired). Capacity Blocks show a drain warning ~40 min before end (when Karpenter pre-empts). Karpenter prioritizes reserved capacity and falls back to on-demand when reservations are exhausted. (Reservations are AZ-scoped, so a multi-node pool's reservation must be in that pool's AZ.)
 
 **Audit Log** — last 50 write operations under `/api/v1/config/*`. Only action + short summary are stored; no token values.
 
@@ -283,7 +289,9 @@ Configuration (all covered by the Configuration page; writes audit-logged):
 |--------|------|---------|
 | `GET` / `PUT` / `DELETE` | `/api/v1/config/credentials/hf-token` | HF token (write-only; describe only returns set + timestamp) |
 | `PUT` / `DELETE` | `/api/v1/config/credentials/dockerhub-token` | Docker Hub token |
-| `GET` | `/api/v1/config/credentials` | `{hf_token: {set, updated_at}, dockerhub_token: {set, updated_at}}` |
+| `PUT` / `DELETE` | `/api/v1/config/credentials/ghcr-token` | GHCR token (GitHub PAT for the llm-d-aws pull-through) |
+| `GET` | `/api/v1/config/credentials` | `{hf_token, dockerhub_token, ghcr_token}` each `{set, updated_at}` |
+| `GET` / `PUT` | `/api/v1/config/tool-versions` | Settable image tags (framework/sglang/inference-perf/llmd/pd-vllm versions) |
 | `GET` / `PUT` | `/api/v1/config/catalog-matrix` | Seeding matrix (optimistic concurrency via `version`) |
 | `GET` | `/api/v1/config/scenario-overrides` | Scenarios + effective defaults + overrides |
 | `PUT` / `DELETE` | `/api/v1/config/scenario-overrides/{id}` | Upsert / clear a scenario override |
