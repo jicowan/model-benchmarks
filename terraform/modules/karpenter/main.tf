@@ -15,13 +15,26 @@ data "aws_ssm_parameter" "gpu_ami" {
   name = "/aws/service/eks/optimized-ami/${var.kubernetes_version}/amazon-linux-2023/x86_64/nvidia/recommended/image_id"
 }
 
-# PRD-65: SOCI parallel-pull tuning, shared by the single-node gpu class AND the
-# multi-node classes so it's defined once and can't drift. The single-node
-# gpu_node_class carried this inline; the multinode classes had no userData, so
-# the 8.9 GB llm-d-aws PP image pulled in ~4m6s on a fresh node. All GPU classes
-# share the same accelerated AL2023 AMI, so the same tuning applies. Injected
-# as a jsonencode()'d scalar (valid YAML, avoids block-scalar indentation
-# pitfalls) on each EC2NodeClass's userData field.
+# PRD-65: SOCI PARALLEL-PULL mode, shared by the single-node gpu class AND the
+# multi-node classes (defined once, can't drift). Speeds large-image pulls (the
+# 8.9 GB llm-d-aws PP image took ~4m6s pre-SOCI); all GPU classes share the
+# accelerated AL2023 AMI, which SHIPS the soci-snapshotter binary + service.
+#
+# The prior version only sed'd tuning knobs into config.toml — a NO-OP, verified
+# live: the snapshotter wasn't running, containerd wasn't wired to it, and the
+# master enable flag was never set (default false = lazy loading, which we do NOT
+# want). This version does the three things AWS's docs require to actually turn on
+# PARALLEL-PULL (awslabs/soci-snapshotter docs/parallel-mode.md + the EKS +
+# DLAMI blogs):
+#   1. write /etc/soci-snapshotter-grpc/config.toml with
+#      [pull_modes.parallel_pull_unpack] enable = true + AWS's ECR-recommended
+#      tuning (containerd content store);
+#   2. wire containerd to use soci as the CRI snapshotter via a drop-in
+#      (proxy_plugins.soci socket + snapshotter = "soci");
+#   3. enable+restart soci-snapshotter then restart containerd, so the running
+#      kubelet/containerd use SOCI for subsequent image pulls.
+# Runs as a cloud-init shellscript MIME part (AL2023). Injected as a jsonencode()'d
+# scalar on each EC2NodeClass userData (valid YAML, avoids block-scalar pitfalls).
 locals {
   soci_user_data = <<-EOT
     MIME-Version: 1.0
@@ -31,13 +44,42 @@ locals {
     Content-Type: text/x-shellscript; charset="us-ascii"
 
     #!/bin/bash
-    # SOCI parallel-pull tuning lives in /etc/soci-snapshotter-grpc/config.toml
-    # under [pull_modes.parallel_pull_unpack]. nodeadm cannot set these via
-    # containerd.config, so we edit the file directly before nodeadm init.
-    sed -i 's/^[[:space:]]*max_concurrent_downloads_per_image = .*/max_concurrent_downloads_per_image = 20/' /etc/soci-snapshotter-grpc/config.toml
-    sed -i 's/^[[:space:]]*max_concurrent_unpacks_per_image = .*/max_concurrent_unpacks_per_image = 12/' /etc/soci-snapshotter-grpc/config.toml
-    sed -i 's/^[[:space:]]*concurrent_download_chunk_size = .*/concurrent_download_chunk_size = "16mb"/' /etc/soci-snapshotter-grpc/config.toml
-    sed -i 's/^[[:space:]]*discard_unpacked_layers = .*/discard_unpacked_layers = true/' /etc/soci-snapshotter-grpc/config.toml
+    set -euo pipefail
+
+    # 1. SOCI parallel-pull config (enable flag is the master switch; default is
+    #    false = lazy loading). Tuning = AWS's recommended ECR defaults.
+    mkdir -p /etc/soci-snapshotter-grpc
+    cat > /etc/soci-snapshotter-grpc/config.toml <<'SOCI'
+    [content_store]
+    type = "containerd"
+
+    [pull_modes.parallel_pull_unpack]
+    enable = true
+    max_concurrent_downloads = -1
+    max_concurrent_downloads_per_image = 20
+    concurrent_download_chunk_size = "16mb"
+    max_concurrent_unpacks = -1
+    max_concurrent_unpacks_per_image = 10
+    discard_unpacked_layers = true
+    SOCI
+
+    # 2. Wire containerd to use the soci snapshotter for CRI (drop-in merged by
+    #    nodeadm/containerd). proxy_plugins.soci points at the grpc socket.
+    mkdir -p /etc/containerd/config.d
+    cat > /etc/containerd/config.d/soci.toml <<'CTRD'
+    version = 2
+    [proxy_plugins.soci]
+    type = "snapshot"
+    address = "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+    snapshotter = "soci"
+    disable_snapshot_annotations = false
+    CTRD
+
+    # 3. Start SOCI, then restart containerd so it picks up the drop-in. The EKS
+    #    AL2023 AMI ships the soci-snapshotter service; enable+start it first.
+    systemctl enable --now soci-snapshotter 2>/dev/null || systemctl enable --now soci-snapshotter-grpc 2>/dev/null || true
+    systemctl restart containerd || true
 
     --BOUNDARY--
   EOT
