@@ -15,6 +15,34 @@ data "aws_ssm_parameter" "gpu_ami" {
   name = "/aws/service/eks/optimized-ami/${var.kubernetes_version}/amazon-linux-2023/x86_64/nvidia/recommended/image_id"
 }
 
+# PRD-65: SOCI parallel-pull tuning, shared by the single-node gpu class AND the
+# multi-node classes so it's defined once and can't drift. The single-node
+# gpu_node_class carried this inline; the multinode classes had no userData, so
+# the 8.9 GB llm-d-aws PP image pulled in ~4m6s on a fresh node. All GPU classes
+# share the same accelerated AL2023 AMI, so the same tuning applies. Injected
+# as a jsonencode()'d scalar (valid YAML, avoids block-scalar indentation
+# pitfalls) on each EC2NodeClass's userData field.
+locals {
+  soci_user_data = <<-EOT
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+    --BOUNDARY
+    Content-Type: text/x-shellscript; charset="us-ascii"
+
+    #!/bin/bash
+    # SOCI parallel-pull tuning lives in /etc/soci-snapshotter-grpc/config.toml
+    # under [pull_modes.parallel_pull_unpack]. nodeadm cannot set these via
+    # containerd.config, so we edit the file directly before nodeadm init.
+    sed -i 's/^[[:space:]]*max_concurrent_downloads_per_image = .*/max_concurrent_downloads_per_image = 20/' /etc/soci-snapshotter-grpc/config.toml
+    sed -i 's/^[[:space:]]*max_concurrent_unpacks_per_image = .*/max_concurrent_unpacks_per_image = 12/' /etc/soci-snapshotter-grpc/config.toml
+    sed -i 's/^[[:space:]]*concurrent_download_chunk_size = .*/concurrent_download_chunk_size = "16mb"/' /etc/soci-snapshotter-grpc/config.toml
+    sed -i 's/^[[:space:]]*discard_unpacked_layers = .*/discard_unpacked_layers = true/' /etc/soci-snapshotter-grpc/config.toml
+
+    --BOUNDARY--
+  EOT
+}
+
 # PRD-53: state migrations for resources that became counted.
 # helm_release.karpenter_crd + helm_release.karpenter are gated on
 # install_controller; time_sleep.wait_for_karpenter follows them;
@@ -238,23 +266,7 @@ resource "kubectl_manifest" "gpu_node_class" {
             encrypted: true
             throughput: 1000
             iops: 16000
-      userData: |
-        MIME-Version: 1.0
-        Content-Type: multipart/mixed; boundary="BOUNDARY"
-
-        --BOUNDARY
-        Content-Type: text/x-shellscript; charset="us-ascii"
-
-        #!/bin/bash
-        # SOCI parallel-pull tuning lives in /etc/soci-snapshotter-grpc/config.toml
-        # under [pull_modes.parallel_pull_unpack]. nodeadm cannot set these via
-        # containerd.config, so we edit the file directly before nodeadm init.
-        sed -i 's/^[[:space:]]*max_concurrent_downloads_per_image = .*/max_concurrent_downloads_per_image = 20/' /etc/soci-snapshotter-grpc/config.toml
-        sed -i 's/^[[:space:]]*max_concurrent_unpacks_per_image = .*/max_concurrent_unpacks_per_image = 12/' /etc/soci-snapshotter-grpc/config.toml
-        sed -i 's/^[[:space:]]*concurrent_download_chunk_size = .*/concurrent_download_chunk_size = "16mb"/' /etc/soci-snapshotter-grpc/config.toml
-        sed -i 's/^[[:space:]]*discard_unpacked_layers = .*/discard_unpacked_layers = true/' /etc/soci-snapshotter-grpc/config.toml
-
-        --BOUNDARY--
+      userData: ${jsonencode(local.soci_user_data)}
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
@@ -842,6 +854,9 @@ resource "kubectl_manifest" "multinode_node_class" {
             encrypted: true
             throughput: 1000
             iops: 16000
+      # PRD-65: SOCI parallel-pull tuning (shared local) — speeds the 8.9 GB
+      # llm-d-aws image pull on fresh EFA multinode nodes.
+      userData: ${jsonencode(local.soci_user_data)}
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
@@ -892,6 +907,8 @@ resource "kubectl_manifest" "multinode_node_class_tcp" {
             encrypted: true
             throughput: 1000
             iops: 16000
+      # PRD-65: SOCI parallel-pull tuning (shared local), same as the EFA class.
+      userData: ${jsonencode(local.soci_user_data)}
   YAML
 
   depends_on = [time_sleep.wait_for_karpenter]
