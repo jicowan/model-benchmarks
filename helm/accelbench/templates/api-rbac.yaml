@@ -20,6 +20,15 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+  # PRD-65 fail-fast: read NodeClaim InsufficientCapacityError events so
+  # waitForNodes can abort a scale-out in seconds (poolHitCapacityError) instead
+  # of grinding to the 20-min provision timeout when an AZ has no capacity.
+  # Cluster-scoped: Karpenter NodeClaims are cluster-scoped, so their events land
+  # in the "default" namespace, not accelbench. Read-only. (Without this the List
+  # was silently 403'd and fail-fast never tripped.)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
   # PRD-56: resolve the Envoy AI Gateway's backing Service (generated name in
   # envoy-gateway-system) so the loadgen can target the gateway ClusterIP.
   # Cluster-scoped because that Service lives outside the accelbench namespace.
