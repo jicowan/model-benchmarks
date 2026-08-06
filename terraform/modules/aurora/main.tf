@@ -15,6 +15,14 @@ module "aurora" {
 
   manage_master_user_password = true
 
+  # Rotation OFF by default (see variables.tf note). RDS enables 7-day rotation
+  # on its own; nothing syncs the rotated password into the K8s accelbench-db
+  # secret, so a rotation breaks DB auth cluster-wide. Disabling requires a
+  # one-time true->false apply transition (AWS limitation).
+  manage_master_user_password_rotation                   = var.manage_master_user_password_rotation
+  master_user_password_rotate_immediately                = var.master_user_password_rotate_immediately
+  master_user_password_rotation_automatically_after_days = var.master_user_password_rotation_days
+
   serverlessv2_scaling_configuration = {
     min_capacity = var.min_capacity
     max_capacity = var.max_capacity

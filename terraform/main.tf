@@ -347,8 +347,8 @@ module "karpenter" {
 
   # PRD-55: multi-node/distributed-inference pool. One static EFA GPU
   # NodePool per AZ, each bound to that AZ's cluster placement group.
-  enable_multinode        = var.enable_multinode
-  install_dra_drivers     = var.enable_multinode
+  enable_multinode    = var.enable_multinode
+  install_dra_drivers = var.enable_multinode
   # map AZ -> placement group name, consumed by the per-AZ NodeClasses.
   multinode_placement_groups = { for az, pg in aws_placement_group.multinode : az => pg.name }
   # map AZ -> private subnet ID: NodeClasses select their subnet by id
@@ -369,6 +369,10 @@ module "aurora" {
   eks_node_security_group_id = local.node_security_group_id
   min_capacity               = var.aurora_min_capacity
   max_capacity               = var.aurora_max_capacity
+
+  # Rotation OFF by default. See variable note: RDS auto-enables 7-day rotation,
+  # which breaks the K8s secret; disable via a one-time true->false apply.
+  manage_master_user_password_rotation = var.manage_master_user_password_rotation
 
   tags = local.tags
 }

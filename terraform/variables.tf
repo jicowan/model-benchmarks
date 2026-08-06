@@ -98,6 +98,18 @@ variable "aurora_max_capacity" {
   default     = 4
 }
 
+# Master-user-password rotation. Default false = rotation OFF (desired steady
+# state — nothing syncs a rotated RDS password into the K8s accelbench-db secret,
+# so rotation breaks DB auth). RDS enables rotation by default when it manages the
+# password; disabling requires a ONE-TIME transition apply with this set to true
+# (Terraform adopts the rotation resource, rotate_immediately=false), then a second
+# apply back to false which disables it. Steady state stays false.
+variable "manage_master_user_password_rotation" {
+  description = "One-time escape hatch to disable RDS's default master-password rotation via a true->false apply. Keep false in steady state."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
