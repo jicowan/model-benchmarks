@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +38,12 @@ const (
 	// the model-load readiness budget.
 	nodeProvisionTimeout = 20 * time.Minute
 	nodeProvisionPoll    = 15 * time.Second
+
+	// capacityEventSkew widens the fail-fast recency window slightly before the
+	// wait's start, so an InsufficientCapacityError that lands in the gap between
+	// scale-out and waitForNodes beginning still counts (clock skew between the
+	// API server's event timestamps and this pod is also absorbed here).
+	capacityEventSkew = 30 * time.Second
 )
 
 // scaleNodePool patches a static NodePool's spec.replicas via JSON merge patch
@@ -260,6 +267,12 @@ func (o *Orchestrator) setNodePoolNetworkMode(ctx context.Context, poolName, net
 // instead of grinding through the full nodeProvisionTimeout (a run pins one
 // instance type, so a capacity error won't self-resolve within this pool).
 func (o *Orchestrator) waitForNodes(ctx context.Context, poolName string, count int) error {
+	// Capacity events are only considered relevant if they occur at/after the
+	// wait starts, so a stale InsufficientCapacityError from a PRIOR run of this
+	// same (static-named) pool can't trip an immediate false fail-fast. A small
+	// skew allowance covers an ICE that landed in the moment between scale-out
+	// and this wait beginning.
+	waitStart := time.Now().Add(-capacityEventSkew)
 	deadline := time.Now().Add(nodeProvisionTimeout)
 	for time.Now().Before(deadline) {
 		ready := o.countReadyDRANodes(ctx, poolName)
@@ -270,7 +283,7 @@ func (o *Orchestrator) waitForNodes(ctx context.Context, poolName string, count 
 		// Fast-fail on an AWS capacity shortage: no point waiting 20 min for a
 		// node that can't launch. Only trip when NO node is ready yet (a partial
 		// scale-out that's mid-provision shouldn't be aborted on a stale event).
-		if ready == 0 && o.poolHitCapacityError(ctx, poolName) {
+		if ready == 0 && o.poolHitCapacityError(ctx, poolName, waitStart) {
 			log.Printf("[nodepool] %s: insufficient capacity — failing fast to try the next AZ", poolName)
 			return errInsufficientCapacity
 		}
@@ -284,40 +297,57 @@ func (o *Orchestrator) waitForNodes(ctx context.Context, poolName string, count 
 		poolName, o.countReadyDRANodes(ctx, poolName), count, nodeProvisionTimeout)
 }
 
-// poolHitCapacityError reports whether any of the pool's NodeClaims has a recent
-// InsufficientCapacityError event — Karpenter's signal that the AZ can't launch
-// the requested instance type. NodeClaims carry the karpenter.sh/nodepool label;
-// their events carry reason=InsufficientCapacityError.
-func (o *Orchestrator) poolHitCapacityError(ctx context.Context, poolName string) bool {
-	// NodeClaim names are what the events reference (involvedObject). List the
-	// pool's nodeclaims, then scan events by reason for any of them.
-	ncs, err := o.dynClient.Resource(gvrNodeClaim).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s", nodePoolLabel, poolName),
-	})
-	if err != nil {
-		return false
-	}
-	claimNames := map[string]bool{}
-	for _, nc := range ncs.Items {
-		claimNames[nc.GetName()] = true
-	}
-	if len(claimNames) == 0 {
-		return false
-	}
-	// Events for NodeClaims live in the default namespace (cluster-scoped
-	// objects' events land there). Filter by the capacity reason.
+// poolHitCapacityError reports whether the pool has hit an InsufficientCapacityError
+// (Karpenter's signal that the AZ can't launch the requested instance type) at or
+// after `since`.
+//
+// Correlation is by the pool-name PREFIX on the event's involvedObject.name, NOT
+// by the current set of NodeClaim names. On a capacity error Karpenter DELETES the
+// failed NodeClaim and creates a fresh one with a new random name (observed live:
+// <pool>-dsn66 → deleted → <pool>-jcbn6 → deleted → …). Every claim of a static
+// pool is named "<poolName>-<rand>", so the prefix is stable across that churn,
+// whereas listing "current" claims and matching event.involvedObject.Name against
+// them races the delete/recreate and usually misses — the bug this fixes.
+//
+// The `since` recency window rejects a stale capacity event left over from a PRIOR
+// run of the same (persistent, static-named) pool, which would otherwise trip an
+// immediate false fail-fast on the next run.
+func (o *Orchestrator) poolHitCapacityError(ctx context.Context, poolName string, since time.Time) bool {
+	// NodeClaim events for cluster-scoped objects land in the default namespace.
 	events, err := o.client.CoreV1().Events("default").List(ctx, metav1.ListOptions{
 		FieldSelector: "reason=InsufficientCapacityError",
 	})
 	if err != nil {
 		return false
 	}
+	prefix := poolName + "-"
 	for _, ev := range events.Items {
-		if claimNames[ev.InvolvedObject.Name] {
-			return true
+		if !strings.HasPrefix(ev.InvolvedObject.Name, prefix) {
+			continue
 		}
+		if capacityEventTime(&ev).Before(since) {
+			continue // stale event from an earlier run of this static pool
+		}
+		return true
 	}
 	return false
+}
+
+// capacityEventTime returns the most recent timestamp on an Event, tolerating the
+// several time fields Kubernetes may populate (Series.LastObservedTime for
+// aggregated events, LastTimestamp/EventTime for the classic path, else the
+// object's creation time).
+func capacityEventTime(ev *corev1.Event) time.Time {
+	if ev.Series != nil && !ev.Series.LastObservedTime.IsZero() {
+		return ev.Series.LastObservedTime.Time
+	}
+	if !ev.LastTimestamp.IsZero() {
+		return ev.LastTimestamp.Time
+	}
+	if !ev.EventTime.IsZero() {
+		return ev.EventTime.Time
+	}
+	return ev.CreationTimestamp.Time
 }
 
 // countReadyDRANodes counts Ready nodes from the given NodePool that carry the
