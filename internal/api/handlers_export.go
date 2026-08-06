@@ -117,7 +117,27 @@ func exportServeArgs(d *database.RunExportDetails) []string {
 // so the exported prefill/decode/both Deployments carry the exact per-role
 // scheduler flag that was applied. maxNBT nil/<=0 ⇒ omit the flag (vLLM default).
 func exportServeArgsWithBatchTokens(d *database.RunExportDetails, maxNBT *int) []string {
-	args := []string{d.ModelHfID, "--trust-remote-code"}
+	// PRD-65 Layer 4: when the run streamed from S3 (Run:ai), the model arg is
+	// the S3 URI + --load-format runai_streamer + --model-loader-extra-config
+	// (concurrency, and memory_limit in bytes when set) — mirroring the runtime
+	// BuildArgs so the exported manifest reproduces the deployed serve line.
+	// Otherwise the HF model id (unchanged). resolveExportStreamer scopes
+	// UseRunaiStreamer to D/P, so PP never takes this branch.
+	var args []string
+	if d.UseRunaiStreamer && d.ModelS3URI != nil && *d.ModelS3URI != "" {
+		concurrency := 16
+		if d.StreamerConcurrency != nil && *d.StreamerConcurrency > 0 {
+			concurrency = *d.StreamerConcurrency
+		}
+		extra := fmt.Sprintf(`{"concurrency":%d}`, concurrency)
+		if memGiB := exportStreamerMemLimitGiB(d); memGiB > 0 {
+			extra = fmt.Sprintf(`{"concurrency":%d,"memory_limit":%d}`,
+				concurrency, int64(memGiB)*1024*1024*1024)
+		}
+		args = []string{*d.ModelS3URI, "--load-format", "runai_streamer", "--model-loader-extra-config", extra, "--trust-remote-code"}
+	} else {
+		args = []string{d.ModelHfID, "--trust-remote-code"}
+	}
 	if d.MaxModelLen > 0 {
 		args = append(args, "--max-model-len", fmt.Sprintf("%d", d.MaxModelLen))
 	}
@@ -128,6 +148,36 @@ func exportServeArgsWithBatchTokens(d *database.RunExportDetails, maxNBT *int) [
 		args = append(args, "--kv-cache-dtype", *d.KVCacheDtype)
 	}
 	return args
+}
+
+// exportStreamerMemLimitGiB resolves the D/P streamer memory-limit for export
+// the same way deployLLMDDisaggregated does: the persisted value if set, else
+// auto-size to half the node RAM. Keeps the exported memory_limit + env in sync
+// with what deployed.
+func exportStreamerMemLimitGiB(d *database.RunExportDetails) int {
+	if d.StreamerMemoryLimitGiB != nil && *d.StreamerMemoryLimitGiB > 0 {
+		return *d.StreamerMemoryLimitGiB
+	}
+	return max(d.MemoryGiB/2, 1)
+}
+
+// exportPDStreamerMemLimitGiB is the render-param form: the memory-limit only
+// when the run streamed (else 0 → the template emits no env, byte-identical to
+// an HF-load export).
+func exportPDStreamerMemLimitGiB(d *database.RunExportDetails) int {
+	if d.UseRunaiStreamer && d.ModelS3URI != nil && *d.ModelS3URI != "" {
+		return exportStreamerMemLimitGiB(d)
+	}
+	return 0
+}
+
+// exportPDModelServiceAccount returns the S3-access service account for a
+// streamed D/P run (matching the orchestrator's modelServiceAccount), else "".
+func exportPDModelServiceAccount(d *database.RunExportDetails) string {
+	if d.UseRunaiStreamer && d.ModelS3URI != nil && *d.ModelS3URI != "" {
+		return "accelbench-model"
+	}
+	return ""
 }
 
 func exportNetworkMode(d *database.RunExportDetails) string {
@@ -284,6 +334,10 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 		ModelHfID:           d.ModelHfID,
 		ModelLabel:          sanitizeDNS1123(d.ModelHfID),
 		HfToken:             "",
+		// PRD-65 Layer 4: reproduce the streamed-load wiring — the S3-access SA
+		// + the memory-limit env — when the run streamed (D/P cached model).
+		ModelServiceAccount:    exportPDModelServiceAccount(d),
+		StreamerMemoryLimitGiB: exportPDStreamerMemLimitGiB(d),
 		InstanceTypeName:    d.InstanceTypeName,
 		PrefillReplicas:     prefillR,
 		PrefillTP:           deref(d.PrefillTP, 1),
@@ -350,6 +404,8 @@ func (s *Server) handleExportManifest(w http.ResponseWriter, r *http.Request) {
 	// PRD-66 Part 2: inject the configured multi-node image tags so the exported
 	// manifest names the image that would actually deploy (not a stale hardcode).
 	s.injectMultinodeImageVersions(r.Context(), details)
+	// PRD-65 Layer 4: reproduce the D/P cached-model streamer decision.
+	s.resolveExportStreamer(r.Context(), details)
 
 	// Generate the manifest.
 	manifest, err := generateManifest(details)
@@ -364,6 +420,35 @@ func (s *Server) handleExportManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(manifest))
+}
+
+// resolveExportStreamer makes the exported manifest reproduce the run's actual
+// weight-load path (PRD-65 Layer 4). The orchestrator auto-detects a cached S3
+// model at deploy time (resolveS3Model) WITHOUT persisting model_s3_uri, so a
+// run that streamed a cached model would otherwise export as an HF load. Mirror
+// that resolution here: if no explicit ModelS3URI but the HF model is cached,
+// set ModelS3URI + UseRunaiStreamer so the exporter emits the streamer flags.
+//
+// SCOPED TO DISAGGREGATED (D/P): the upstream vllm/vllm-openai image D/P uses
+// bundles runai-model-streamer. The co-located PP path (llm-d-aws) does NOT, so
+// PP must NEVER get streamer flags — leave distributed/single-node exports to
+// their persisted ModelS3URI (single-node already persists it; PP can't stream).
+func (s *Server) resolveExportStreamer(ctx context.Context, d *database.RunExportDetails) {
+	if d == nil || d.DeploymentMode == nil || *d.DeploymentMode != "disaggregated" {
+		return
+	}
+	if d.ModelS3URI != nil && *d.ModelS3URI != "" {
+		return // explicit URI already recorded → GetRunExportDetails set UseRunaiStreamer
+	}
+	if d.ModelHfID == "" {
+		return
+	}
+	revision := "main" // export details don't carry revision; matches orchestrator default
+	if cached, _ := s.repo.GetModelCacheByHfID(ctx, d.ModelHfID, revision); cached != nil && cached.Status == "cached" {
+		uri := cached.S3URI
+		d.ModelS3URI = &uri
+		d.UseRunaiStreamer = true
+	}
 }
 
 // injectMultinodeImageVersions fills the configured llm-d-aws + D/P vLLM image

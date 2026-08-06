@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/runtime"
+
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 func strptr(s string) *string { return &s }
@@ -168,6 +171,60 @@ func TestGenerateManifest_Disaggregated(t *testing.T) {
 	}
 }
 
+// TestGenerateManifest_Disaggregated_Streamer (PRD-65 Layer 4): a D/P run that
+// streamed a cached S3 model exports the streamer serve line (S3 URI +
+// runai_streamer + extra-config with memory_limit) AND the
+// RUNAI_STREAMER_MEMORY_LIMIT env — so the exported manifest reproduces the
+// deployed load. An HF-only D/P run emits neither (byte-identical to pre-PRD-65).
+func TestGenerateManifest_Disaggregated_Streamer(t *testing.T) {
+	base := func() *database.RunExportDetails {
+		return &database.RunExportDetails{
+			ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct", InstanceTypeName: "g6.2xlarge",
+			Framework: "llm-d", FrameworkVersion: "v0.8.1",
+			TensorParallelDegree: 1, AcceleratorCount: 1, VCPUs: 8, MemoryGiB: 32,
+			DeploymentMode: strptr("disaggregated"), NodeCount: intptr(2), NetworkMode: strptr("tcp"),
+			PrefillReplicas: intptr(1), PrefillTP: intptr(1), DecodeReplicas: intptr(1), DecodeTP: intptr(1),
+		}
+	}
+	// Streamed: UseRunaiStreamer + S3 URI (as resolveExportStreamer would set).
+	d := base()
+	d.UseRunaiStreamer = true
+	s3 := "s3://accelbench-models/qwen"
+	d.ModelS3URI = &s3
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	for _, want := range []string{
+		"runai_streamer",
+		"s3://accelbench-models/qwen",
+		"memory_limit",                // extra-config carries it
+		"RUNAI_STREAMER_MEMORY_LIMIT", // env on the container
+		"17179869184",                 // 32 GiB node / 2 = 16 GiB → bytes
+		"accelbench-model",            // S3-access service account
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("streamed D/P export missing %q", want)
+		}
+	}
+
+	// HF-only (no streamer): none of the streamer flags/env appear.
+	d2 := base()
+	out2, err := generateManifest(d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, notWant := range []string{"runai_streamer", "RUNAI_STREAMER_MEMORY_LIMIT", "s3://"} {
+		if strings.Contains(out2, notWant) {
+			t.Errorf("HF-only D/P export must NOT contain %q", notWant)
+		}
+	}
+	// HF model id is the serve arg.
+	if !strings.Contains(out2, "Qwen/Qwen2.5-1.5B-Instruct") {
+		t.Error("HF-only D/P export must use the HF model id")
+	}
+}
+
 // TestGenerateManifest_Disaggregated_PullThrough: when PULL_THROUGH_REGISTRY is
 // set, the exported D/P vLLM image is routed through the Docker Hub ECR
 // pull-through cache (matching the deploy path); unset → bare Docker Hub image.
@@ -268,4 +325,45 @@ func TestGenerateManifest_SingleNode(t *testing.T) {
 	if !strings.Contains(out, "kind: Deployment") {
 		t.Error("single-node export must render a Deployment")
 	}
+}
+
+// TestResolveExportStreamer (PRD-65 Layer 4): the export handler reproduces the
+// D/P cached-model auto-detect (orchestrator resolveS3Model), and NEVER does so
+// for PP (distributed) — llm-d-aws can't stream from S3.
+func TestResolveExportStreamer(t *testing.T) {
+	seed := func() *database.MockRepo {
+		repo := database.NewMockRepo()
+		hf := "Qwen/Qwen2.5-1.5B-Instruct"
+		_, _ = repo.CreateModelCache(context.Background(), &database.ModelCache{
+			HfID: &hf, HfRevision: "main", S3URI: "s3://bucket/qwen", Status: "cached",
+		})
+		return repo
+	}
+
+	t.Run("D/P cached model auto-detects", func(t *testing.T) {
+		s := NewServer(seed(), k8sfake.NewSimpleClientset(), "test-pod")
+		d := &database.RunExportDetails{ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct", DeploymentMode: strptr("disaggregated")}
+		s.resolveExportStreamer(context.Background(), d)
+		if !d.UseRunaiStreamer || d.ModelS3URI == nil || *d.ModelS3URI != "s3://bucket/qwen" {
+			t.Errorf("D/P cached: got useRunai=%v uri=%v, want true + s3://bucket/qwen", d.UseRunaiStreamer, d.ModelS3URI)
+		}
+	})
+
+	t.Run("PP cached model is NOT auto-detected (guard)", func(t *testing.T) {
+		s := NewServer(seed(), k8sfake.NewSimpleClientset(), "test-pod")
+		d := &database.RunExportDetails{ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct", DeploymentMode: strptr("distributed")}
+		s.resolveExportStreamer(context.Background(), d)
+		if d.UseRunaiStreamer || d.ModelS3URI != nil {
+			t.Errorf("PP must NOT stream: got useRunai=%v uri=%v", d.UseRunaiStreamer, d.ModelS3URI)
+		}
+	})
+
+	t.Run("D/P uncached model → no streamer", func(t *testing.T) {
+		s := NewServer(database.NewMockRepo(), k8sfake.NewSimpleClientset(), "test-pod")
+		d := &database.RunExportDetails{ModelHfID: "org/not-cached", DeploymentMode: strptr("disaggregated")}
+		s.resolveExportStreamer(context.Background(), d)
+		if d.UseRunaiStreamer || d.ModelS3URI != nil {
+			t.Errorf("uncached: got useRunai=%v uri=%v", d.UseRunaiStreamer, d.ModelS3URI)
+		}
+	})
 }
