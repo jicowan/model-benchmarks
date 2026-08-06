@@ -1088,6 +1088,8 @@ function ToolVersionsCard() {
   const [framework, setFramework] = useState("");
   const [sglang, setSGLang] = useState("");
   const [inferencePerf, setInferencePerf] = useState("");
+  const [llmd, setLLMD] = useState("");
+  const [pdVllm, setPDVllm] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1101,6 +1103,8 @@ function ToolVersionsCard() {
       setFramework(fresh.framework_version);
       setSGLang(fresh.sglang_version);
       setInferencePerf(fresh.inference_perf_version);
+      setLLMD(fresh.llmd_version);
+      setPDVllm(fresh.pd_vllm_version);
     } catch (err: any) {
       setError(err.message || "Failed to load tool versions");
     } finally {
@@ -1118,11 +1122,15 @@ function ToolVersionsCard() {
         framework_version: framework.trim(),
         sglang_version: sglang.trim(),
         inference_perf_version: inferencePerf.trim(),
+        llmd_version: llmd.trim(),
+        pd_vllm_version: pdVllm.trim(),
       });
       setTV(fresh);
       setFramework(fresh.framework_version);
       setSGLang(fresh.sglang_version);
       setInferencePerf(fresh.inference_perf_version);
+      setLLMD(fresh.llmd_version);
+      setPDVllm(fresh.pd_vllm_version);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
     } catch (err: any) {
@@ -1136,7 +1144,9 @@ function ToolVersionsCard() {
     tv != null &&
     (framework.trim() !== tv.framework_version ||
       sglang.trim() !== tv.sglang_version ||
-      inferencePerf.trim() !== tv.inference_perf_version);
+      inferencePerf.trim() !== tv.inference_perf_version ||
+      llmd.trim() !== tv.llmd_version ||
+      pdVllm.trim() !== tv.pd_vllm_version);
 
   return (
     <CollapsibleSection
@@ -1148,7 +1158,7 @@ function ToolVersionsCard() {
           {error && <span className="font-mono text-[11.5px] text-danger">{error}</span>}
           <button
             onClick={handleSave}
-            disabled={saving || loading || !dirty || !framework.trim() || !sglang.trim() || !inferencePerf.trim()}
+            disabled={saving || loading || !dirty || !framework.trim() || !sglang.trim() || !inferencePerf.trim() || !llmd.trim() || !pdVllm.trim()}
             className="btn btn-primary"
           >
             {saving ? "SAVING…" : "SAVE"}
@@ -1177,9 +1187,24 @@ function ToolVersionsCard() {
               onChange={setInferencePerf}
             />
           </div>
+          <div className="grid grid-cols-3 gap-4 mb-3">
+            <LabeledInput
+              label="llm-d-aws Version (multi-node PP)"
+              value={llmd}
+              onChange={setLLMD}
+            />
+            <LabeledInput
+              label="D/P vLLM Version (disaggregated)"
+              value={pdVllm}
+              onChange={setPDVllm}
+            />
+          </div>
           <p className="meta">
             Applies to all new benchmark runs. Existing runs retain the version they were submitted with.
-            vLLM/SGLang can still be overridden per-run from the new-benchmark page; inference-perf is platform-wide.
+            vLLM/SGLang can still be overridden per-run from the new-benchmark page; inference-perf,
+            llm-d-aws (co-located pipeline-parallel), and the disaggregated D/P vLLM image are platform-wide.
+            The D/P vLLM version is intentionally separate from Framework Version — disaggregation pins a
+            NIXL-specific vLLM build.
           </p>
           {tv?.env_override_active && (
             <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
@@ -1214,6 +1239,32 @@ function ToolVersionsCard() {
               <p className="caption mt-1">
                 The API pod has the <code>SGLANG_IMAGE</code> env var set — SGLang runs deploy this image verbatim.
                 Edits to SGLang Version above will be saved but ignored at runtime until the env var is removed.
+              </p>
+            </div>
+          )}
+          {tv?.llmd_env_override_active && (
+            <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
+              <div className="caption text-warn mb-1">LLMD_IMAGE ENV OVERRIDE ACTIVE</div>
+              <div className="font-mono text-[11.5px] text-ink-0 break-all">
+                {tv.llmd_env_override_image}
+              </div>
+              <p className="caption mt-1">
+                The API pod has the <code>LLMD_IMAGE</code> (or <code>VLLM_IMAGE</code>) env var set — co-located
+                multi-node runs deploy this image verbatim. Edits to llm-d-aws Version above will be saved but ignored
+                at runtime until the env var is removed.
+              </p>
+            </div>
+          )}
+          {tv?.pd_vllm_env_override_active && (
+            <div className="border border-warn/40 bg-warn/5 p-3 mt-3">
+              <div className="caption text-warn mb-1">PD_MODEL_IMAGE ENV OVERRIDE ACTIVE</div>
+              <div className="font-mono text-[11.5px] text-ink-0 break-all">
+                {tv.pd_vllm_env_override_image}
+              </div>
+              <p className="caption mt-1">
+                The API pod has the <code>PD_MODEL_IMAGE</code> (or <code>VLLM_IMAGE</code>) env var set — disaggregated
+                D/P runs deploy this image verbatim. Edits to D/P vLLM Version above will be saved but ignored at
+                runtime until the env var is removed.
               </p>
             </div>
           )}

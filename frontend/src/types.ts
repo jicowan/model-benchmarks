@@ -770,6 +770,11 @@ export interface ToolVersions {
   framework_version: string;
   sglang_version: string;
   inference_perf_version: string;
+  // PRD-66 Part 2: settable multi-node image tags. llmd_version is the
+  // co-located PP image (llm-d-aws); pd_vllm_version is the disaggregated
+  // D/P image (vllm/vllm-openai) — distinct from framework_version.
+  llmd_version: string;
+  pd_vllm_version: string;
   updated_at: string;
   env_override_active: boolean;
   env_override_image?: string;
@@ -780,6 +785,13 @@ export interface ToolVersions {
   // SGLANG_IMAGE env var status (mirror of VLLM_IMAGE for SGLang runs).
   sglang_env_override_active: boolean;
   sglang_env_override_image?: string;
+  // PRD-66 Part 2: LLMD_IMAGE / PD_MODEL_IMAGE env var status (both fall
+  // back to VLLM_IMAGE in the runtime). When active, the corresponding
+  // version is still saved but the orchestrator ignores it at runtime.
+  llmd_env_override_active: boolean;
+  llmd_env_override_image?: string;
+  pd_vllm_env_override_active: boolean;
+  pd_vllm_env_override_image?: string;
 }
 
 export interface CatalogModelEntry {
