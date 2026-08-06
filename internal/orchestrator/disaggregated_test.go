@@ -10,6 +10,26 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
+// TestPDModelImage covers the D/P vLLM image resolver (PRD-66 Part 2): composes
+// vllm/vllm-openai from the version, defaults an empty version, and prefixes the
+// Docker Hub pull-through cache when a registry is given.
+func TestPDModelImage(t *testing.T) {
+	cases := []struct {
+		version, pt, want string
+	}{
+		{"v0.25.0", "", "vllm/vllm-openai:v0.25.0"},
+		{"v0.26.1", "", "vllm/vllm-openai:v0.26.1"},
+		{"", "", "vllm/vllm-openai:" + DefaultPDVLLMVersion},
+		{"v0.25.0", "123.dkr.ecr.us-east-2.amazonaws.com", "123.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai:v0.25.0"},
+		{"", "123.dkr.ecr.us-east-2.amazonaws.com", "123.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai:" + DefaultPDVLLMVersion},
+	}
+	for _, c := range cases {
+		if got := PDModelImage(c.version, c.pt); got != c.want {
+			t.Errorf("PDModelImage(%q,%q) = %q, want %q", c.version, c.pt, got, c.want)
+		}
+	}
+}
+
 // TestApplyDisaggregatedManifestSet renders the full PD-disaggregated object
 // graph and applies it through the dynamic client, asserting every kind maps to
 // a GVR (no "no GVR mapping" errors) and that the cluster-scoped RBAC lands

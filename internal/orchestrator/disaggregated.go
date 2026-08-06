@@ -20,7 +20,15 @@ import (
 // The PD path uses the UPSTREAM vLLM image (it ships the cu13 NIXL/UCX modules
 // the KV transfer needs), NOT the llm-d-aws image the co-located path uses.
 const (
-	defaultPDModelImage     = "vllm/vllm-openai:v0.25.0"
+	// defaultPDModelRepo is the upstream vLLM image repo; the tag comes from
+	// tool_versions.pd_vllm_version (PRD-66 Part 2), defaulting to
+	// DefaultPDVLLMVersion. DISTINCT from single-node vLLM (FrameworkVersion):
+	// D/P pins a cu13/NIXL-specific vLLM that legitimately differs.
+	defaultPDModelRepo = "vllm/vllm-openai"
+	// DefaultPDVLLMVersion is the known-good D/P vLLM tag when tool_versions
+	// hasn't set one. Kept in sync with migration 042's default + the export
+	// path. Exported so the export handler shares the resolver.
+	DefaultPDVLLMVersion    = "v0.25.0"
 	defaultPDSidecarImage   = "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0"
 	defaultPDEPPImage       = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
 	defaultPDNixlModuleDir  = "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
@@ -88,6 +96,33 @@ func azFromPoolName(pool string) string {
 		return ""
 	}
 	return az
+}
+
+// PDModelImage composes the D/P vLLM image (vllm/vllm-openai) from a version
+// tag, optionally routed through the Docker Hub ECR pull-through cache when a
+// registry host is given (PRD-66 Part 2). Exported so the export handler shares
+// this exact resolver — no drifting hardcode. An empty version falls back to
+// DefaultPDVLLMVersion.
+func PDModelImage(version, pullThroughRegistry string) string {
+	if version == "" {
+		version = DefaultPDVLLMVersion
+	}
+	img := defaultPDModelRepo + ":" + version
+	if pullThroughRegistry != "" {
+		return fmt.Sprintf("%s/dockerhub/%s", pullThroughRegistry, img)
+	}
+	return img
+}
+
+// resolvePDVLLMVersion returns the configured D/P vLLM tag (PRD-66 Part 2),
+// falling back to the shipped default when tool_versions is unavailable/unset.
+// DISTINCT from the run's vLLM FrameworkVersion (single-node) — D/P pins a
+// cu13/NIXL-specific vLLM.
+func (o *Orchestrator) resolvePDVLLMVersion(ctx context.Context) string {
+	if tv, err := o.repo.GetToolVersions(ctx); err == nil && tv != nil && tv.PDVLLMVersion != "" {
+		return tv.PDVLLMVersion
+	}
+	return DefaultPDVLLMVersion
 }
 
 // deployLLMDDisaggregated renders the PD-disaggregated object graph (two pod
@@ -191,14 +226,15 @@ func (o *Orchestrator) deployLLMDDisaggregated(ctx context.Context, ns, name str
 	// path (vllm_gpu.go) — to avoid a slow/rate-limited direct Docker Hub pull.
 	image := rt.ResolveImageOverride()
 	if image == "" {
-		image = envOr("PD_MODEL_IMAGE", defaultPDModelImage)
-		// When using the DEFAULT image (no PD_MODEL_IMAGE override) and a
-		// pull-through registry is configured, route the Docker Hub image through
-		// the ECR pull-through cache, same as the single-node path.
-		if image == defaultPDModelImage {
-			if pt := envOr("PULL_THROUGH_REGISTRY", ""); pt != "" {
-				image = fmt.Sprintf("%s/dockerhub/%s", pt, defaultPDModelImage)
-			}
+		// No VLLM_IMAGE/LLMD_IMAGE override. A PD_MODEL_IMAGE env var is an
+		// exact image ref used verbatim; otherwise compose vllm/vllm-openai from
+		// the configured pd_vllm_version (PRD-66 Part 2) and, when a pull-through
+		// registry is set, route it through the Docker Hub ECR pull-through cache
+		// — same as the single-node path (vllm_gpu.go).
+		if pd := envOr("PD_MODEL_IMAGE", ""); pd != "" {
+			image = pd
+		} else {
+			image = PDModelImage(o.resolvePDVLLMVersion(ctx), envOr("PULL_THROUGH_REGISTRY", ""))
 		}
 	}
 

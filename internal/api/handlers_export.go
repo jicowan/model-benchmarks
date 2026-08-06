@@ -11,6 +11,7 @@ import (
 
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
+	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/report"
 	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
@@ -51,7 +52,6 @@ const (
 	exportMultiNodeTaintV  = "true"
 	exportDRASelectorK     = "accelbench.io/dra"
 	exportDRASelectorV     = "true"
-	exportPDModelImage     = "vllm/vllm-openai:v0.25.0"
 	exportPDSidecarImage   = "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0"
 	exportPDEPPImage       = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
 	exportPDNixlModuleDir  = "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
@@ -150,6 +150,23 @@ func exportLLMDImageFor(d *database.RunExportDetails) string {
 	return runtime.LLMDImage(d.LLMDVersion)
 }
 
+// exportPDModelImageFor resolves the D/P vLLM image the same way the
+// orchestrator's deploy path does (PRD-66 Part 2): a VLLM_IMAGE / LLMD_IMAGE
+// override wins verbatim; else a PD_MODEL_IMAGE env var is an exact ref; else
+// compose vllm/vllm-openai from the configured PDVLLMVersion, routed through the
+// Docker Hub pull-through cache when one is set. Shares orchestrator.PDModelImage
+// so deploy + export can't drift.
+func exportPDModelImageFor(d *database.RunExportDetails) string {
+	rt := &runtime.LLMD{}
+	if ov := rt.ResolveImageOverride(); ov != "" {
+		return ov
+	}
+	if pd := os.Getenv("PD_MODEL_IMAGE"); pd != "" {
+		return pd
+	}
+	return orchestrator.PDModelImage(d.PDVLLMVersion, os.Getenv("PULL_THROUGH_REGISTRY"))
+}
+
 // generateDistributedManifest renders the co-located multi-node llm-d object
 // graph (LeaderWorkerSet + Service + HTTPRoute + DRA claims) for a distributed
 // run (PRD-56 shape), reusing the orchestrator's renderer (PRD-59 fix — the old
@@ -244,13 +261,12 @@ func generateDisaggregatedManifest(d *database.RunExportDetails) (string, error)
 	if d.BothMaxNumBatchedTokens != nil && *d.BothMaxNumBatchedTokens > 0 {
 		bothArgs = exportServeArgsWithBatchTokens(d, d.BothMaxNumBatchedTokens)
 	}
-	// Route the default vLLM image through the Docker Hub ECR pull-through cache
-	// when one is configured, matching the orchestrator's deploy path
-	// (deployLLMDDisaggregated) so the exported manifest reproduces what ran.
-	pdImage := exportPDModelImage
-	if pt := os.Getenv("PULL_THROUGH_REGISTRY"); pt != "" {
-		pdImage = fmt.Sprintf("%s/dockerhub/%s", pt, exportPDModelImage)
-	}
+	// Resolve the D/P vLLM image the same way the orchestrator's deploy path
+	// does (PRD-66 Part 2): a VLLM_IMAGE / PD_MODEL_IMAGE override wins verbatim;
+	// otherwise compose vllm/vllm-openai from the configured pd_vllm_version and
+	// route through the Docker Hub ECR pull-through cache when one is set — so the
+	// exported manifest reproduces what ran.
+	pdImage := exportPDModelImageFor(d)
 	// PRD-61: reproduce the run's EPP routing config. NULL ⇒ the run used the
 	// shipped default, so the export applies the SAME default the orchestrator
 	// would (deref-to-default), keeping the exported EPP config faithful to what

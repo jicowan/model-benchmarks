@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/accelbench/accelbench/internal/database"
+	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/runtime"
 )
 
@@ -183,6 +184,53 @@ func TestGenerateManifest_Disaggregated_PullThrough(t *testing.T) {
 	}
 	if !strings.Contains(out2, "vllm/vllm-openai:v0.25.0") {
 		t.Error("D/P export missing the vLLM model image")
+	}
+}
+
+// TestGenerateManifest_Disaggregated_PDVLLMVersion (PRD-66 Part 2): the D/P
+// export composes vllm/vllm-openai from the configured PDVLLMVersion, not a
+// stale hardcode; unset ⇒ the shipped default. Also routes through the
+// pull-through cache when configured.
+func TestGenerateManifest_Disaggregated_PDVLLMVersion(t *testing.T) {
+	base := func() *database.RunExportDetails {
+		return &database.RunExportDetails{
+			ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct", InstanceTypeName: "g6.2xlarge",
+			Framework: "llm-d", FrameworkVersion: "v0.19.0",
+			TensorParallelDegree: 1, AcceleratorCount: 1, VCPUs: 8, MemoryGiB: 32,
+			DeploymentMode: strptr("disaggregated"), NodeCount: intptr(2), NetworkMode: strptr("tcp"),
+			PrefillReplicas: intptr(1), PrefillTP: intptr(1), DecodeReplicas: intptr(1), DecodeTP: intptr(1),
+		}
+	}
+	// Configured tag flows through.
+	d := base()
+	d.PDVLLMVersion = "v0.26.1"
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	if !strings.Contains(out, "vllm/vllm-openai:v0.26.1") {
+		t.Error("D/P export must use the configured pd_vllm_version v0.26.1")
+	}
+	// Configured tag + pull-through cache.
+	d2 := base()
+	d2.PDVLLMVersion = "v0.26.1"
+	t.Setenv("PULL_THROUGH_REGISTRY", "820537372947.dkr.ecr.us-east-2.amazonaws.com")
+	out2, err := generateManifest(d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out2, "820537372947.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai:v0.26.1") {
+		t.Error("D/P export must route the configured tag through the pull-through cache")
+	}
+	t.Setenv("PULL_THROUGH_REGISTRY", "")
+	// Unset version ⇒ default pin.
+	d3 := base()
+	out3, err := generateManifest(d3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out3, "vllm/vllm-openai:"+orchestrator.DefaultPDVLLMVersion) {
+		t.Error("D/P export with no configured version must fall back to the default pin")
 	}
 }
 
