@@ -181,6 +181,29 @@ ACTIVE" banner so admins can tell the override is in effect.
 The AWS DLC vLLM image above is known drop-in compatible (verified
 on Mistral-7B, Llama-3.1-8B, g5 and g6e instance types).
 
+### Multi-node images: llm-d-aws (PP) and D/P vLLM (PRD-66)
+
+The two multi-node paths use their own images, each with a settable version
+(Configuration → Tool Versions) and an env override:
+
+- **Co-located pipeline-parallel (PP)** uses `ghcr.io/llm-d/llm-d-aws:<llmd_version>`
+  (from GitHub Container Registry, via the `ghcr/*` pull-through cache when
+  configured). Override with **`LLMD_IMAGE`** (falls back to `VLLM_IMAGE` if that's
+  set) — used verbatim, ignoring `tool_versions.llmd_version`.
+- **Prefill/decode disaggregation (D/P)** uses `vllm/vllm-openai:<pd_vllm_version>`
+  from Docker Hub — the *same repo* as single-node but a **distinct** version
+  (D/P pins a cu13/NIXL-specific vLLM). Override with **`PD_MODEL_IMAGE`** (a
+  `VLLM_IMAGE`/`LLMD_IMAGE` override wins first, then `PD_MODEL_IMAGE`), used
+  verbatim, ignoring `tool_versions.pd_vllm_version`.
+
+Set them like the vLLM image — via Helm `--set` on the api deployment env, or
+just edit the versions in the Tool Versions UI. The Configuration → Tool
+Versions page flags an active `LLMD_IMAGE` / `PD_MODEL_IMAGE` override the same
+way it does for `VLLM_IMAGE`. Same compatibility rules as the vLLM image apply
+(entrypoint accepts vLLM flags, `--port 8000`, loader support). Note the GHCR
+pull-through cache requires a GitHub PAT (`read:packages`) — see the main
+README Prerequisites.
+
 ### Loadgen image / inference-perf fork (PRD-34, PRD-46 #4)
 
 By default the loadgen Job uses `quay.io/inference-perf/inference-perf`
