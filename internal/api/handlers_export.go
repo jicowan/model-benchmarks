@@ -12,6 +12,7 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/orchestrator"
+	"github.com/accelbench/accelbench/internal/recommend"
 	"github.com/accelbench/accelbench/internal/report"
 	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
@@ -544,6 +545,11 @@ type manifestData struct {
 	StreamerChunkBytesize  string // RUNAI_STREAMER_CHUNK_BYTESIZE (bytes); "" ⇒ omit env (8 MiB default)
 	StreamerMemoryLimitGiB int    // 0 → emit no env var, inherit upstream 40 GB default
 	StreamerMemoryLimitBytes int64 // derived for the env-var value
+	// PRD-67: CPU (ARM/Graviton) export fields. RuntimeImage is the resolved
+	// vllm-openai-cpu image (the vLLM/neuron path otherwise composes the image
+	// inline). CPUKVCacheSpaceGiB is the VLLM_CPU_KVCACHE_SPACE env value.
+	RuntimeImage       string
+	CPUKVCacheSpaceGiB int
 }
 
 func generateManifest(d *database.RunExportDetails) (string, error) {
@@ -636,6 +642,37 @@ func generateManifest(d *database.RunExportDetails) (string, error) {
 			})
 			data.RuntimeCommand = cmd
 			data.RuntimeArgs = args
+		}
+	}
+
+	// PRD-67: CPU (ARM/Graviton) export. Like SGLang, route through the runtime's
+	// BuildArgs so the exported serve flags (forced bfloat16, TP, W8A8/W4A8,
+	// streamer with distributed gated off) match what the orchestrator deployed,
+	// and resolve the vllm-openai-cpu image + VLLM_CPU_KVCACHE_SPACE.
+	if d.AcceleratorType == "cpu" {
+		if rt, err := runtime.Get("vllm-cpu"); err == nil {
+			_, args := rt.BuildArgs(runtime.ContainerParams{
+				ModelHfID:              d.ModelHfID,
+				ModelS3URI:             data.ModelS3URI,
+				UseRunaiStreamer:       data.UseRunaiStreamer,
+				TensorParallelDegree:   d.TensorParallelDegree,
+				MaxModelLen:            d.MaxModelLen,
+				MaxNumBatchedTokens:    data.MaxNumBatchedTokens,
+				Quantization:           derefStrExport(d.Quantization),
+				StreamerConcurrency:    data.StreamerConcurrency,
+				StreamerMemoryLimitGiB: data.StreamerMemoryLimitGiB,
+				ModelSizeBytes:         d.ModelSizeBytes,
+				InstanceTypeName:       d.InstanceTypeName,
+			})
+			data.RuntimeArgs = args
+			// Image: VLLM_CPU_IMAGE override wins, else compose from the CPU
+			// version (falls back to DefaultVLLMCPUVersion) + dockerhub PTC.
+			img := rt.ResolveImageOverride()
+			if img == "" {
+				img = rt.DefaultImage(rt.ResolveVersion(runtime.ToolVersions{VLLMCPUVersion: d.VLLMCPUVersion}), data.PullThroughRegistry)
+			}
+			data.RuntimeImage = img
+			data.CPUKVCacheSpaceGiB = recommend.CPUKVCacheSpaceGiB(d.MemoryGiB)
 		}
 	}
 
@@ -736,6 +773,10 @@ spec:
         - key: nvidia.com/gpu
           operator: Exists
           effect: NoSchedule
+{{- else if eq .AcceleratorType "cpu" }}
+        - key: accelbench.io/cpu
+          operator: Exists
+          effect: NoSchedule
 {{- else }}
         - key: aws.amazon.com/neuron
           operator: Exists
@@ -743,6 +784,9 @@ spec:
 {{- end }}
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .InstanceType }}
+{{- if eq .AcceleratorType "cpu" }}
+        kubernetes.io/arch: arm64
+{{- end }}
       containers:
         - name: {{ if eq .Framework "sglang" }}sglang{{ else }}vllm{{ end }}
 {{- if eq .Framework "sglang" }}
@@ -751,6 +795,8 @@ spec:
 {{- else }}
           image: {{ if .PullThroughRegistry }}{{ .PullThroughRegistry }}/dockerhub/{{ end }}lmsysorg/sglang:{{ .FrameworkVersion }}
 {{- end }}
+{{- else if eq .AcceleratorType "cpu" }}
+          image: {{ .RuntimeImage }}
 {{- else if eq .AcceleratorType "gpu" }}
 {{- if .VLLMImageOverride }}
           image: {{ .VLLMImageOverride }}
@@ -782,6 +828,13 @@ spec:
             - name: NCCL_P2P_LEVEL
               value: "NVL"
 {{- end }}
+{{- if eq .AcceleratorType "cpu" }}
+            # vLLM CPU knobs: absolute KV-cache allocation + per-NUMA thread bind.
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "{{ .CPUKVCacheSpaceGiB }}"
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: "auto"
+{{- end }}
 {{- if .UseRunaiStreamer }}
             # Run:ai streamer S3 retry tuning (real in the streamer C++ source).
             - name: RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS
@@ -804,6 +857,14 @@ spec:
 {{- range .RuntimeCommand }}
             - {{ . | quote }}
 {{- end }}
+          args:
+{{- range .RuntimeArgs }}
+            - {{ . | quote }}
+{{- end }}
+{{- else if eq .AcceleratorType "cpu" }}
+          {{- /* CPU reuses VLLMcpu.BuildArgs (RuntimeArgs) so the export
+                 reproduces the exact deployed serve flags: forced bfloat16,
+                 TP, W8A8/W4A8, streamer w/ distributed gated off. */}}
           args:
 {{- range .RuntimeArgs }}
             - {{ . | quote }}
@@ -885,6 +946,15 @@ spec:
             - "{{ .MaxNumSeqs }}"
 {{- end }}
 {{- end }}
+{{- if eq .AcceleratorType "cpu" }}
+          # vLLM CPU needs SYS_NICE + unconfined seccomp for NUMA thread pinning.
+          securityContext:
+            seccompProfile:
+              type: Unconfined
+            capabilities:
+              add:
+                - SYS_NICE
+{{- end }}
           resources:
             requests:
               cpu: {{ .CPURequest }}
@@ -893,6 +963,14 @@ spec:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
             limits:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+{{- else if eq .AcceleratorType "cpu" }}
+            {{- /* CPU: cpu + memory only, NO device resource. */}}
+            limits:
+              cpu: {{ .CPURequest }}
+              memory: {{ .MemoryRequest }}
           volumeMounts:
             - name: shm
               mountPath: /dev/shm
@@ -915,11 +993,11 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
-{{- if eq .AcceleratorType "gpu" }}
-            failureThreshold: 120
-{{- else }}
+{{- if eq .AcceleratorType "neuron" }}
             # Neuron compilation can take 30-60+ minutes
             failureThreshold: 540
+{{- else }}
+            failureThreshold: 120
 {{- end }}
           livenessProbe:
             httpGet:
@@ -928,7 +1006,7 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-{{- if eq .AcceleratorType "gpu" }}
+{{- if or (eq .AcceleratorType "gpu") (eq .AcceleratorType "cpu") }}
       volumes:
         - name: shm
           emptyDir:

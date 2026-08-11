@@ -184,6 +184,10 @@ type RunExportDetails struct {
 	// don't set them.
 	LLMDVersion   string
 	PDVLLMVersion string
+	// VLLMCPUVersion is the vllm-openai-cpu arm64 tag (PRD-67 §10a). Empty until
+	// the tool_versions column is wired; the runtime falls back to
+	// DefaultVLLMCPUVersion so exports stay valid.
+	VLLMCPUVersion string
 	// ModelSizeBytes is the cached model's size, injected by the export handler
 	// (resolveExportStreamer) to derive the Run:ai streamer concurrency exactly
 	// as the orchestrator does (size-derived on high-bandwidth instances).

@@ -28,6 +28,11 @@ spec:
         - key: nvidia.com/gpu
           operator: Exists
           effect: NoSchedule
+{{- else if eq .AcceleratorType "cpu" }}
+        # PRD-67: dedicated ARM/CPU pool taint (no device-plugin taint on CPU).
+        - key: accelbench.io/cpu
+          operator: Exists
+          effect: NoSchedule
 {{- else }}
         - key: aws.amazon.com/neuron
           operator: Exists
@@ -40,6 +45,9 @@ spec:
           effect: NoSchedule
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .InstanceTypeName }}
+{{- if eq .AcceleratorType "cpu" }}
+        kubernetes.io/arch: arm64
+{{- end }}
       containers:
 {{- if .RuntimeImage }}
         - name: {{ .RuntimeContainerName }}
@@ -56,6 +64,16 @@ spec:
               value: "INFO"
             - name: NCCL_P2P_LEVEL
               value: "NVL"
+{{- end }}
+{{- if eq .AcceleratorType "cpu" }}
+            # PRD-67: vLLM CPU knobs. KVCACHE_SPACE is an ABSOLUTE GiB allocation
+            # (not a fraction), budgeted by the recommender (CPUKVCacheSpaceGiB).
+            # OMP_THREADS_BIND=auto binds OpenMP threads per NUMA node — this is
+            # where CPU intra-node parallelism comes from (not TP ranks).
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "{{ .CPUKVCacheSpaceGiB }}"
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: "auto"
 {{- end }}
 {{- if .UseRunaiStreamer }}
             # Run:ai streamer S3 retry tuning (both real in the streamer C++
@@ -255,6 +273,16 @@ spec:
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if eq .AcceleratorType "cpu" }}
+          # PRD-67: vLLM CPU needs SYS_NICE (get_mempolicy) + unconfined seccomp
+          # (migrate_pages / numa_migrate_pages) for NUMA thread pinning.
+          securityContext:
+            seccompProfile:
+              type: Unconfined
+            capabilities:
+              add:
+                - SYS_NICE
+{{- end }}
           resources:
             requests:
               cpu: {{ .CPURequest }}
@@ -263,6 +291,16 @@ spec:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
             limits:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+{{- else if eq .AcceleratorType "cpu" }}
+            {{- /* CPU: request/limit cpu + memory only — NO device resource
+                   (no nvidia.com/gpu, no aws.amazon.com/neuron). shm volume for
+                   the tensor-parallel / streamer staging buffer. */}}
+            limits:
+              cpu: {{ .CPURequest }}
+              memory: {{ .MemoryRequest }}
           volumeMounts:
             - name: shm
               mountPath: /dev/shm
@@ -287,11 +325,12 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
-{{- if eq .AcceleratorType "gpu" }}
-            failureThreshold: 120
-{{- else }}
+{{- if eq .AcceleratorType "neuron" }}
             {{- /* Neuron compilation can take 30-60+ minutes; allow up to 90 minutes */}}
             failureThreshold: 540
+{{- else }}
+            {{- /* gpu + cpu: startup is weight-load dominated, no long compile wait */}}
+            failureThreshold: 120
 {{- end }}
           livenessProbe:
             httpGet:
@@ -300,7 +339,7 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-{{- if eq .AcceleratorType "gpu" }}
+{{- if or (eq .AcceleratorType "gpu") (eq .AcceleratorType "cpu") }}
       volumes:
         - name: shm
           emptyDir:

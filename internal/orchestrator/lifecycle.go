@@ -16,6 +16,7 @@ import (
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
 	"github.com/accelbench/accelbench/internal/oom"
+	"github.com/accelbench/accelbench/internal/recommend"
 	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
 
@@ -607,6 +608,17 @@ func (o *Orchestrator) resolveS3Model(ctx context.Context, cfg RunConfig) s3Mode
 	return s3Model{}
 }
 
+// cpuKVCacheSpaceGiB resolves VLLM_CPU_KVCACHE_SPACE (absolute GiB) for a cpu
+// run, sized from host RAM by the recommender so the deployed env matches what
+// the recommender budgeted. Returns 0 for non-cpu runs (the template only
+// renders the env on AcceleratorType=="cpu"). PRD-67 §3.
+func cpuKVCacheSpaceGiB(cfg RunConfig) int {
+	if cfg.InstanceType == nil || cfg.InstanceType.AcceleratorType != "cpu" {
+		return 0
+	}
+	return recommend.CPUKVCacheSpaceGiB(cfg.InstanceType.MemoryGiB)
+}
+
 func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg RunConfig) error {
 	// PRD-58: disaggregated runs render the prefill/decode object graph
 	// (two Deployments + InferencePool + EPP). PRD-56: co-located multi-node
@@ -712,6 +724,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		StreamerConcurrency:     streamerConcurrency,
 		StreamerChunkBytesize:   runtime.StreamerChunkBytesize(cfg.InstanceType.Name),
 		StreamerMemoryLimitGiB:  streamerMemLimitGiB,
+		CPUKVCacheSpaceGiB:      cpuKVCacheSpaceGiB(cfg),
 		PullThroughRegistry:     os.Getenv("PULL_THROUGH_REGISTRY"),
 		VLLMImageOverride:       ResolveVLLMImageOverride(),
 		SGLangImageOverride:     ResolveSGLangImageOverride(),
