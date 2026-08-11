@@ -27,10 +27,12 @@ const (
 	cpuKVCacheMaxGiB     = 128  // absolute cap so a huge box doesn't over-reserve
 	cpuKVCacheMinGiB     = 4    // vLLM CPU floor (docs)
 
-	// cpuUnquantizedCeilingParams is the conservative hard ceiling for DENSE
+	// CPUUnquantizedCeilingParams is the conservative hard ceiling for DENSE
 	// UNQUANTIZED models on CPU (§11c). Above this, refuse and steer to W8A8/W4A8.
-	// ~13B params (start conservative; refine from live runs).
-	cpuUnquantizedCeilingParams = 13_000_000_000
+	// ~13B params (start conservative; refine from live runs). Exported so the
+	// CreateRun guard (handlers.go) enforces the SAME ceiling as RecommendCPU.
+	CPUUnquantizedCeilingParams = 13_000_000_000
+	cpuUnquantizedCeilingParams = CPUUnquantizedCeilingParams
 	// cpuUnquantizedWarnParams is the soft warning threshold (8B); 8-13B dense
 	// bf16 runs but throughput is poor.
 	cpuUnquantizedWarnParams = 8_000_000_000
@@ -65,6 +67,14 @@ func gravitonGeneration(instanceName string) string {
 // VLLM_CPU_OMP_THREADS_BIND (thread binding), not TP ranks. If a multi-socket
 // Graviton ever appears, this is the one place to teach the real topology.
 func cpuNumaNodes(inst InstanceSpec) int {
+	return CPUNumaNodes(inst.Name)
+}
+
+// CPUNumaNodes is the exported form (by instance name) so the CreateRun TP guard
+// (§11b) uses the SAME NUMA-count source as the recommender. Single-socket
+// Graviton ⇒ 1. Kept name-based (not spec-based) since the guard only has the
+// instance name handy.
+func CPUNumaNodes(instanceName string) int {
 	return 1
 }
 

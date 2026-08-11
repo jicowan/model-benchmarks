@@ -444,6 +444,40 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	if !runtime.SupportsAccelerator(rt, instType.AcceleratorType) {
 		return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("framework %q does not support %s instances", req.Framework, instType.AcceleratorType)}
 	}
+
+	// PRD-67 §11b: server-side guards for CPU runs. The UI hides these GPU-only
+	// knobs (§11a), but a direct API caller / stale UI bypasses gating, so reject
+	// them loudly here. (gpu_memory_utilization is not a request field — vLLM's
+	// default is implicit — so there's nothing to reject for it.)
+	if instType.AcceleratorType == "cpu" {
+		if req.KVCacheDtype == "fp8" {
+			return "", &createRunError{http.StatusBadRequest, "kv_cache_dtype=fp8 does not apply to CPU runs (fp8 KV cache is CUDA/ROCm only)"}
+		}
+		if req.DeploymentMode != "" && req.DeploymentMode != "single" {
+			return "", &createRunError{http.StatusBadRequest, "distributed / disaggregated runs require a GPU instance type; CPU is single-node only"}
+		}
+		// TP = NUMA-node count on CPU; single-socket Graviton is 1 NUMA node.
+		// Reject TP > NUMA count (mirrors the D/P prefill_tp>gpus-per-node guard).
+		if numa := recommend.CPUNumaNodes(instType.Name); req.TensorParallelDegree > numa {
+			return "", &createRunError{http.StatusBadRequest, fmt.Sprintf("tensor_parallel_degree (%d) exceeds the CPU instance's NUMA-node count (%d); on CPU, TP maps to NUMA nodes and intra-node parallelism comes from OMP thread binding", req.TensorParallelDegree, numa)}
+		}
+		// §11c: hard-refuse OVERSIZED DENSE UNQUANTIZED models on CPU (small bf16
+		// models are fine; the guard is about oversized unquantized). Only when the
+		// run isn't quantized — a pre-quantized/quantization-set run is exactly what
+		// we'd steer them to. Fetch model config here (CPU-only, so it doesn't add
+		// an HF call to the GPU hot path); best-effort — a fetch failure doesn't
+		// block (the recommender still refuses at recommend time).
+		unquantized := req.Quantization == nil || *req.Quantization == ""
+		if unquantized {
+			if cfg, ferr := s.FetchModelConfig(ctx, req.ModelHfID, req.HfToken); ferr == nil && cfg != nil &&
+				!cfg.PreQuantized && cfg.ParameterCount > recommend.CPUUnquantizedCeilingParams {
+				return "", &createRunError{http.StatusBadRequest, fmt.Sprintf(
+					"%.0fB-parameter model is too large to run UNQUANTIZED on CPU (ceiling ~%dB) — CPU inference is memory-bandwidth bound; use an INT8 W8A8 or INT4 W4A8 quantized checkpoint",
+					float64(cfg.ParameterCount)/1e9, recommend.CPUUnquantizedCeilingParams/1_000_000_000)}
+			}
+		}
+	}
+
 	if req.FrameworkVersion == "" {
 		if tv, _ := s.repo.GetToolVersions(ctx); tv != nil {
 			// Pass the full projection so per-accelerator runtimes resolve their

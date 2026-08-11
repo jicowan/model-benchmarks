@@ -432,6 +432,12 @@ export default function Run() {
   // the submit button reflects whether the user still has a path to
   // "Start Benchmark". Keep this in sync with the hostMemOnly test in
   // the warning panel below.
+  // PRD-67 §11a: gate the run form off the selected instance's accelerator type.
+  // isCPU hides GPU-only knobs (fp8 KV) and surfaces the CPU-only ones, so a user
+  // can't inadvertently set a GPU knob on a CPU run (the server also guards, §11b).
+  const selectedInstance = instanceTypes.find((t) => t.name === form.instance_type_name);
+  const isCPU = selectedInstance?.accelerator_type === "cpu";
+
   const infeasibleReason =
     recommendation?.explanation && !recommendation.explanation.feasible
       ? recommendation.explanation.reason ?? ""
@@ -440,7 +446,9 @@ export default function Run() {
     infeasibleReason !== "" &&
     /host RAM/i.test(infeasibleReason) &&
     !/VRAM|accelerator memory|divides.*heads|transformers/i.test(infeasibleReason);
-  const archInfeasible = infeasibleReason !== "" && !hostMemOnlyInfeasible;
+  // §11a: a CPU fit failure is a host-memory/bandwidth problem, not a GPU-VRAM
+  // one — treat it like host-mem-only (overridable) rather than a hard arch block.
+  const archInfeasible = infeasibleReason !== "" && !hostMemOnlyInfeasible && !isCPU;
 
   // Mirror handleSubmit's payload requirements: model + instance are
   // always required; single-mode additionally needs scenario + dataset,
@@ -684,6 +692,9 @@ export default function Run() {
                   set("framework", "vllm-neuron");
                 } else if (at === "cpu") {
                   set("framework", "vllm-cpu");
+                  // §11a: clear GPU-only knobs from the payload on switch to CPU so
+                  // a stale value doesn't ride along and trip the server guard.
+                  set("kv_cache_dtype", "");
                 } else if (form.framework === "vllm-neuron" || form.framework === "vllm-cpu") {
                   // switched back to a GPU instance — reset off the forced framework.
                   set("framework", "vllm");
@@ -1160,22 +1171,26 @@ export default function Run() {
               className="input w-full"
             />
           </div>
-          <div>
-            <label className="eyebrow flex items-center gap-1.5 mb-1.5">
-              KV Cache Dtype
-              <InfoTip text="Storage precision for the KV cache. fp8 halves KV-cache memory on H100/H200/L40S with negligible quality impact. The recommender sets fp8 automatically on FP8-capable GPUs. Blank/auto = match compute dtype (bf16/fp16)." />
-            </label>
-            <select
-              value={form.kv_cache_dtype}
-              onChange={(e) => set("kv_cache_dtype", e.target.value)}
-              className="input w-full"
-            >
-              <option value="">auto (match compute dtype)</option>
-              <option value="fp8">fp8</option>
-              <option value="fp8_e4m3">fp8_e4m3</option>
-              <option value="fp8_e5m2">fp8_e5m2</option>
-            </select>
-          </div>
+          {/* PRD-67 §11a: fp8 KV cache is GPU-only (CUDA/ROCm). Hide the whole
+              field on CPU so it can't be set inadvertently (the server also 400s). */}
+          {!isCPU && (
+            <div>
+              <label className="eyebrow flex items-center gap-1.5 mb-1.5">
+                KV Cache Dtype
+                <InfoTip text="Storage precision for the KV cache. fp8 halves KV-cache memory on H100/H200/L40S with negligible quality impact. The recommender sets fp8 automatically on FP8-capable GPUs. Blank/auto = match compute dtype (bf16/fp16)." />
+              </label>
+              <select
+                value={form.kv_cache_dtype}
+                onChange={(e) => set("kv_cache_dtype", e.target.value)}
+                className="input w-full"
+              >
+                <option value="">auto (match compute dtype)</option>
+                <option value="fp8">fp8</option>
+                <option value="fp8_e4m3">fp8_e4m3</option>
+                <option value="fp8_e5m2">fp8_e5m2</option>
+              </select>
+            </div>
+          )}
         </div>
 
         {/* SGLang scheduler knobs. Only shown when framework is sglang. */}
