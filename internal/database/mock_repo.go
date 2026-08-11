@@ -1489,6 +1489,7 @@ func (m *MockRepo) GetToolVersions(_ context.Context) (*ToolVersions, error) {
 			InferencePerfVersion: "v0.2.0",
 			LLMDVersion:          "v0.8.1",
 			PDVLLMVersion:        "v0.25.0",
+			VLLMCPUVersion:       "v0.11.2",
 			UpdatedAt:            time.Now(),
 		}, nil
 	}

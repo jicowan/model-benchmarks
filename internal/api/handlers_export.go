@@ -477,10 +477,10 @@ func (s *Server) resolveExportStreamer(ctx context.Context, d *database.RunExpor
 }
 
 // injectMultinodeImageVersions fills the configured llm-d-aws + D/P vLLM image
-// tags onto the export details from tool_versions (PRD-66 Part 2), so the
-// generators compose the same image the orchestrator would deploy. Best-effort:
-// on any lookup failure the fields stay empty and the generators fall back to
-// the shipped defaults (byte-identical to pre-PRD-66 exports).
+// tags onto the export details from tool_versions (PRD-66 Part 2 + the PRD-67
+// CPU tag), so the generators compose the same image the orchestrator would
+// deploy. Best-effort: on any lookup failure the fields stay empty and the
+// generators fall back to the shipped defaults (byte-identical to pre-PRD-66).
 func (s *Server) injectMultinodeImageVersions(ctx context.Context, d *database.RunExportDetails) {
 	if d == nil {
 		return
@@ -488,6 +488,7 @@ func (s *Server) injectMultinodeImageVersions(ctx context.Context, d *database.R
 	if tv, err := s.repo.GetToolVersions(ctx); err == nil && tv != nil {
 		d.LLMDVersion = tv.LLMDVersion
 		d.PDVLLMVersion = tv.PDVLLMVersion
+		d.VLLMCPUVersion = tv.VLLMCPUVersion
 	}
 }
 

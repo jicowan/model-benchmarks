@@ -446,9 +446,15 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	}
 	if req.FrameworkVersion == "" {
 		if tv, _ := s.repo.GetToolVersions(ctx); tv != nil {
+			// Pass the full projection so per-accelerator runtimes resolve their
+			// own tag: vllm-cpu → VLLMCPUVersion, llm-d → LLMDVersion, etc. (a
+			// CPU run's FrameworkVersion is the vllm-openai-cpu tag, NOT the GPU
+			// framework_version — PRD-67 §10).
 			req.FrameworkVersion = rt.ResolveVersion(runtime.ToolVersions{
 				FrameworkVersion: tv.FrameworkVersion,
 				SGLangVersion:    tv.SGLangVersion,
+				LLMDVersion:      tv.LLMDVersion,
+				VLLMCPUVersion:   tv.VLLMCPUVersion,
 			})
 		}
 	}

@@ -489,6 +489,8 @@ type toolVersionsResponse struct {
 	// PRD-66 Part 2: settable multi-node image tags.
 	LLMDVersion   string `json:"llmd_version"`
 	PDVLLMVersion string `json:"pd_vllm_version"`
+	// PRD-67: settable ARM/CPU vLLM image tag.
+	VLLMCPUVersion string `json:"vllm_cpu_version"`
 	UpdatedAt            time.Time `json:"updated_at"`
 	// EnvOverrideActive is true when the orchestrator will ignore
 	// inference_perf_version in favor of the INFERENCE_PERF_IMAGE env var.
@@ -512,6 +514,10 @@ type toolVersionsResponse struct {
 	LLMDEnvOverrideImage   string `json:"llmd_env_override_image,omitempty"`
 	PDVLLMEnvOverrideActive bool  `json:"pd_vllm_env_override_active"`
 	PDVLLMEnvOverrideImage  string `json:"pd_vllm_env_override_image,omitempty"`
+	// PRD-67: VLLM_CPU_IMAGE env var status. When set, the orchestrator uses it
+	// verbatim and vllm_cpu_version is only audit data (same semantics as VLLM_IMAGE).
+	VLLMCPUEnvOverrideActive bool   `json:"vllm_cpu_env_override_active"`
+	VLLMCPUEnvOverrideImage  string `json:"vllm_cpu_env_override_image,omitempty"`
 }
 
 func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
@@ -545,12 +551,16 @@ func toolVersionsResp(tv *database.ToolVersions) toolVersionsResponse {
 	if pdEnvImage == "" {
 		pdEnvImage = vllmEnvImage
 	}
+	// VLLM_CPU_IMAGE is a distinct override (does NOT fall back to VLLM_IMAGE —
+	// the CPU runtime reads only VLLM_CPU_IMAGE).
+	cpuEnvImage := os.Getenv("VLLM_CPU_IMAGE")
 	return toolVersionsResponse{
 		FrameworkVersion:        tv.FrameworkVersion,
 		SGLangVersion:           tv.SGLangVersion,
 		InferencePerfVersion:    tv.InferencePerfVersion,
 		LLMDVersion:             tv.LLMDVersion,
 		PDVLLMVersion:           tv.PDVLLMVersion,
+		VLLMCPUVersion:          tv.VLLMCPUVersion,
 		UpdatedAt:               tv.UpdatedAt,
 		EnvOverrideActive:       envImage != "",
 		EnvOverrideImage:        envImage,
@@ -562,6 +572,8 @@ func toolVersionsResp(tv *database.ToolVersions) toolVersionsResponse {
 		LLMDEnvOverrideImage:    llmdEnvImage,
 		PDVLLMEnvOverrideActive: pdEnvImage != "",
 		PDVLLMEnvOverrideImage:  pdEnvImage,
+		VLLMCPUEnvOverrideActive: cpuEnvImage != "",
+		VLLMCPUEnvOverrideImage:  cpuEnvImage,
 	}
 }
 
@@ -571,6 +583,7 @@ type putToolVersionsRequest struct {
 	InferencePerfVersion string `json:"inference_perf_version"`
 	LLMDVersion          string `json:"llmd_version"`
 	PDVLLMVersion        string `json:"pd_vllm_version"`
+	VLLMCPUVersion       string `json:"vllm_cpu_version"`
 }
 
 func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
@@ -584,6 +597,7 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 	req.InferencePerfVersion = strings.TrimSpace(req.InferencePerfVersion)
 	req.LLMDVersion = strings.TrimSpace(req.LLMDVersion)
 	req.PDVLLMVersion = strings.TrimSpace(req.PDVLLMVersion)
+	req.VLLMCPUVersion = strings.TrimSpace(req.VLLMCPUVersion)
 	if req.FrameworkVersion == "" {
 		writeError(w, http.StatusBadRequest, "framework_version is required")
 		return
@@ -592,9 +606,9 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "inference_perf_version is required")
 		return
 	}
-	// SGLang / llm-d / D-P vLLM versions: empty means "keep existing". The
+	// SGLang / llm-d / D-P vLLM / CPU versions: empty means "keep existing". The
 	// migration seeds defaults so a missing field on a fresh PUT is benign.
-	if req.SGLangVersion == "" || req.LLMDVersion == "" || req.PDVLLMVersion == "" {
+	if req.SGLangVersion == "" || req.LLMDVersion == "" || req.PDVLLMVersion == "" || req.VLLMCPUVersion == "" {
 		if cur, err := s.repo.GetToolVersions(r.Context()); err == nil && cur != nil {
 			if req.SGLangVersion == "" {
 				req.SGLangVersion = cur.SGLangVersion
@@ -605,6 +619,9 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 			if req.PDVLLMVersion == "" {
 				req.PDVLLMVersion = cur.PDVLLMVersion
 			}
+			if req.VLLMCPUVersion == "" {
+				req.VLLMCPUVersion = cur.VLLMCPUVersion
+			}
 		}
 	}
 
@@ -614,14 +631,15 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		InferencePerfVersion: req.InferencePerfVersion,
 		LLMDVersion:          req.LLMDVersion,
 		PDVLLMVersion:        req.PDVLLMVersion,
+		VLLMCPUVersion:       req.VLLMCPUVersion,
 	}
 	if err := s.repo.PutToolVersions(r.Context(), tv); err != nil {
 		writeError(w, http.StatusInternalServerError, "update tool versions: "+err.Error())
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/tool-versions",
-		fmt.Sprintf("framework_version=%s sglang_version=%s inference_perf_version=%s llmd_version=%s pd_vllm_version=%s",
-			req.FrameworkVersion, req.SGLangVersion, req.InferencePerfVersion, req.LLMDVersion, req.PDVLLMVersion))
+		fmt.Sprintf("framework_version=%s sglang_version=%s inference_perf_version=%s llmd_version=%s pd_vllm_version=%s vllm_cpu_version=%s",
+			req.FrameworkVersion, req.SGLangVersion, req.InferencePerfVersion, req.LLMDVersion, req.PDVLLMVersion, req.VLLMCPUVersion))
 	s.cache.Invalidate("tool-versions")
 
 	fresh, _ := s.repo.GetToolVersions(r.Context())

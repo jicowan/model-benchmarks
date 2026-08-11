@@ -509,7 +509,10 @@ type ToolVersions struct {
 	// FrameworkVersion because D/P pins a cu13/NIXL-specific vLLM.
 	LLMDVersion   string    `json:"llmd_version"`
 	PDVLLMVersion string    `json:"pd_vllm_version"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	// PRD-67: the ARM/CPU vLLM image tag (vllm/vllm-openai-cpu:<ver>-arm64).
+	// DISTINCT from FrameworkVersion — different repo, own arm64 cadence.
+	VLLMCPUVersion string    `json:"vllm_cpu_version"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // CatalogMatrix bundles the full matrix for the seeder.

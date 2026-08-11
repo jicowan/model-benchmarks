@@ -12,10 +12,10 @@ func (r *Repository) GetToolVersions(ctx context.Context) (*ToolVersions, error)
 	var tv ToolVersions
 	err := r.pool.QueryRow(ctx,
 		`SELECT framework_version, sglang_version, inference_perf_version,
-		        llmd_version, pd_vllm_version, updated_at
+		        llmd_version, pd_vllm_version, vllm_cpu_version, updated_at
 		   FROM tool_versions WHERE id = 1`).
 		Scan(&tv.FrameworkVersion, &tv.SGLangVersion, &tv.InferencePerfVersion,
-			&tv.LLMDVersion, &tv.PDVLLMVersion, &tv.UpdatedAt)
+			&tv.LLMDVersion, &tv.PDVLLMVersion, &tv.VLLMCPUVersion, &tv.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("load tool_versions: %w", err)
 	}
@@ -31,10 +31,11 @@ func (r *Repository) PutToolVersions(ctx context.Context, tv *ToolVersions) erro
 		        inference_perf_version = $3,
 		        llmd_version = $4,
 		        pd_vllm_version = $5,
+		        vllm_cpu_version = $6,
 		        updated_at = now()
 		  WHERE id = 1`,
 		tv.FrameworkVersion, tv.SGLangVersion, tv.InferencePerfVersion,
-		tv.LLMDVersion, tv.PDVLLMVersion)
+		tv.LLMDVersion, tv.PDVLLMVersion, tv.VLLMCPUVersion)
 	if err != nil {
 		return fmt.Errorf("update tool_versions: %w", err)
 	}
