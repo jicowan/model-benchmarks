@@ -584,6 +584,15 @@ type s3Model struct {
 }
 
 func (o *Orchestrator) resolveS3Model(ctx context.Context, cfg RunConfig) s3Model {
+	// PRD-67 §5b/§9: the prebuilt vllm/vllm-openai-cpu:*-arm64 image does NOT
+	// bundle runai-model-streamer (confirmed live: ModuleNotFoundError on a CPU
+	// run), unlike the GPU image. The arm64 wheels exist on PyPI but aren't in the
+	// image, so CPU runs fall back to HF download (no S3 streaming) until a
+	// streamer-inclusive CPU image or an install step is added. Gate the streamer
+	// off for cpu — HF download works fine, it just forgoes the S3 cache.
+	if cfg.InstanceType != nil && cfg.InstanceType.AcceleratorType == "cpu" {
+		return s3Model{}
+	}
 	if cfg.Request.ModelS3URI != "" {
 		// Explicit URI: size unknown (not looked up); streamer concurrency falls
 		// back to the profile default.
@@ -828,17 +837,15 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		}
 	}
 
-	// When loading from S3, vLLM registers the model with the S3 URI as its name
-	if cfg.Request.ModelS3URI != "" {
-		inferencePerfConfig.ModelName = cfg.Request.ModelS3URI
-	} else if cfg.Request.ModelHfID != "" {
-		revision := cfg.Request.ModelHfRevision
-		if revision == "" {
-			revision = "main"
-		}
-		if cached, _ := o.repo.GetModelCacheByHfID(ctx, cfg.Request.ModelHfID, revision); cached != nil && cached.Status == "cached" {
-			inferencePerfConfig.ModelName = cached.S3URI
-		}
+	// The loadgen's model name MUST match the name vLLM registered the model
+	// under (served_model_name), or every request 404s. That name follows the
+	// SAME streamer decision as the deploy: streaming → the S3 URI; HF-download →
+	// the HF id (empty ModelName ⇒ inference-perf uses ModelHfID). Reuse
+	// resolveS3Model so the CPU HF-download gate (PRD-67 §5b) is honored here too —
+	// previously this block re-derived the S3 URI from the cache independently and
+	// mismatched the CPU server's HF-id registration (live 404s, 2026-08-11).
+	if sm := o.resolveS3Model(ctx, cfg); sm.UseRunai && sm.URI != "" {
+		inferencePerfConfig.ModelName = sm.URI
 	}
 
 	// Results storage. inference-perf writes directly to S3 via boto3 when

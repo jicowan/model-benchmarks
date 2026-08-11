@@ -125,7 +125,7 @@ func TestRenderModelDeployment_CPU(t *testing.T) {
 		Namespace:            "accelbench",
 		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
 		Framework:            "vllm-cpu",
-		FrameworkVersion:     "v0.11.2",
+		FrameworkVersion:     "v0.27.0",
 		TensorParallelDegree: 1,
 		AcceleratorType:      "cpu",
 		AcceleratorCount:     0,
@@ -136,7 +136,7 @@ func TestRenderModelDeployment_CPU(t *testing.T) {
 		MemoryRequest:        "256Gi",
 		CPUKVCacheSpaceGiB:   128,
 		RuntimeContainerName: "vllm",
-		RuntimeImage:         "vllm/vllm-openai-cpu:v0.11.2-arm64",
+		RuntimeImage:         "vllm/vllm-openai-cpu:v0.27.0-arm64",
 		RuntimeArgs:          args,
 	}
 
@@ -146,7 +146,7 @@ func TestRenderModelDeployment_CPU(t *testing.T) {
 	}
 
 	for _, c := range []struct{ name, want string }{
-		{"cpu image", "vllm/vllm-openai-cpu:v0.11.2-arm64"},
+		{"cpu image", "vllm/vllm-openai-cpu:v0.27.0-arm64"},
 		{"arm64 nodeSelector", "kubernetes.io/arch: arm64"},
 		{"instance type", "node.kubernetes.io/instance-type: r8g.16xlarge"},
 		{"cpu taint toleration", "accelbench.io/cpu"},

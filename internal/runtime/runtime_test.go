@@ -246,11 +246,11 @@ func TestVLLMcpu_SupportsAccelerator(t *testing.T) {
 func TestVLLMcpu_DefaultImage(t *testing.T) {
 	rt := &VLLMcpu{}
 	// -arm64 suffix is load-bearing; bare Docker Hub form.
-	if got := rt.DefaultImage("v0.11.2", ""); got != "vllm/vllm-openai-cpu:v0.11.2-arm64" {
+	if got := rt.DefaultImage("v0.27.0", ""); got != "vllm/vllm-openai-cpu:v0.27.0-arm64" {
 		t.Errorf("DefaultImage without pull-through = %q", got)
 	}
 	// dockerhub pull-through form (reuses the GPU dockerhub rule, no new TF).
-	if got := rt.DefaultImage("v0.11.2", "123456789012.dkr.ecr.us-east-2.amazonaws.com"); got != "123456789012.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai-cpu:v0.11.2-arm64" {
+	if got := rt.DefaultImage("v0.27.0", "123456789012.dkr.ecr.us-east-2.amazonaws.com"); got != "123456789012.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai-cpu:v0.27.0-arm64" {
 		t.Errorf("DefaultImage with pull-through = %q", got)
 	}
 }

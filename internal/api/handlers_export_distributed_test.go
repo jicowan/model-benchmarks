@@ -343,7 +343,7 @@ func TestGenerateManifest_SingleNode(t *testing.T) {
 func TestGenerateManifest_CPU(t *testing.T) {
 	d := &database.RunExportDetails{
 		ModelHfID: "meta-llama/Llama-3.1-8B-Instruct", InstanceTypeName: "r8g.16xlarge",
-		Framework: "vllm-cpu", FrameworkVersion: "v0.11.2",
+		Framework: "vllm-cpu", FrameworkVersion: "v0.27.0",
 		TensorParallelDegree: 1, AcceleratorType: "cpu", AcceleratorCount: 0,
 		VCPUs: 64, MemoryGiB: 512,
 	}
@@ -352,7 +352,7 @@ func TestGenerateManifest_CPU(t *testing.T) {
 		t.Fatalf("generateManifest: %v", err)
 	}
 	for _, want := range []string{
-		"vllm/vllm-openai-cpu:v0.11.2-arm64",
+		"vllm/vllm-openai-cpu:v0.27.0-arm64",
 		"kubernetes.io/arch: arm64",
 		"accelbench.io/cpu",
 		"VLLM_CPU_KVCACHE_SPACE",

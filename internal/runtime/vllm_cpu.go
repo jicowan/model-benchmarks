@@ -9,9 +9,11 @@ import (
 // DefaultVLLMCPUVersion is the known-good vllm-openai-cpu arm64 tag used when
 // tool_versions.vllm_cpu_version is unset. DISTINCT from FrameworkVersion (the
 // GPU vllm/vllm-openai tag): the CPU image is a different repo (`-cpu`) with its
-// own arm64 release cadence (PRD-67 §10a). Prebuilt Arm CPU wheels ship since
-// vLLM v0.11.2; pin a validated arm64 tag here.
-const DefaultVLLMCPUVersion = "v0.11.2"
+// own arm64 release cadence (PRD-67 §10a). Verified against Docker Hub
+// (vllm/vllm-openai-cpu tags): arm64 images exist from v0.18.0 onward; pin a
+// recent stable tag. (The "since v0.11.2" figure is for prebuilt Arm *wheels*,
+// which predate the published -cpu images — do NOT use it as an image tag.)
+const DefaultVLLMCPUVersion = "v0.27.0"
 
 // VLLMcpu implements Runtime for the "vllm-cpu" framework on ARM/Graviton CPU
 // instances. It mirrors VLLMneuron as a third accelerator tier: single-node,

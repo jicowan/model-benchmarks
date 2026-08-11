@@ -334,7 +334,7 @@ func TestDeployModel_CPUInstance(t *testing.T) {
 	cfg.InstanceType.MemoryGiB = 512
 	cfg.Request.InstanceTypeName = "r8g.16xlarge"
 	cfg.Request.Framework = "vllm-cpu"
-	cfg.Request.FrameworkVersion = "v0.11.2"
+	cfg.Request.FrameworkVersion = "v0.27.0"
 
 	ctx := context.Background()
 	if err := o.deployModel(ctx, "default", "bench-cpu12345", cfg); err != nil {
