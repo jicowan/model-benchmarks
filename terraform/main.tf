@@ -343,6 +343,7 @@ module "karpenter" {
 
   install_controller           = var.install_karpenter_controller
   install_nvidia_device_plugin = var.install_nvidia_device_plugin
+  install_cpu_nodepool         = var.install_cpu_nodepool
   manage_pull_through_cache    = var.manage_pull_through_cache
   cluster_oidc_issuer_url      = local.oidc_issuer_url
 

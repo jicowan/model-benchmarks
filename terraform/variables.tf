@@ -303,6 +303,17 @@ variable "install_nvidia_device_plugin" {
   default     = true
 }
 
+variable "install_cpu_nodepool" {
+  description = <<-EOT
+    PRD-67: provision the ARM/Graviton CPU inference tier — an arm64
+    EC2NodeClass + NodePool over Graviton3/4/5 families (r8g/m8g/c8g,
+    r7g/m7g/c7g, m9g/c9g). Default off; turn on to benchmark vLLM CPU
+    inference. No device plugin needed.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "manage_pull_through_cache" {
   description = <<-EOT
     PRD-53: create an ECR pull-through cache rule for Docker Hub + grant
