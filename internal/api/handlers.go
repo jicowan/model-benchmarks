@@ -1334,9 +1334,12 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rec *recommend.Recommendation
-	if strings.EqualFold(instType.AcceleratorType, "neuron") {
+	switch {
+	case strings.EqualFold(instType.AcceleratorType, "neuron"):
 		rec = recommend.RecommendNeuron(*modelCfg, inst)
-	} else {
+	case strings.EqualFold(instType.AcceleratorType, "cpu"):
+		rec = recommend.RecommendCPU(*modelCfg, inst)
+	default:
 		rec = recommend.Recommend(*modelCfg, inst, allSpecs, opts)
 	}
 

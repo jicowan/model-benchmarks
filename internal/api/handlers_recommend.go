@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/accelbench/accelbench/internal/recommend"
 )
@@ -75,6 +76,17 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	}
 	if instType == nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("instance type %s not found", instanceName))
+		return
+	}
+
+	// PRD-67: the VRAM memory breakdown (weights + KV + activations carved out of
+	// a fixed per-accelerator VRAM under gpu_memory_utilization) is a GPU-shaped
+	// framing that does not apply to CPU — there is no discrete accelerator
+	// (accelerator_count=0), so CalculateMemoryBreakdown would divide by zero.
+	// CPU host-memory fit lives in the recommender (RecommendCPU); the frontend
+	// hides this panel for CPU instances. Guard defensively for direct callers.
+	if strings.EqualFold(instType.AcceleratorType, "cpu") || instType.AcceleratorCount <= 0 {
+		writeError(w, http.StatusBadRequest, "memory breakdown does not apply to CPU instances (no discrete accelerator); use the recommendation endpoint for CPU host-memory fit")
 		return
 	}
 

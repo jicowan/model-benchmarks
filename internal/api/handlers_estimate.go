@@ -211,9 +211,12 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 
 		// Call appropriate recommendation function
 		var rec *recommend.Recommendation
-		if strings.EqualFold(it.AcceleratorType, "neuron") {
+		switch {
+		case strings.EqualFold(it.AcceleratorType, "neuron"):
 			rec = recommend.RecommendNeuron(*modelCfg, inst)
-		} else {
+		case strings.EqualFold(it.AcceleratorType, "cpu"):
+			rec = recommend.RecommendCPU(*modelCfg, inst)
+		default:
 			rec = recommend.Recommend(*modelCfg, inst, allSpecs, recOpts)
 		}
 
