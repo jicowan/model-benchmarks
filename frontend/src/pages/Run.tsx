@@ -676,12 +676,16 @@ export default function Run() {
               value={form.instance_type_name}
               onChange={(e) => {
                 set("instance_type_name", e.target.value);
-                const isNeuron = /^(inf|trn)/.test(e.target.value);
-                // Force neuron framework on Neuron; on GPU keep the user's
-                // current framework if they picked sglang, else default vllm.
-                if (isNeuron) {
+                // Force the accelerator-appropriate framework. Derive from the
+                // selected instance's accelerator_type (robust across the many
+                // Graviton families) rather than a name regex.
+                const at = instanceTypes.find((t) => t.name === e.target.value)?.accelerator_type;
+                if (at === "neuron") {
                   set("framework", "vllm-neuron");
-                } else if (form.framework === "vllm-neuron") {
+                } else if (at === "cpu") {
+                  set("framework", "vllm-cpu");
+                } else if (form.framework === "vllm-neuron" || form.framework === "vllm-cpu") {
+                  // switched back to a GPU instance — reset off the forced framework.
                   set("framework", "vllm");
                 }
                 setRecommendation(null);
@@ -706,6 +710,17 @@ export default function Run() {
                   .map((t) => (
                     <option key={t.name} value={t.name}>
                       {t.name} ({t.accelerator_count}x {t.accelerator_name})
+                    </option>
+                  ))}
+              </optgroup>
+              <optgroup label="CPU (ARM/Graviton)">
+                {instanceTypes
+                  .filter((t) => t.accelerator_type === "cpu")
+                  .map((t) => (
+                    // CPU has no discrete accelerator (count 0); show
+                    // vCPU/memory instead of the count×name label.
+                    <option key={t.name} value={t.name}>
+                      {t.name} ({t.accelerator_name}, {t.vcpus} vCPU / {t.memory_gib} GiB)
                     </option>
                   ))}
               </optgroup>

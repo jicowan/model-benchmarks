@@ -158,6 +158,7 @@ export default function Estimate() {
               <option value="">All</option>
               <option value="gpu">GPU only</option>
               <option value="neuron">Neuron only</option>
+              <option value="cpu">CPU (ARM) only</option>
             </select>
           </div>
         </div>
