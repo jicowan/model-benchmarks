@@ -209,6 +209,163 @@ func TestVLLMneuron_NoQuantization(t *testing.T) {
 	}
 }
 
+// --- VLLMcpu tests (PRD-67) ---
+
+func TestGet_VLLMcpu(t *testing.T) {
+	rt, err := Get("vllm-cpu")
+	if err != nil {
+		t.Fatalf("Get(vllm-cpu): %v", err)
+	}
+	if rt.Name() != "vllm-cpu" {
+		t.Errorf("Name() = %q", rt.Name())
+	}
+	if rt.ContainerName() != "vllm" {
+		t.Errorf("ContainerName() = %q, want vllm", rt.ContainerName())
+	}
+	if !slices.Equal(rt.SupportedAccelerators(), []string{"cpu"}) {
+		t.Errorf("SupportedAccelerators() = %v, want [cpu]", rt.SupportedAccelerators())
+	}
+}
+
+func TestForAccelerator_CPU(t *testing.T) {
+	if rt := ForAccelerator("cpu"); rt.Name() != "vllm-cpu" {
+		t.Errorf("ForAccelerator(cpu) = %q, want vllm-cpu", rt.Name())
+	}
+}
+
+func TestVLLMcpu_SupportsAccelerator(t *testing.T) {
+	cpu, _ := Get("vllm-cpu")
+	if !SupportsAccelerator(cpu, "cpu") {
+		t.Error("vllm-cpu should support cpu")
+	}
+	if SupportsAccelerator(cpu, "gpu") {
+		t.Error("vllm-cpu should not support gpu")
+	}
+}
+
+func TestVLLMcpu_DefaultImage(t *testing.T) {
+	rt := &VLLMcpu{}
+	// -arm64 suffix is load-bearing; bare Docker Hub form.
+	if got := rt.DefaultImage("v0.11.2", ""); got != "vllm/vllm-openai-cpu:v0.11.2-arm64" {
+		t.Errorf("DefaultImage without pull-through = %q", got)
+	}
+	// dockerhub pull-through form (reuses the GPU dockerhub rule, no new TF).
+	if got := rt.DefaultImage("v0.11.2", "123456789012.dkr.ecr.us-east-2.amazonaws.com"); got != "123456789012.dkr.ecr.us-east-2.amazonaws.com/dockerhub/vllm/vllm-openai-cpu:v0.11.2-arm64" {
+		t.Errorf("DefaultImage with pull-through = %q", got)
+	}
+}
+
+func TestVLLMcpu_ResolveVersion(t *testing.T) {
+	rt := &VLLMcpu{}
+	// Uses the CPU-specific field, NOT FrameworkVersion.
+	tv := ToolVersions{FrameworkVersion: "v0.19.0", VLLMCPUVersion: "v0.12.0"}
+	if got := rt.ResolveVersion(tv); got != "v0.12.0" {
+		t.Errorf("ResolveVersion = %q, want v0.12.0", got)
+	}
+	// Unset ⇒ shipped default.
+	if got := rt.ResolveVersion(ToolVersions{FrameworkVersion: "v0.19.0"}); got != DefaultVLLMCPUVersion {
+		t.Errorf("ResolveVersion(unset) = %q, want %q", got, DefaultVLLMCPUVersion)
+	}
+}
+
+func TestVLLMcpu_ResolveImageOverride(t *testing.T) {
+	rt := &VLLMcpu{}
+	os.Setenv("VLLM_CPU_IMAGE", "custom/vllm-cpu:test")
+	defer os.Unsetenv("VLLM_CPU_IMAGE")
+	if got := rt.ResolveImageOverride(); got != "custom/vllm-cpu:test" {
+		t.Errorf("ResolveImageOverride = %q", got)
+	}
+}
+
+func TestVLLMcpu_BuildArgs_Basic(t *testing.T) {
+	rt := &VLLMcpu{}
+	cmd, args := rt.BuildArgs(ContainerParams{
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		TensorParallelDegree: 2, // NUMA ranks
+	})
+	if cmd != nil {
+		t.Errorf("command should be nil, got %v", cmd)
+	}
+	assertContains(t, args, "--model", "meta-llama/Llama-3.1-8B-Instruct")
+	assertContains(t, args, "--port", "8000")
+	assertContains(t, args, "--tensor-parallel-size", "2")
+	assertContains(t, args, "--trust-remote-code")
+	// bfloat16 is forced on CPU.
+	assertContains(t, args, "--dtype", "bfloat16")
+	// GPU-only knobs never appear.
+	assertNotContains(t, args, "--gpu-memory-utilization")
+	assertNotContains(t, args, "--kv-cache-dtype")
+}
+
+func TestVLLMcpu_BuildArgs_KVCacheDtypeNeverEmitted(t *testing.T) {
+	rt := &VLLMcpu{}
+	// Even if a caller sets KVCacheDtype (fp8 is GPU-only), CPU must not emit it.
+	_, args := rt.BuildArgs(ContainerParams{
+		ModelHfID:            "test/model",
+		TensorParallelDegree: 1,
+		KVCacheDtype:         "fp8",
+	})
+	assertNotContains(t, args, "--kv-cache-dtype")
+	assertNotContains(t, args, "fp8")
+}
+
+func TestVLLMcpu_BuildArgs_RunaiStreamer_NoDistributed(t *testing.T) {
+	rt := &VLLMcpu{}
+	// TP>1 on CPU: streamer is used, but distributed:true must be SUPPRESSED
+	// (NUMA ranks, no NCCL group) — the core §5b behavior.
+	_, args := rt.BuildArgs(ContainerParams{
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		ModelS3URI:           "s3://bucket/models/llama",
+		UseRunaiStreamer:     true,
+		TensorParallelDegree: 4,
+		StreamerConcurrency:  16,
+	})
+	assertContains(t, args, "--model", "s3://bucket/models/llama")
+	assertContains(t, args, "--load-format", "runai_streamer")
+	// concurrency present, distributed absent.
+	assertContains(t, args, `{"concurrency":16}`)
+	for _, a := range args {
+		if strings.Contains(a, "distributed") {
+			t.Errorf("CPU streamer must NOT set distributed:true, got arg %q", a)
+		}
+	}
+}
+
+func TestVLLMcpu_BuildArgs_AllKnobs(t *testing.T) {
+	rt := &VLLMcpu{}
+	_, args := rt.BuildArgs(ContainerParams{
+		ModelHfID:            "test/model",
+		TensorParallelDegree: 1,
+		MaxModelLen:          4096,
+		MaxNumBatchedTokens:  8192,
+		MaxNumSeqs:           128,
+	})
+	assertContains(t, args, "--max-model-len", "4096")
+	assertContains(t, args, "--max-num-batched-tokens", "8192")
+	assertContains(t, args, "--max-num-seqs", "128")
+}
+
+func TestVLLMcpu_MapQuantization(t *testing.T) {
+	rt := &VLLMcpu{}
+	tests := []struct {
+		quant    string
+		streamer bool
+		want     []string
+	}{
+		{"int8", false, []string{"--quantization", "compressed-tensors"}},
+		{"int4", false, []string{"--quantization", "compressed-tensors"}},
+		{"", false, nil},
+		// Streaming suppresses quant flags (checkpoint is pre-quantized), even on CPU.
+		{"int8", true, nil},
+	}
+	for _, tt := range tests {
+		got := rt.MapQuantization(tt.quant, tt.streamer)
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("MapQuantization(%q, %v) = %v, want %v", tt.quant, tt.streamer, got, tt.want)
+		}
+	}
+}
+
 // --- SGLang tests ---
 
 func TestSGLang_ContainerName(t *testing.T) {
