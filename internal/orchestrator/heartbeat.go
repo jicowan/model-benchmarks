@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/accelbench/accelbench/internal/database"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PRD-40: heartbeat + ownership-aware orphan recovery.
@@ -204,6 +207,12 @@ func (o *Orchestrator) reapLeakedDistributedPools(ctx context.Context, livePods 
 		log.Printf("[recovery] distributed lock owner %q is dead — releasing stale lock", owner)
 		o.releaseDistributedLock(ctx, defaultNamespace)
 	}
+	// PRD-68 P5: one cheap Nodes.List answers "is there anything to reap?"
+	// before the NodePools.List + per-pool EC2NodeClass.Get + per-pool
+	// Nodes.List discovery that used to run every 30s forever.
+	if !o.anyMultinodeNodes(ctx) {
+		return
+	}
 	pools, err := o.selectMultinodePool(ctx, "")
 	if err != nil {
 		return // no multinode pools (enable_multinode off) — nothing to reap.
@@ -232,4 +241,20 @@ func (o *Orchestrator) reapLeakedDistributedPools(ctx context.Context, livePods 
 // and re-submitting is the fix.
 func orphanFailureMessage(ownerPod string) string {
 	return "API pod " + ownerPod + " stopped responding before the run finished — re-submit to retry"
+}
+
+// anyMultinodeNodes reports whether any node currently belongs to a
+// multinode-* Karpenter pool. Errors are treated as "maybe" (true) so the
+// full reap path still runs when the cheap check itself fails.
+func (o *Orchestrator) anyMultinodeNodes(ctx context.Context) bool {
+	nodes, err := o.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: nodePoolLabel})
+	if err != nil {
+		return true
+	}
+	for _, n := range nodes.Items {
+		if strings.HasPrefix(n.Labels[nodePoolLabel], "multinode") {
+			return true
+		}
+	}
+	return false
 }

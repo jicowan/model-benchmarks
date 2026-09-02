@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Job is a unified row representing either a single benchmark_run or a
@@ -111,7 +113,13 @@ func (r *Repository) ListJobs(ctx context.Context, f JobFilter) ([]Job, int, err
 	offsetArg := argIdx
 	args = append(args, f.Offset)
 
-	query := fmt.Sprintf(`
+	// PRD-68 P5: the page and the total are two statements in ONE round
+	// trip (pgx batch). The previous COUNT(*) OVER () forced Postgres to
+	// materialize + sort the entire UNION before applying LIMIT, so the
+	// created_at indexes were useless and the Runs page cost grew linearly
+	// with history. The page query alone can now use MergeAppend on the two
+	// created_at DESC indexes; the count is a plain aggregate.
+	cte := `
 		WITH jobs AS (
 			SELECT
 				'run'::text                     AS type,
@@ -148,38 +156,52 @@ func (r *Repository) ListJobs(ctx context.Context, f JobFilter) ([]Job, int, err
 			FROM test_suite_runs tsr
 			JOIN models         m  ON tsr.model_id         = m.id
 			JOIN instance_types it ON tsr.instance_type_id = it.id
-		)
+		)`
+	pageQuery := fmt.Sprintf(`%s
 		SELECT id, type, model_hf_id, instance_type_name, framework_or_suite,
 		       status, error_message, created_at, started_at, completed_at,
-		       deployment_mode, node_count,
-		       COUNT(*) OVER () AS total_count
+		       deployment_mode, node_count
 		FROM jobs
 		%s
 		ORDER BY %s %s NULLS LAST, created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, where, sortCol, dir, limitArg, offsetArg)
+	`, cte, where, sortCol, dir, limitArg, offsetArg)
+	// The count shares the filter args ($1..$n) but not limit/offset.
+	countQuery := fmt.Sprintf(`%s SELECT COUNT(*) FROM jobs %s`, cte, where)
+	filterArgs := args[:len(args)-2]
 
-	rows, err := r.pool.Query(ctx, query, args...)
+	batch := &pgx.Batch{}
+	batch.Queue(pageQuery, args...)
+	batch.Queue(countQuery, filterArgs...)
+	br := r.pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	rows, err := br.Query()
 	if err != nil {
 		return nil, 0, fmt.Errorf("query jobs: %w", err)
 	}
-	defer rows.Close()
-
-	var (
-		items []Job
-		total int
-	)
+	var items []Job
 	for rows.Next() {
 		var j Job
 		if err := rows.Scan(
 			&j.ID, &j.Type, &j.ModelHfID, &j.InstanceTypeName, &j.FrameworkOrSuite,
 			&j.Status, &j.ErrorMessage, &j.CreatedAt, &j.StartedAt, &j.CompletedAt,
 			&j.DeploymentMode, &j.NodeCount,
-			&total,
 		); err != nil {
+			rows.Close()
 			return nil, 0, fmt.Errorf("scan job row: %w", err)
 		}
 		items = append(items, j)
 	}
-	return items, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, fmt.Errorf("iterate jobs: %w", err)
+	}
+	rows.Close()
+
+	var total int
+	if err := br.QueryRow().Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count jobs: %w", err)
+	}
+	return items, total, nil
 }

@@ -179,7 +179,8 @@ type TestSuiteRepo interface {
 	UpdateScenarioResult(ctx context.Context, result *ScenarioResult) error
 	GetScenarioResults(ctx context.Context, suiteRunID string) ([]ScenarioResult, error)
 	ListTestSuiteRuns(ctx context.Context, modelID, instanceTypeID string) ([]TestSuiteRun, error)
-	ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error)
+	// PRD-68 P5: paginated (newest first) + total.
+	ListSuiteRunsWithNames(ctx context.Context, limit, offset int) ([]SuiteRunListItem, int, error)
 	DeleteSuiteRun(ctx context.Context, id string) error
 }
 

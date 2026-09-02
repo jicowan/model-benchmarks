@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -38,6 +39,11 @@ const (
 // Manager is the concrete implementation backed by Secrets Manager.
 type Manager struct {
 	client *secretsmanager.Client
+	// PRD-68 P5: the platform HF token is read on every recommend / run /
+	// cache call; cache it briefly and invalidate on write.
+	hfMu     sync.Mutex
+	hfTok    string
+	hfExpiry time.Time
 }
 
 // New returns a Manager configured from the ambient AWS environment
@@ -97,19 +103,48 @@ func (m *Manager) Describe(ctx context.Context, id string) (Metadata, error) {
 // or is malformed. Callers treat "" as "no platform token configured" and
 // proceed without injection.
 func (m *Manager) GetHFToken(ctx context.Context) (string, error) {
+	m.hfMu.Lock()
+	if time.Now().Before(m.hfExpiry) {
+		tok := m.hfTok
+		m.hfMu.Unlock()
+		return tok, nil
+	}
+	m.hfMu.Unlock()
+
 	raw, err := m.getSecretString(ctx, HFSecretID)
-	if err != nil || raw == "" {
+	if err != nil {
 		return "", err
 	}
-	var v HFTokenValue
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
-		return "", fmt.Errorf("hf-token secret malformed: %w", err)
+	tok := ""
+	if raw != "" {
+		var v HFTokenValue
+		if err := json.Unmarshal([]byte(raw), &v); err != nil {
+			return "", fmt.Errorf("hf-token secret malformed: %w", err)
+		}
+		tok = v.Token
 	}
-	return v.Token, nil
+	m.hfMu.Lock()
+	m.hfTok, m.hfExpiry = tok, time.Now().Add(hfTokenCacheTTL)
+	m.hfMu.Unlock()
+	return tok, nil
+}
+
+// hfTokenCacheTTL bounds how long a rotated/cleared token can still be
+// served from the in-process cache on OTHER replicas (the writing replica
+// invalidates immediately).
+const hfTokenCacheTTL = 5 * time.Minute
+
+// invalidateHFToken drops the cached token after a write.
+func (m *Manager) invalidateHFToken() {
+	m.hfMu.Lock()
+	m.hfExpiry = time.Time{}
+	m.hfTok = ""
+	m.hfMu.Unlock()
 }
 
 // PutHFToken stores a new HF token. Creates the secret on first use.
 func (m *Manager) PutHFToken(ctx context.Context, token string) error {
+	defer m.invalidateHFToken()
 	payload, err := json.Marshal(HFTokenValue{Token: token})
 	if err != nil {
 		return err
@@ -121,6 +156,7 @@ func (m *Manager) PutHFToken(ctx context.Context, token string) error {
 // DeleteHFToken removes the secret (no recovery window for simplicity —
 // operators can re-PUT immediately to restore service).
 func (m *Manager) DeleteHFToken(ctx context.Context) error {
+	defer m.invalidateHFToken()
 	_, err := m.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
 		SecretId:                   aws.String(HFSecretID),
 		ForceDeleteWithoutRecovery: aws.Bool(true),

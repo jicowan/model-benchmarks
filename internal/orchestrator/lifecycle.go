@@ -21,7 +21,6 @@ import (
 	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -974,11 +973,10 @@ func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName, runID st
 // fall back to the first .json file found if nothing matches.
 func (o *Orchestrator) readResultsFromS3Prefix(ctx context.Context, bucket, prefix, runID string) ([]byte, error) {
 	_ = runID // reserved for future exact-match probing
-	cfg, err := config.LoadDefaultConfig(ctx)
+	client, err := recommend.SharedS3Client(ctx) // PRD-68 P5: one client per process
 	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
+		return nil, err
 	}
-	client := s3.NewFromConfig(cfg)
 
 	listOut, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: &bucket,

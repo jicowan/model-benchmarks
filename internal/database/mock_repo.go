@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -327,7 +328,24 @@ func (m *MockRepo) GetShardMetrics(_ context.Context, runID string) ([]ShardMetr
 func (m *MockRepo) GetBenchmarkRun(_ context.Context, runID string) (*BenchmarkRun, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.runs[runID], nil
+	run := m.runs[runID]
+	if run == nil {
+		return nil, nil
+	}
+	// PRD-68 P5: mirror the real repo's joined display names.
+	for _, mdl := range m.models {
+		if mdl.ID == run.ModelID {
+			run.ModelHfID = mdl.HfID
+			break
+		}
+	}
+	for _, it := range m.instTypes {
+		if it.ID == run.InstanceTypeID {
+			run.InstanceTypeName = it.Name
+			break
+		}
+	}
+	return run, nil
 }
 
 func (m *MockRepo) GetRunsByStatus(_ context.Context, status string) ([]BenchmarkRun, error) {
@@ -1092,7 +1110,7 @@ func (m *MockRepo) ListTestSuiteRuns(_ context.Context, modelID, instanceTypeID 
 	return runs, nil
 }
 
-func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context) ([]SuiteRunListItem, error) {
+func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context, limit, offset int) ([]SuiteRunListItem, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var items []SuiteRunListItem
@@ -1121,7 +1139,20 @@ func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context) ([]SuiteRunListItem
 			CompletedAt:      run.CompletedAt,
 		})
 	}
-	return items, nil
+	// PRD-68 P5: newest first + page slice, mirroring the real repo.
+	sort.Slice(items, func(a, b int) bool { return items[a].CreatedAt.After(items[b].CreatedAt) })
+	total := len(items)
+	if limit <= 0 {
+		limit = 25
+	}
+	if offset >= len(items) {
+		return nil, total, nil
+	}
+	items = items[offset:]
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, total, nil
 }
 
 func (m *MockRepo) DeleteSuiteRun(_ context.Context, id string) error {

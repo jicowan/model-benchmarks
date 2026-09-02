@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ type Server struct {
 	cognitoIDP CognitoIDP    // PRD-43 — Cognito InitiateAuth / GlobalSignOut
 	authConfig auth.Config   // PRD-43 — user pool + client ID + AUTH_DISABLED flag
 	authVerifier *auth.Verifier // PRD-43 — JWT verifier (for middleware + /auth/me fallback)
+	hot          *hotCaches     // PRD-68 P5 — model-config + calibration TTL caches
 }
 
 // NewServer creates a new API server. hostname is the running pod's name
@@ -59,6 +61,7 @@ func NewServer(repo database.Repo, client kubernetes.Interface, hostname string)
 		// Cognito config. cmd/server/main.go calls SetAuth to flip this off
 		// in production, with AUTH_DISABLED as an explicit escape hatch.
 		authConfig: auth.Config{Disabled: true},
+		hot:        newHotCaches(),
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -74,6 +77,7 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 		hostname:   hostname,
 		cache:      cache.NopCache{},
 		authConfig: auth.Config{Disabled: true},
+		hot:        newHotCaches(),
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -161,6 +165,21 @@ func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
 //
 // Exported for use by internal/seed.
 func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
+	// PRD-68 P5: configs are immutable per (model, revision="main" here), so
+	// serve repeats from a 10-minute cache. Only successful fetches are
+	// cached; a gated-model 401 is retried (the user may add a token).
+	if cfg, ok := s.hot.modelConfig.get(modelID); ok {
+		return cfg, nil
+	}
+	cfg, err := s.fetchModelConfigUncached(ctx, modelID, hfToken)
+	if err != nil {
+		return nil, err
+	}
+	s.hot.modelConfig.set(modelID, cfg)
+	return cfg, nil
+}
+
+func (s *Server) fetchModelConfigUncached(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
 	if mc, _ := s.repo.GetModelCacheByHfID(ctx, modelID, "main"); mc != nil && mc.Status == "cached" {
 		if cfg, err := recommend.FetchModelConfigFromS3(ctx, mc.S3URI); err == nil {
 			return cfg, nil
@@ -968,11 +987,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := runDetailResponse{BenchmarkRun: run}
-	if details, _ := s.repo.GetRunExportDetails(r.Context(), runID); details != nil {
-		resp.ModelHfID = details.ModelHfID
-		resp.InstanceTypeName = details.InstanceTypeName
-	}
+	// PRD-68 P5: GetBenchmarkRun now joins the model + instance names, so the
+	// second 3-table query (GetRunExportDetails) is gone from this hot path —
+	// ResultDetail polls it every 5s while a run is in flight.
+	resp := runDetailResponse{BenchmarkRun: run, ModelHfID: run.ModelHfID, InstanceTypeName: run.InstanceTypeName}
 
 	includes := parseIncludes(r.URL.Query().Get("include"))
 	if includes != nil {
@@ -1336,7 +1354,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	// the recommender so the host-memory check uses empirical data
 	// when available. Unseen families keep the conservative default.
 	// Non-fatal on query failure.
-	if calib, err := s.repo.GetHostMemCalibration(r.Context()); err == nil {
+	if calib, err := s.hostMemCalibration(r.Context()); err == nil {
 		opts.HostMemCalibration = calib
 	} else {
 		log.Printf("recommend: host mem calibration query failed: %v", err)
@@ -1458,6 +1476,13 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	if region == "" {
 		region = "us-east-2"
+	}
+	// PRD-68 P5: the region is part of a cache key; refuse anything that
+	// isn't shaped like an AWS region so a caller can't grow the cache with
+	// ?region=<random> (Perf M3).
+	if !awsRegionRe.MatchString(region) {
+		writeError(w, http.StatusBadRequest, "region must look like us-east-2")
+		return
 	}
 	cacheKey := "pricing:" + region
 	if data := s.cache.Get(cacheKey); data != nil {
@@ -1638,7 +1663,22 @@ func (s *Server) handleListTestSuites(w http.ResponseWriter, r *http.Request) {
 
 // handleListSuiteRuns returns a list of test suite runs.
 func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
-	items, err := s.repo.ListSuiteRunsWithNames(r.Context())
+	// PRD-68 P5: paginated {rows,total} like every other list endpoint
+	// (PRD-36). The previous bare array was hard-capped at 100 rows, so the
+	// UI silently lost suites beyond that.
+	q := r.URL.Query()
+	limit, offset := 25, 0
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	items, total, err := s.repo.ListSuiteRunsWithNames(r.Context(), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list suite runs failed")
 		return
@@ -1646,7 +1686,7 @@ func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []database.SuiteRunListItem{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": total})
 }
 
 // handleCreateSuiteRun creates a new test suite run.
@@ -1903,11 +1943,19 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// PRD-68 P5: one overrides query instead of one per scenario (N+1 on a
+	// 5s-polled endpoint).
+	overrides := map[string]*database.ScenarioOverride{}
+	if all, err := s.repo.ListScenarioOverrides(ctx); err == nil {
+		for i := range all {
+			overrides[all[i].ScenarioID] = &all[i]
+		}
+	}
 	scenarioDefs := make([]suiteScenarioDefinition, 0, len(results))
 	maxNumSeqs := 0
 	for _, r := range results {
 		if sc := scenario.Get(r.ScenarioID); sc != nil {
-			if ov, _ := s.repo.GetScenarioOverride(ctx, r.ScenarioID); ov != nil {
+			if ov := overrides[r.ScenarioID]; ov != nil {
 				sc = sc.Merge(&scenario.Override{
 					NumWorkers: ov.NumWorkers,
 					Streaming:  ov.Streaming,
@@ -2035,3 +2083,6 @@ func (s *Server) fetchSuiteIncludes(ctx context.Context, resp *suiteRunResponse,
 }
 
 
+
+// awsRegionRe matches AWS region ids (us-east-2, eu-central-1, ap-southeast-3).
+var awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`)

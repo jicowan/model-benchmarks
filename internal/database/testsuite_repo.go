@@ -275,9 +275,18 @@ type SuiteRunListItem struct {
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 }
 
-// ListSuiteRunsWithNames returns suite runs with model and instance names joined.
-func (r *Repository) ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error) {
-	rows, err := r.pool.Query(ctx, `
+// ListSuiteRunsWithNames returns a page of suite runs (newest first) with
+// model and instance names joined, plus the total row count (PRD-68 P5;
+// previously a hard LIMIT 100 with no total).
+func (r *Repository) ListSuiteRunsWithNames(ctx context.Context, limit, offset int) ([]SuiteRunListItem, int, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 25
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	batch := &pgx.Batch{}
+	batch.Queue(`
 		SELECT
 			tsr.id, m.hf_id, it.name, tsr.suite_id, tsr.status,
 			tsr.created_at, tsr.started_at, tsr.completed_at
@@ -285,26 +294,38 @@ func (r *Repository) ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunList
 		JOIN models m ON tsr.model_id = m.id
 		JOIN instance_types it ON tsr.instance_type_id = it.id
 		ORDER BY tsr.created_at DESC
-		LIMIT 100
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("query suite runs: %w", err)
-	}
-	defer rows.Close()
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	batch.Queue(`SELECT COUNT(*) FROM test_suite_runs`)
+	br := r.pool.SendBatch(ctx, batch)
+	defer br.Close()
 
+	rows, err := br.Query()
+	if err != nil {
+		return nil, 0, fmt.Errorf("query suite runs: %w", err)
+	}
 	var items []SuiteRunListItem
 	for rows.Next() {
 		var item SuiteRunListItem
-		err := rows.Scan(
+		if err := rows.Scan(
 			&item.ID, &item.ModelHfID, &item.InstanceTypeName, &item.SuiteID,
 			&item.Status, &item.CreatedAt, &item.StartedAt, &item.CompletedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scan suite run: %w", err)
+		); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("scan suite run: %w", err)
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, err
+	}
+	rows.Close()
+	var total int
+	if err := br.QueryRow().Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count suite runs: %w", err)
+	}
+	return items, total, nil
 }
 
 // DeleteSuiteRun removes a test suite run and its associated scenario results.

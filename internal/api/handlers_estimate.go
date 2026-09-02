@@ -171,7 +171,7 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 	// PRD-47 PR #5: apply per-family host-memory calibration. Model
 	// type is derived from the HF config's model_type field (populated
 	// just below once FetchModelConfig returns).
-	if calib, err := s.repo.GetHostMemCalibration(r.Context()); err == nil {
+	if calib, err := s.hostMemCalibration(r.Context()); err == nil {
 		recOpts.HostMemCalibration = calib
 	}
 	if modelCfg != nil {

@@ -46,46 +46,26 @@ function SectionHeader({ index, label, action }: { index: string; label: string;
 // Generates a tiny bar chart from run timestamps (last N days). PRD-35
 // adds a cost-per-day overlay on the hover caption + idle summary.
 function ActivityPulse({
-  runTimestamps,
-  suiteTimestamps,
-  costPerDay,
+  perDay,
 }: {
-  runTimestamps: string[];
-  suiteTimestamps: string[];
-  costPerDay?: { day: string; cost_usd: number }[];
+  // PRD-68 P5: the server buckets runs / suites / cost per UTC day
+  // (DashboardStats.cost_per_day, oldest → newest, 14 rows). The chart used
+  // to fetch 100 runs + every suite and bucket their timestamps client-side.
+  perDay?: { day: string; cost_usd: number; runs: number; suites: number }[];
 }) {
   const DAYS = 14;
   const CHART_HEIGHT = 48;
   const [hovered, setHovered] = useState<number | null>(null);
 
-  // Align bucket boundaries to local midnight so same-day runs land in the
-  // same bucket. Compare calendar dates rather than ms-floored arithmetic,
-  // otherwise a run from e.g. 22h ago computes (22/24).floor = 0 and gets
-  // double-booked into "today" instead of "yesterday".
-  const runBuckets = Array(DAYS).fill(0);
-  const suiteBuckets = Array(DAYS).fill(0);
+  const runBuckets = Array<number>(DAYS).fill(0);
+  const suiteBuckets = Array<number>(DAYS).fill(0);
   const costBuckets = Array<number>(DAYS).fill(0);
-  const bucketIndex = (ts: string) => {
-    const now = new Date();
-    const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const d = new Date(ts);
-    const dayMid = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const daysAgo = Math.round((todayMid - dayMid) / (1000 * 60 * 60 * 24));
-    return DAYS - 1 - Math.max(0, daysAgo);
-  };
-  runTimestamps.forEach((ts) => {
-    const idx = bucketIndex(ts);
-    if (idx >= 0 && idx < DAYS) runBuckets[idx]++;
-  });
-  suiteTimestamps.forEach((ts) => {
-    const idx = bucketIndex(ts);
-    if (idx >= 0 && idx < DAYS) suiteBuckets[idx]++;
-  });
-  // costPerDay from the API is ordered oldest → newest (last 14 UTC days).
-  // Match that ordering so index 0 = -13d and index 13 = today.
-  if (costPerDay) {
-    for (let i = 0; i < Math.min(DAYS, costPerDay.length); i++) {
-      costBuckets[i] = costPerDay[i].cost_usd;
+  // perDay is ordered oldest → newest; index 0 = -13d and index 13 = today.
+  if (perDay) {
+    for (let i = 0; i < Math.min(DAYS, perDay.length); i++) {
+      runBuckets[i] = perDay[i].runs ?? 0;
+      suiteBuckets[i] = perDay[i].suites ?? 0;
+      costBuckets[i] = perDay[i].cost_usd;
     }
   }
   const buckets = runBuckets.map((n, i) => n + suiteBuckets[i]);
@@ -131,7 +111,7 @@ function ActivityPulse({
               RUN{runBuckets[hovered] === 1 ? "" : "S"} ·{" "}
               <span className="text-ink-0 font-mono tabular">{suiteBuckets[hovered]}</span>{" "}
               SUITE{suiteBuckets[hovered] === 1 ? "" : "S"} · {hoveredLabel}
-              {costPerDay && (
+              {perDay && (
                 <>
                   {" · "}
                   <span className="text-ink-0 font-mono tabular">
@@ -143,7 +123,7 @@ function ActivityPulse({
           ) : (
             <>
               {total} TOTAL · PEAK {max}/DAY
-              {costPerDay && (
+              {perDay && (
                 <>
                   {" · "}
                   <span className="text-ink-0 font-mono tabular">
@@ -210,6 +190,7 @@ export default function Dashboard() {
   // paginated slice.
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<SuiteRunListItem[]>([]);
+  const [suiteTotal, setSuiteTotal] = useState(0);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -233,16 +214,20 @@ export default function Dashboard() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
+    // PRD-68 P5: fetch only what the panels render. Recent runs shows 8,
+    // Test suites shows 3 + a total; the activity chart and every stat card
+    // come from the aggregate endpoint.
     Promise.all([
-      listRuns({ limit: 100 }).catch(() => [] as RunListItem[]),
-      listSuiteRuns().catch(() => [] as SuiteRunListItem[]),
+      listRuns({ limit: 8 }).catch(() => [] as RunListItem[]),
+      listSuiteRuns({ limit: 3 }).catch(() => ({ rows: [] as SuiteRunListItem[], total: 0 })),
       // Top Models panel only — not for stat cards. The 100-row cap is fine
       // here since it's a "most-common model" frequency view.
       listCatalog({ limit: 100 }).then((p) => p.rows).catch(() => [] as CatalogEntry[]),
       getDashboardStats().catch(() => null),
     ]).then(([r, sr, c, s]) => {
       setRuns(r);
-      setSuiteRuns(sr);
+      setSuiteRuns(sr.rows);
+      setSuiteTotal(sr.total);
       setCatalog(c);
       setStats(s);
       setLoading(false);
@@ -405,11 +390,7 @@ export default function Dashboard() {
             {loading ? (
               <div className="h-12 flex items-center caption">Loading…</div>
             ) : (
-              <ActivityPulse
-                runTimestamps={runs.map((r) => r.created_at)}
-                suiteTimestamps={suiteRuns.map((s) => s.created_at)}
-                costPerDay={stats?.cost_per_day}
-              />
+              <ActivityPulse perDay={stats?.cost_per_day} />
             )}
           </div>
         </section>
@@ -533,7 +514,7 @@ export default function Dashboard() {
               <div className="panel p-4">
                 <div className="flex items-baseline gap-3 mb-3">
                   <span className="font-mono text-[28px] tabular text-ink-0 leading-none">
-                    {loading ? "—" : suiteRuns.length}
+                    {loading ? "—" : (stats?.total_suites ?? suiteTotal)}
                   </span>
                   <span className="caption">suite runs</span>
                 </div>

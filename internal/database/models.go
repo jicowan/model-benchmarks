@@ -125,6 +125,11 @@ type BenchmarkRun struct {
 	// PRD-68 P4: Cognito sub of the submitting user; NULL on legacy rows.
 	// Cancel/delete are owner-or-admin.
 	CreatedBy *string `json:"created_by,omitempty"`
+	// PRD-68 P5: joined display names, populated by GetBenchmarkRun so the
+	// detail handler needs one query. Not serialized here — the detail
+	// response carries them at the top level.
+	ModelHfID        string `json:"-"`
+	InstanceTypeName string `json:"-"`
 	// PRD-47: peak container workingSetBytes observed during the load
 	// phase, in GiB. Powers per-family host-memory calibration. Null on
 	// historical rows and on runs where the kubelet scrape failed.

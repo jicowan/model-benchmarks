@@ -120,11 +120,9 @@ export default function Run() {
     const initialModel = searchParams.get("model")?.trim();
     if (!initialModel) return;
     if (form.model_s3_uri) return; // URL already provided one
-    listModelCache()
+    listModelCache({ hf_id: initialModel, status: "cached", limit: 1 })
       .then((resp) => {
-        const match = resp.rows.find(
-          (c) => c.hf_id === initialModel && c.status === "cached"
-        );
+        const match = resp.rows[0];
         if (match) {
           setCachedModel(match);
           set("model_s3_uri", match.s3_uri);
@@ -315,11 +313,9 @@ export default function Run() {
     setOOMHistory(null);
 
     const modelId = detail.modelId;
-    listModelCache()
+    listModelCache({ hf_id: modelId, status: "cached", limit: 1 })
       .then((resp) => {
-        const match = resp.rows.find(
-          (c) => c.hf_id === modelId && c.status === "cached"
-        );
+        const match = resp.rows[0];
         setCachedModel(match || null);
         if (match) {
           set("model_s3_uri", match.s3_uri);

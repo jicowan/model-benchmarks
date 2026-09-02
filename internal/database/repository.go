@@ -561,25 +561,29 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 	var run BenchmarkRun
 	var maxModelLen *int
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, model_id, instance_type_id, framework, framework_version,
-		        tensor_parallel_degree, quantization, concurrency,
-		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, max_model_len, status, error_message, superseded,
-		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
-		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested,
-		        max_num_batched_tokens, scenario_id, kv_cache_dtype,
-		        host_memory_peak_gib,
-		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
-		        deployment_mode, node_count, pipeline_parallel_degree, network_mode,
-		        prefill_replicas, prefill_tp, prefill_pp,
-		        decode_replicas, decode_tp, decode_pp,
-		        kv_connector, kv_transfer_backend,
-		        prefill_max_num_batched_tokens, decode_max_num_batched_tokens,
-		        both_replicas, both_tp, both_max_num_batched_tokens,
-		        pd_noncached_tokens, pd_prefix_cache_weight, pd_queue_scorer_weight,
-		        pd_max_prefix_blocks, pd_lru_capacity_per_server, pd_decider_strategy,
-		        created_by
-		 FROM benchmark_runs WHERE id = $1`, runID,
+		`SELECT br.id, br.model_id, br.instance_type_id, br.framework, br.framework_version,
+		        br.tensor_parallel_degree, br.quantization, br.concurrency,
+		        br.input_sequence_length, br.output_sequence_length, br.dataset_name,
+		        br.run_type, br.max_model_len, br.status, br.error_message, br.superseded,
+		        br.started_at, br.loadgen_started_at, br.completed_at, br.created_at, model_s3_uri,
+		        br.total_cost_usd, br.loadgen_cost_usd, br.owner_pod, br.cancel_requested,
+		        br.max_num_batched_tokens, br.scenario_id, br.kv_cache_dtype,
+		        br.host_memory_peak_gib,
+		        br.streamer_mode, br.streamer_concurrency, br.streamer_memory_limit_gib,
+		        br.deployment_mode, br.node_count, br.pipeline_parallel_degree, br.network_mode,
+		        br.prefill_replicas, br.prefill_tp, br.prefill_pp,
+		        br.decode_replicas, br.decode_tp, br.decode_pp,
+		        br.kv_connector, br.kv_transfer_backend,
+		        br.prefill_max_num_batched_tokens, br.decode_max_num_batched_tokens,
+		        br.both_replicas, br.both_tp, br.both_max_num_batched_tokens,
+		        br.pd_noncached_tokens, br.pd_prefix_cache_weight, br.pd_queue_scorer_weight,
+		        br.pd_max_prefix_blocks, br.pd_lru_capacity_per_server, br.pd_decider_strategy,
+		        br.created_by,
+		        COALESCE(m.hf_id, ''), COALESCE(it.name, '')
+		 FROM benchmark_runs br
+		 LEFT JOIN models m ON m.id = br.model_id
+		 LEFT JOIN instance_types it ON it.id = br.instance_type_id
+		 WHERE br.id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
@@ -597,7 +601,8 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.BothReplicas, &run.BothTP, &run.BothMaxNumBatchedTokens,
 		&run.PDNonCachedTokens, &run.PDPrefixCacheWeight, &run.PDQueueScorerWeight,
 		&run.PDMaxPrefixBlocks, &run.PDLRUCapacityPerServer, &run.PDDeciderStrategy,
-		&run.CreatedBy)
+		&run.CreatedBy,
+		&run.ModelHfID, &run.InstanceTypeName)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

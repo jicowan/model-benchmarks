@@ -457,8 +457,15 @@ export interface SuiteRunListItem {
   completed_at?: string;
 }
 
-export async function listSuiteRuns(): Promise<SuiteRunListItem[]> {
-  return fetchJSON<SuiteRunListItem[]>(`${BASE}/suite-runs`);
+// PRD-68 P5: paginated { rows, total } like every other list endpoint.
+export async function listSuiteRuns(
+  opts: { limit?: number; offset?: number } = {}
+): Promise<Paginated<SuiteRunListItem>> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return fetchJSON<Paginated<SuiteRunListItem>>(`${BASE}/suite-runs${qs ? `?${qs}` : ""}`);
 }
 
 // PRD-21: Model Cache
@@ -468,6 +475,7 @@ export async function listModelCache(
   filter: ModelCacheFilter = {}
 ): Promise<Paginated<ModelCache>> {
   const params = new URLSearchParams();
+  if (filter.hf_id) params.set("hf_id", filter.hf_id);
   if (filter.status) params.set("status", filter.status);
   if (filter.sort) params.set("sort", filter.sort);
   if (filter.order) params.set("order", filter.order);
