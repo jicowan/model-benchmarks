@@ -22,6 +22,9 @@ spec:
       terminationGracePeriodSeconds: 30
 {{- if .ModelServiceAccount }}
       serviceAccountName: {{ .ModelServiceAccount }}
+{{- else }}
+      # PRD-68 P1: no SA token unless the streamer needs S3 credentials.
+      automountServiceAccountToken: false
 {{- end }}
       tolerations:
 {{- if eq .AcceleratorType "gpu" }}
@@ -58,7 +61,7 @@ spec:
               protocol: TCP
           env:
             - name: HF_TOKEN
-              value: "{{ .HfToken }}"
+              value: {{ .HfToken | yamlQuote }}
 {{- if and (eq .AcceleratorType "gpu") (gt .TensorParallelDegree 1) }}
             - name: NCCL_DEBUG
               value: "INFO"
@@ -113,7 +116,11 @@ spec:
 {{- if .VLLMImageOverride }}
           image: {{ .VLLMImageOverride }}
 {{- else }}
-          image: {{ if .PullThroughRegistry }}{{ .PullThroughRegistry }}/dockerhub/{{ end }}vllm/vllm-openai:{{ .FrameworkVersion }}
+{{- if .PullThroughRegistry }}
+          image: {{ .PullThroughRegistry }}/dockerhub/vllm/vllm-openai:{{ .FrameworkVersion }}
+{{- else }}
+          image: vllm/vllm-openai:{{ .FrameworkVersion }}
+{{- end }}
 {{- end }}
 {{- else }}
           image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
@@ -124,7 +131,7 @@ spec:
               protocol: TCP
           env:
             - name: HF_TOKEN
-              value: "{{ .HfToken }}"
+              value: {{ .HfToken | yamlQuote }}
 {{- if and (eq .AcceleratorType "gpu") (gt .TensorParallelDegree 1) }}
             - name: NCCL_DEBUG
               value: "INFO"
@@ -162,13 +169,13 @@ spec:
                    self-documenting. Tuning is JSON in
                    --model-loader-extra-config (concurrency,
                    memory_limit bytes, distributed). */}}
-            - "{{ .ModelS3URI }}"
+            - {{ .ModelS3URI | yamlQuote }}
             - "--load-format"
             - "runai_streamer"
             - "--model-loader-extra-config"
             - '{"concurrency":{{ if gt .StreamerConcurrency 0 }}{{ .StreamerConcurrency }}{{ else }}32{{ end }}{{ if gt .TensorParallelDegree 1 }},"distributed":true{{ end }}{{ if gt .StreamerMemoryLimitGiB 0 }},"memory_limit":{{ gibBytes .StreamerMemoryLimitGiB }}{{ end }}}'
 {{- else }}
-            - "{{ .ModelHfID }}"
+            - {{ .ModelHfID | yamlQuote }}
 {{- end }}
             - "--host"
             - "0.0.0.0"
@@ -199,7 +206,7 @@ spec:
           args:
 {{- if .UseRunaiStreamer }}
             - "--model"
-            - "{{ .ModelS3URI }}"
+            - {{ .ModelS3URI | yamlQuote }}
             - "--load-format"
             - "runai_streamer"
             - "--model-loader-extra-config"
@@ -208,7 +215,7 @@ spec:
             - '{"concurrency":{{ if gt .StreamerConcurrency 0 }}{{ .StreamerConcurrency }}{{ else }}32{{ end }}{{ if gt .TensorParallelDegree 1 }},"distributed":true{{ end }}}'
 {{- else }}
             - "--model"
-            - "{{ .ModelHfID }}"
+            - {{ .ModelHfID | yamlQuote }}
 {{- end }}
             - "--port"
             - "8000"
@@ -245,13 +252,13 @@ spec:
 {{- end }}
 {{- if .KVCacheDtype }}
             - "--kv-cache-dtype"
-            - "{{ .KVCacheDtype }}"
+            - {{ .KVCacheDtype | yamlQuote }}
 {{- end }}
 {{- else }}
           command: ["vllm"]
           args:
             - "serve"
-            - "{{ .ModelHfID }}"
+            - {{ .ModelHfID | yamlQuote }}
             - "--port"
             - "8000"
             - "--tensor-parallel-size"
@@ -273,10 +280,13 @@ spec:
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if eq .AcceleratorType "cpu" }}
-          # PRD-67: vLLM CPU needs SYS_NICE (get_mempolicy) + unconfined seccomp
-          # (migrate_pages / numa_migrate_pages) for NUMA thread pinning.
+          # PRD-68 P1: generated pods can never escalate, regardless of what
+          # the (now strictly quoted) user inputs contain.
           securityContext:
+            allowPrivilegeEscalation: false
+{{- if eq .AcceleratorType "cpu" }}
+            # PRD-67: vLLM CPU needs SYS_NICE (get_mempolicy) + unconfined seccomp
+            # (migrate_pages / numa_migrate_pages) for NUMA thread pinning.
             seccompProfile:
               type: Unconfined
             capabilities:

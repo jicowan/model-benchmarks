@@ -49,13 +49,13 @@ spec:
           env:
 {{- if .HfToken }}
             - name: HF_TOKEN
-              value: "{{ .HfToken }}"
+              value: {{ .HfToken | yamlQuote }}
 {{- end }}
 {{- if .AWSRegion }}
             - name: AWS_REGION
-              value: "{{ .AWSRegion }}"
+              value: {{ .AWSRegion | yamlQuote }}
             - name: AWS_DEFAULT_REGION
-              value: "{{ .AWSRegion }}"
+              value: {{ .AWSRegion | yamlQuote }}
 {{- end }}
           volumeMounts:
             - name: config

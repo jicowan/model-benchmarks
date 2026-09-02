@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/component: cache-job
     accelbench/role: cache-job
-    accelbench/cache-id: "{{ .CacheID }}"
+    accelbench/cache-id: {{ .CacheID | yamlQuote }}
 spec:
   backoffLimit: 1
   ttlSecondsAfterFinished: 3600
@@ -42,20 +42,20 @@ spec:
           # Only ~8 MiB is held in memory at a time; no local disk is used
           # for model weights.
           args:
-            - "{{ .ModelHfID }}"
+            - {{ .ModelHfID | yamlQuote }}
             - "--revision"
-            - "{{ .HfRevision }}"
+            - {{ .HfRevision | yamlQuote }}
             - "--bucket"
-            - "{{ .S3Bucket }}"
+            - {{ .S3Bucket | yamlQuote }}
             - "--prefix"
-            - "models/{{ .ModelPath }}"
+            - {{ printf "models/%s" .ModelPath | yamlQuote }}
           env:
 {{- if .HfToken }}
             - name: HF_TOKEN
-              value: "{{ .HfToken }}"
+              value: {{ .HfToken | yamlQuote }}
 {{- end }}
             - name: AWS_REGION
-              value: "{{ .AWSRegion }}"
+              value: {{ .AWSRegion | yamlQuote }}
           resources:
             requests:
               cpu: "500m"

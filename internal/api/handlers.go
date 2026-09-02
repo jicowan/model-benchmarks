@@ -417,6 +417,11 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 	if req.ModelHfID == "" {
 		return "", &createRunError{http.StatusBadRequest, "model_hf_id or model_s3_uri is required"}
 	}
+	// PRD-68 P1: reject malformed free-text fields before anything is
+	// persisted or rendered into a manifest.
+	if err := validateRunRequest(req); err != nil {
+		return "", &createRunError{http.StatusBadRequest, err.Error()}
+	}
 
 	// Look up or auto-register model.
 	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
@@ -1623,6 +1628,11 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	// Validate required fields
 	if req.ModelHfID == "" || req.InstanceTypeName == "" {
 		writeError(w, http.StatusBadRequest, "model_hf_id (or model_s3_uri) and instance_type_name are required")
+		return
+	}
+	// PRD-68 P1: free-text field validation (see validate.go).
+	if err := validateSuiteRunRequest(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

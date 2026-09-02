@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -108,6 +109,11 @@ func (s *Server) handleCreateModelCache(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.HfRevision == "" {
 		req.HfRevision = "main"
+	}
+	// PRD-68 P1: free-text field validation (see validate.go).
+	if err := validateCacheModelRequest(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	ctx := r.Context()
@@ -319,6 +325,14 @@ func (s *Server) handleRegisterCustomModel(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "s3_uri must start with s3://")
 		return
 	}
+	if err := validateS3URI("s3_uri", req.S3URI); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.DisplayName) > 256 || strings.ContainsAny(req.DisplayName, "\x00\n\r") {
+		writeError(w, http.StatusBadRequest, "display_name must be at most 256 printable characters")
+		return
+	}
 
 	now := time.Now()
 	mc := &database.ModelCache{
@@ -470,11 +484,20 @@ func (s *Server) applyJobYAML(ctx context.Context, ns, yamlStr string) error {
 		return fmt.Errorf("decode YAML: %w", err)
 	}
 	var job batchv1.Job
-	if err := json.Unmarshal(raw, &job); err != nil {
+	// PRD-68 P1: strict decode — an unexpected field in a rendered manifest
+	// is a template bug or an injection attempt, never something to apply.
+	if err := strictUnmarshal(raw, &job); err != nil {
 		return fmt.Errorf("unmarshal job: %w", err)
 	}
 	_, err := s.client.BatchV1().Jobs(ns).Create(ctx, &job, metav1.CreateOptions{})
 	return err
+}
+
+// strictUnmarshal is json.Unmarshal with DisallowUnknownFields.
+func strictUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 func modelPathFromHfID(hfID string) string {

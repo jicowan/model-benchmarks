@@ -1142,7 +1142,7 @@ func (o *Orchestrator) applyYAML(ctx context.Context, ns, yamlStr string) error 
 
 func (o *Orchestrator) createDeployment(ctx context.Context, ns, docJSON string) error {
 	var dep appsv1.Deployment
-	if err := json.Unmarshal([]byte(docJSON), &dep); err != nil {
+	if err := strictUnmarshal([]byte(docJSON), &dep); err != nil {
 		return fmt.Errorf("decode deployment: %w", err)
 	}
 	_, err := o.client.AppsV1().Deployments(ns).Create(ctx, &dep, metav1.CreateOptions{})
@@ -1151,7 +1151,7 @@ func (o *Orchestrator) createDeployment(ctx context.Context, ns, docJSON string)
 
 func (o *Orchestrator) createService(ctx context.Context, ns, docJSON string) error {
 	var svc corev1.Service
-	if err := json.Unmarshal([]byte(docJSON), &svc); err != nil {
+	if err := strictUnmarshal([]byte(docJSON), &svc); err != nil {
 		return fmt.Errorf("decode service: %w", err)
 	}
 	_, err := o.client.CoreV1().Services(ns).Create(ctx, &svc, metav1.CreateOptions{})
@@ -1160,11 +1160,21 @@ func (o *Orchestrator) createService(ctx context.Context, ns, docJSON string) er
 
 func (o *Orchestrator) createJob(ctx context.Context, ns, docJSON string) error {
 	var job batchv1.Job
-	if err := json.Unmarshal([]byte(docJSON), &job); err != nil {
+	if err := strictUnmarshal([]byte(docJSON), &job); err != nil {
 		return fmt.Errorf("decode job: %w", err)
 	}
 	_, err := o.client.BatchV1().Jobs(ns).Create(ctx, &job, metav1.CreateOptions{})
 	return err
+}
+
+// strictUnmarshal is json.Unmarshal with DisallowUnknownFields (PRD-68 P1).
+// A rendered manifest carrying a field the typed object doesn't know about
+// is either a template bug or an attempt to smuggle pod-spec fields through a
+// user-controlled value; neither should reach the API server.
+func strictUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 func derefStr(s *string) string {
