@@ -78,6 +78,10 @@ spec:
             - name: DB_MAX_CONNS
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.api.runRetentionDays }}
+            - name: RUN_RETENTION_DAYS
+              value: {{ .Values.api.runRetentionDays | quote }}
+            {{- end }}
             {{- if or .Values.huggingface.token .Values.huggingface.existingSecret }}
             - name: HF_SECRET_NAME
               value: "{{ include "accelbench.hfSecretName" . }}"

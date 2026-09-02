@@ -74,6 +74,8 @@ type Repo interface {
 	GetRunOwnership(ctx context.Context, ids []string) (map[string]RunOwnership, error)
 	// PRD-68 P3: singleton background jobs run under a session advisory lock.
 	WithAdvisoryLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (ran bool, err error)
+	// PRD-68 P6: opt-in retention (RUN_RETENTION_DAYS).
+	PurgeTerminalRunsOlderThan(ctx context.Context, days, batch int) (int64, error)
 	Heartbeat(ctx context.Context, pod string) error
 	LiveAPIPods(ctx context.Context, ttl time.Duration) ([]string, error)
 	DeleteStaleHeartbeats(ctx context.Context, olderThan time.Duration) error

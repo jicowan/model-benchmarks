@@ -190,12 +190,13 @@ func TestTeardown(t *testing.T) {
 	ctx := context.Background()
 	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
 
-	// Deploy resources.
-	o.deployModel(ctx, "default", "bench-12345678", cfg)
-	o.launchLoadgen(ctx, "default", "loadgen-12345678", "bench-12345678", cfg)
+	// Deploy resources using the PRD-68 P6 naming helpers (12-char suffix).
+	modelName, loadgenName, cmName := modelNameFor(cfg.RunID), loadgenNameFor(cfg.RunID), loadgenCMNameFor(cfg.RunID)
+	o.deployModel(ctx, "default", modelName, cfg)
+	o.launchLoadgen(ctx, "default", loadgenName, modelName, cfg)
 
 	// Teardown (now includes configMapName).
-	o.teardown(ctx, "default", "bench-12345678", "loadgen-12345678", "loadgen-config-12345678")
+	o.teardown(ctx, "default", modelName, loadgenName, cmName)
 
 	// Verify deployment deleted.
 	deps, _ := client.AppsV1().Deployments("default").List(ctx, metav1.ListOptions{})

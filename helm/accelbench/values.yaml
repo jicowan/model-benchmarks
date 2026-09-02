@@ -71,6 +71,10 @@ api:
   # PRD-68 P6: PodDisruptionBudget — keep one API pod serving during node
   # drains / upgrades. Set to 0 to disable.
   pdbMinAvailable: 1
+  # PRD-68 P6: opt-in retention. 0 = keep everything. N = one replica purges
+  # completed/failed runs + suites (and their metrics) older than N days,
+  # hourly, in batches of 500.
+  runRetentionDays: 0
   resources:
     requests:
       cpu: 250m
@@ -112,6 +116,11 @@ web:
 ingress:
   enabled: false
   host: ""
+  # ALB scheme: internet-facing (default) or internal. PRD-68 P6: the chart
+  # refuses to render when cognito.authDisabled=true AND the scheme is
+  # internet-facing unless allowAuthDisabled is set.
+  scheme: "internet-facing"
+  allowAuthDisabled: false
   tls:
     # One of: acm-route53, acm-existing, none.
     #   acm-route53:  Terraform creates + validates an ACM cert; populate

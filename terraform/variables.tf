@@ -389,3 +389,15 @@ variable "ingress_deployed" {
   type        = bool
   default     = false
 }
+
+# PRD-68 P6: Cognito threat protection. OFF (default) adds no add-on block
+# (no Plus-plan cost); AUDIT logs risk events; ENFORCED blocks/challenges.
+variable "cognito_advanced_security_mode" {
+  description = "Cognito advanced security mode: OFF, AUDIT, or ENFORCED (Plus plan)."
+  type        = string
+  default     = "OFF"
+  validation {
+    condition     = contains(["OFF", "AUDIT", "ENFORCED"], var.cognito_advanced_security_mode)
+    error_message = "cognito_advanced_security_mode must be OFF, AUDIT, or ENFORCED."
+  }
+}

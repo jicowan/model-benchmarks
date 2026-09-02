@@ -79,7 +79,8 @@ func (s *Server) handleModelCacheStats(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := s.repo.ModelCacheStats(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "model cache stats: "+err.Error())
+		log.Printf("model cache stats: %v", err)
+		writeError(w, http.StatusInternalServerError, "model cache stats failed")
 		return
 	}
 	s.writeCachedJSON(w, cacheKey, http.StatusOK, stats)

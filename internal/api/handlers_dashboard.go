@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 )
 
@@ -17,7 +18,8 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := s.repo.DashboardStats(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "dashboard stats: "+err.Error())
+		log.Printf("dashboard stats: %v", err)
+		writeError(w, http.StatusInternalServerError, "dashboard stats failed")
 		return
 	}
 

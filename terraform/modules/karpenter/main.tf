@@ -340,8 +340,12 @@ resource "kubectl_manifest" "gpu_node_pool" {
             group: karpenter.k8s.aws
             kind: EC2NodeClass
             name: gpu
+      # PRD-68 P6: a hard ceiling on GPU spend. The API's per-pod admission
+      # cap (MAX_CONCURRENT_RUNS) is the primary throttle; this is the
+      # backstop if many replicas or a bug fan out anyway.
       limits:
         cpu: "1000"
+        nvidia.com/gpu: "${var.gpu_pool_gpu_limit}"
       disruption:
         consolidationPolicy: WhenEmpty
         # GPU nodes are expensive ($0.80-$30+/hr); deprovision aggressively
@@ -393,6 +397,7 @@ resource "kubectl_manifest" "neuron_node_pool" {
             name: neuron
       limits:
         cpu: "1000"
+        aws.amazon.com/neuron: "${var.neuron_pool_device_limit}"
       disruption:
         consolidationPolicy: WhenEmpty
         # Same reasoning as the gpu nodepool — Neuron instances (inf2/trn)
@@ -491,6 +496,7 @@ resource "kubectl_manifest" "cpu_node_pool" {
             name: cpu
       limits:
         cpu: "1000"
+        memory: "${var.cpu_pool_memory_limit}"
       disruption:
         consolidationPolicy: WhenEmpty
         # Graviton is far cheaper than GPU, but still deprovision promptly once

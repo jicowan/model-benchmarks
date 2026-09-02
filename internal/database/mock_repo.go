@@ -1650,6 +1650,34 @@ func (m *MockRepo) GetRunOwnership(_ context.Context, ids []string) (map[string]
 	return out, nil
 }
 
+// PurgeTerminalRunsOlderThan mirrors the real repo on the in-memory maps.
+func (m *MockRepo) PurgeTerminalRunsOlderThan(_ context.Context, days, batch int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	var n int64
+	for id, r := range m.runs {
+		if (r.Status == "completed" || r.Status == "failed") && r.CompletedAt != nil && r.CompletedAt.Before(cutoff) {
+			delete(m.runs, id)
+			delete(m.metrics, id)
+			n++
+			if batch > 0 && n >= int64(batch) {
+				break
+			}
+		}
+	}
+	for id, sr := range m.suiteRuns {
+		if (sr.Status == "completed" || sr.Status == "failed") && sr.CompletedAt != nil && sr.CompletedAt.Before(cutoff) {
+			delete(m.suiteRuns, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
 // WithAdvisoryLock always runs fn in the mock (single process ⇒ no contention).
 func (m *MockRepo) WithAdvisoryLock(ctx context.Context, _ int64, fn func(ctx context.Context) error) (bool, error) {
 	return true, fn(ctx)

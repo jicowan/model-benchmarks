@@ -7,6 +7,12 @@ metadata:
     app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/component: loadgen
     accelbench/role: loadgen
+{{- if .RunID }}
+    accelbench/run-id: {{ .RunID | yamlQuote }}
+{{- end }}
+{{- if .SuiteRunID }}
+    suite-run-id: {{ .SuiteRunID | yamlQuote }}
+{{- end }}
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 600
@@ -16,6 +22,9 @@ spec:
         app.kubernetes.io/name: {{ .Name }}
         app.kubernetes.io/component: loadgen
         accelbench/role: loadgen
+{{- if .RunID }}
+        accelbench/run-id: {{ .RunID | yamlQuote }}
+{{- end }}
     spec:
       serviceAccountName: accelbench-loadgen
       restartPolicy: Never

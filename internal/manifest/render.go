@@ -89,6 +89,7 @@ func init() {
 // ModelDeploymentParams holds values for rendering the model Deployment + Service.
 type ModelDeploymentParams struct {
 	Name                 string
+	RunID                string // PRD-68 P6: full run id, stamped as the accelbench/run-id label
 	Namespace            string
 	ModelHfID            string
 	HfToken              string
@@ -151,6 +152,8 @@ type ModelDeploymentParams struct {
 // natively via boto3, so there's no upload sidecar here.
 type LoadgenJobParams struct {
 	Name               string
+	RunID              string // PRD-68 P6: full run/suite id → accelbench/run-id label
+	SuiteRunID         string // PRD-68 P6: suite name suffix → suite-run-id label (suites only)
 	Namespace          string
 	InferencePerfImage string // inference-perf container image
 	ConfigMapName      string // ConfigMap containing inference-perf config

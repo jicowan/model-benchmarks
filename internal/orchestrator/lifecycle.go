@@ -311,9 +311,9 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	defer release()
 
 	ns := defaultNamespace
-	modelName := fmt.Sprintf("bench-%s", cfg.RunID[:8])
-	loadgenName := fmt.Sprintf("loadgen-%s", cfg.RunID[:8])
-	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
+	modelName := modelNameFor(cfg.RunID)
+	loadgenName := loadgenNameFor(cfg.RunID)
+	configMapName := loadgenCMNameFor(cfg.RunID)
 
 	// Phase 1: Mark run as running. ErrRunNotActive here means recovery on
 	// a sibling already failed the row (or it was deleted) while we queued —
@@ -721,6 +721,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 
 	yamlStr, err := manifest.RenderModelDeployment(manifest.ModelDeploymentParams{
 		Name:                 name,
+		RunID:                cfg.RunID, // PRD-68 P6: accelbench/run-id label
 		Namespace:            ns,
 		ModelHfID:            cfg.Request.ModelHfID,
 		HfToken:              o.resolveHFToken(ctx, cfg.Request.HfToken),
@@ -810,7 +811,7 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 }
 
 func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc string, cfg RunConfig) error {
-	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
+	configMapName := loadgenCMNameFor(cfg.RunID)
 
 	// PRD-42: every run must reference a scenario. The API rejects
 	// scenario-less submissions at create time, so this is the only
@@ -892,7 +893,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 	}
 
 	// Create ConfigMap with inference-perf config
-	if err := o.createConfigMap(ctx, ns, configMapName, "config.yml", configYAML); err != nil {
+	if err := o.createConfigMap(ctx, ns, configMapName, cfg.RunID, "config.yml", configYAML); err != nil {
 		return fmt.Errorf("create configmap: %w", err)
 	}
 
@@ -910,6 +911,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               name,
+		RunID:              cfg.RunID, // PRD-68 P6
 		Namespace:          ns,
 		InferencePerfImage: inferencePerfImage,
 		ConfigMapName:      configMapName,
@@ -1069,15 +1071,17 @@ func (o *Orchestrator) teardown(ctx context.Context, ns, modelName, loadgenName,
 	o.teardownDistributed(ctx, ns, modelName)
 }
 
-// createConfigMap creates a ConfigMap with the given data.
-func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, key, data string) error {
+// createConfigMap creates a ConfigMap with the given data, labelled with the
+// owning run id so the leak reconciler can attribute it (PRD-68 P6).
+func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, runID, key, data string) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 			Labels: map[string]string{
 				"app.kubernetes.io/component": "loadgen-config",
-				"accelbench/role":             "loadgen-config",
+				LabelRole:                     "loadgen-config",
+				LabelRunID:                    runID,
 			},
 		},
 		Data: map[string]string{
@@ -1328,10 +1332,7 @@ func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ns := defaultNamespace
-	modelName := fmt.Sprintf("bench-%s", runID[:8])
-	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
-	configMapName := fmt.Sprintf("loadgen-config-%s", runID[:8])
-	o.teardown(bgCtx, ns, modelName, loadgenName, configMapName)
+	o.teardown(bgCtx, ns, modelNameFor(runID), loadgenNameFor(runID), loadgenCMNameFor(runID))
 }
 
 // getModelPodNodeIP returns the node IP where the model pod is running.

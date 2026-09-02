@@ -44,6 +44,7 @@ type Server struct {
 	authConfig auth.Config   // PRD-43 — user pool + client ID + AUTH_DISABLED flag
 	authVerifier *auth.Verifier // PRD-43 — JWT verifier (for middleware + /auth/me fallback)
 	hot          *hotCaches     // PRD-68 P5 — model-config + calibration TTL caches
+	authLimiter  *ipLimiter     // PRD-68 P6 — per-IP limiter for the public /auth/* routes
 }
 
 // NewServer creates a new API server. hostname is the running pod's name
@@ -62,6 +63,9 @@ func NewServer(repo database.Repo, client kubernetes.Interface, hostname string)
 		// in production, with AUTH_DISABLED as an explicit escape hatch.
 		authConfig: auth.Config{Disabled: true},
 		hot:        newHotCaches(),
+		// 30 attempts/min sustained, burst 10 — generous for humans, fatal
+		// for a stuffing loop. Cognito's own throttling sits behind this.
+		authLimiter: newIPLimiter(30, 10),
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -78,6 +82,9 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 		cache:      cache.NopCache{},
 		authConfig: auth.Config{Disabled: true},
 		hot:        newHotCaches(),
+		// 30 attempts/min sustained, burst 10 — generous for humans, fatal
+		// for a stuffing loop. Cognito's own throttling sits behind this.
+		authLimiter: newIPLimiter(30, 10),
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -210,9 +217,10 @@ func (s *Server) fetchModelConfigUncached(ctx context.Context, modelID, hfToken 
 //     public POSTs above take precedence over the /api/v1/ fallback.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// --- Public: auth endpoints that must work before the user has a token ---
-	mux.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)
-	mux.HandleFunc("POST /api/v1/auth/respond-challenge", s.handleAuthRespondChallenge)
-	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleAuthRefresh)
+	// PRD-68 P6: per-client rate limit in front of the credential endpoints.
+	mux.Handle("POST /api/v1/auth/login", s.authLimiter.middleware(http.HandlerFunc(s.handleAuthLogin)))
+	mux.Handle("POST /api/v1/auth/respond-challenge", s.authLimiter.middleware(http.HandlerFunc(s.handleAuthRespondChallenge)))
+	mux.Handle("POST /api/v1/auth/refresh", s.authLimiter.middleware(http.HandlerFunc(s.handleAuthRefresh)))
 
 	// --- Protected: wrapped in auth.Middleware ---
 	// PRD-44: admin is an inner middleware for the Configuration-page
@@ -1750,14 +1758,16 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	// Ensure model exists
 	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ensure model: "+err.Error())
+		log.Printf("ensure model: %v", err)
+		writeError(w, http.StatusInternalServerError, "ensure model failed")
 		return
 	}
 
 	// Get instance type
 	instType, err := s.repo.GetInstanceTypeByName(ctx, req.InstanceTypeName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get instance type: "+err.Error())
+		log.Printf("get instance type: %v", err)
+		writeError(w, http.StatusInternalServerError, "get instance type failed")
 		return
 	}
 	if instType == nil {
@@ -1844,7 +1854,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	suiteRunID, err := s.repo.CreateTestSuiteRun(ctx, suiteRun)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create suite run: "+err.Error())
+		log.Printf("create suite run: %v", err)
+		writeError(w, http.StatusInternalServerError, "create suite run failed")
 		return
 	}
 
@@ -1856,7 +1867,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 			Status:     "pending",
 		}
 		if _, err := s.repo.CreateScenarioResult(ctx, result); err != nil {
-			writeError(w, http.StatusInternalServerError, "create scenario result: "+err.Error())
+			log.Printf("create scenario result: %v", err)
+			writeError(w, http.StatusInternalServerError, "create scenario result failed")
 			return
 		}
 	}
@@ -1920,7 +1932,8 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	suiteRun, err := s.repo.GetTestSuiteRun(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get suite run: "+err.Error())
+		log.Printf("get suite run: %v", err)
+		writeError(w, http.StatusInternalServerError, "get suite run failed")
 		return
 	}
 	if suiteRun == nil {
@@ -1930,7 +1943,8 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.repo.GetScenarioResults(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get scenario results: "+err.Error())
+		log.Printf("get scenario results: %v", err)
+		writeError(w, http.StatusInternalServerError, "get scenario results failed")
 		return
 	}
 

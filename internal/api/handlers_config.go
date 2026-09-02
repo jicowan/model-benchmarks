@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,17 +44,20 @@ func (s *Server) handleGetCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	hf, err := s.secrets.Describe(r.Context(), secrets.HFSecretID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "describe hf-token: "+err.Error())
+		log.Printf("describe hf-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "describe hf-token failed")
 		return
 	}
 	dh, err := s.secrets.Describe(r.Context(), secrets.DockerHubSecretID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "describe dockerhub-token: "+err.Error())
+		log.Printf("describe dockerhub-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "describe dockerhub-token failed")
 		return
 	}
 	gh, err := s.secrets.Describe(r.Context(), secrets.GHCRSecretID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "describe ghcr-token: "+err.Error())
+		log.Printf("describe ghcr-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "describe ghcr-token failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, credentialsStatus{HFToken: hf, DockerHubToken: dh, GHCRToken: gh})
@@ -81,7 +85,8 @@ func (s *Server) handlePutHFToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secrets.PutHFToken(r.Context(), req.Token); err != nil {
-		writeError(w, http.StatusInternalServerError, "store hf-token: "+err.Error())
+		log.Printf("store hf-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "store hf-token failed")
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/credentials/hf-token", "rotated")
@@ -96,7 +101,8 @@ func (s *Server) handleDeleteHFToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secrets.DeleteHFToken(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete hf-token: "+err.Error())
+		log.Printf("delete hf-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "delete hf-token failed")
 		return
 	}
 	s.audit(r.Context(), "DELETE /api/v1/config/credentials/hf-token", "cleared")
@@ -116,7 +122,8 @@ func (s *Server) handleDeleteDockerHubToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.secrets.DeleteDockerHub(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete dockerhub-token: "+err.Error())
+		log.Printf("delete dockerhub-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "delete dockerhub-token failed")
 		return
 	}
 	s.audit(r.Context(), "DELETE /api/v1/config/credentials/dockerhub-token", "cleared")
@@ -140,7 +147,8 @@ func (s *Server) handlePutDockerHubToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.secrets.PutDockerHub(r.Context(), req.Username, req.AccessToken); err != nil {
-		writeError(w, http.StatusInternalServerError, "store dockerhub-token: "+err.Error())
+		log.Printf("store dockerhub-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "store dockerhub-token failed")
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/credentials/dockerhub-token", "rotated")
@@ -157,7 +165,8 @@ func (s *Server) handleDeleteGHCRToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secrets.DeleteGHCR(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete ghcr-token: "+err.Error())
+		log.Printf("delete ghcr-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "delete ghcr-token failed")
 		return
 	}
 	s.audit(r.Context(), "DELETE /api/v1/config/credentials/ghcr-token", "cleared")
@@ -181,7 +190,8 @@ func (s *Server) handlePutGHCRToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secrets.PutGHCR(r.Context(), req.Username, req.AccessToken); err != nil {
-		writeError(w, http.StatusInternalServerError, "store ghcr-token: "+err.Error())
+		log.Printf("store ghcr-token: %v", err)
+		writeError(w, http.StatusInternalServerError, "store ghcr-token failed")
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/credentials/ghcr-token", "rotated")
@@ -218,7 +228,8 @@ func (s *Server) handleGetCatalogMatrix(w http.ResponseWriter, r *http.Request) 
 	}
 	m, err := s.repo.LoadCatalogMatrix(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "load matrix: "+err.Error())
+		log.Printf("load matrix: %v", err)
+		writeError(w, http.StatusInternalServerError, "load matrix failed")
 		return
 	}
 	resp := catalogMatrixResponse{
@@ -263,7 +274,8 @@ func (s *Server) handlePutCatalogMatrix(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusConflict, "catalog matrix has been modified by another editor — reload and retry")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "write matrix: "+err.Error())
+		log.Printf("write matrix: %v", err)
+		writeError(w, http.StatusInternalServerError, "write matrix failed")
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/catalog-matrix",
@@ -347,7 +359,8 @@ type scenarioOverrideEntry struct {
 func (s *Server) handleListScenarioOverrides(w http.ResponseWriter, r *http.Request) {
 	overrides, err := s.repo.ListScenarioOverrides(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list overrides: "+err.Error())
+		log.Printf("list overrides: %v", err)
+		writeError(w, http.StatusInternalServerError, "list overrides failed")
 		return
 	}
 	byID := map[string]*database.ScenarioOverride{}
@@ -413,7 +426,8 @@ func (s *Server) handlePutScenarioOverride(w http.ResponseWriter, r *http.Reques
 		OutputMean: req.OutputMean,
 	}
 	if err := s.repo.UpsertScenarioOverride(r.Context(), ov); err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert override: "+err.Error())
+		log.Printf("upsert override: %v", err)
+		writeError(w, http.StatusInternalServerError, "upsert override failed")
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/scenario-overrides/"+id, summarizeOverride(ov))
@@ -424,7 +438,8 @@ func (s *Server) handlePutScenarioOverride(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleDeleteScenarioOverride(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.repo.DeleteScenarioOverride(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete override: "+err.Error())
+		log.Printf("delete override: %v", err)
+		writeError(w, http.StatusInternalServerError, "delete override failed")
 		return
 	}
 	s.audit(r.Context(), "DELETE /api/v1/config/scenario-overrides/"+id, "cleared")
@@ -469,7 +484,8 @@ func (s *Server) handleListAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := s.repo.ListAuditLog(r.Context(), limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list audit log: "+err.Error())
+		log.Printf("list audit log: %v", err)
+		writeError(w, http.StatusInternalServerError, "list audit log failed")
 		return
 	}
 	if entries == nil {
@@ -528,7 +544,8 @@ func (s *Server) handleGetToolVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	tv, err := s.repo.GetToolVersions(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "load tool versions: "+err.Error())
+		log.Printf("load tool versions: %v", err)
+		writeError(w, http.StatusInternalServerError, "load tool versions failed")
 		return
 	}
 	s.writeCachedJSON(w, cacheKey, http.StatusOK, toolVersionsResp(tv))
@@ -634,7 +651,8 @@ func (s *Server) handlePutToolVersions(w http.ResponseWriter, r *http.Request) {
 		VLLMCPUVersion:       req.VLLMCPUVersion,
 	}
 	if err := s.repo.PutToolVersions(r.Context(), tv); err != nil {
-		writeError(w, http.StatusInternalServerError, "update tool versions: "+err.Error())
+		log.Printf("update tool versions: %v", err)
+		writeError(w, http.StatusInternalServerError, "update tool versions failed")
 		return
 	}
 	s.audit(r.Context(), "PUT /api/v1/config/tool-versions",

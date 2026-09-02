@@ -124,3 +124,24 @@ variable "cluster_oidc_issuer_url" {
   type        = string
   default     = ""
 }
+
+# PRD-68 P6: hard resource ceilings per NodePool (Scal H1). The cpu:"1000"
+# limit alone allowed ~125 g5.2xlarge or ~10 p4d before anything stopped a
+# runaway fan-out.
+variable "gpu_pool_gpu_limit" {
+  description = "Max nvidia.com/gpu across the gpu NodePool (Karpenter limits)."
+  type        = number
+  default     = 64
+}
+
+variable "neuron_pool_device_limit" {
+  description = "Max aws.amazon.com/neuron devices across the neuron NodePool."
+  type        = number
+  default     = 64
+}
+
+variable "cpu_pool_memory_limit" {
+  description = "Max memory across the cpu (Graviton) NodePool, e.g. 8000Gi."
+  type        = string
+  default     = "8000Gi"
+}

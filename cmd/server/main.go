@@ -167,6 +167,10 @@ func main() {
 	srv.Orchestrator().StartCancelPollLoop(bgCtx)
 	// PRD-68 P4: adopt model-cache jobs whose watching pod died.
 	srv.StartModelCacheRecoveryLoop(runCtx)
+	// PRD-68 P6: delete labelled K8s objects whose run is terminal/gone.
+	srv.Orchestrator().StartLeakReconcilerLoop(runCtx)
+	// PRD-68 P6: opt-in history purge (RUN_RETENTION_DAYS).
+	StartRetentionLoop(runCtx, repo)
 
 	// PRD-37: materialized Catalog view. Runs a synchronous refresh
 	// before the listener starts so the first Catalog request doesn't
