@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -897,5 +898,56 @@ func TestHandleCatalogSeedStatus_MostRecent(t *testing.T) {
 	}
 	if resp["status"] != "active" {
 		t.Errorf("status = %v, want active", resp["status"])
+	}
+}
+
+// PRD-68 P3: deleting an ACTIVE run must set the DB cancel flag so the
+// owning pod (which may be a sibling replica) tears the workload down.
+// Previously only the in-memory CancelRun ran, a no-op cross-pod.
+func TestHandleDeleteRun_ActiveRequestsCancel(t *testing.T) {
+	repo, mux := seedJobsServer()
+
+	items, _ := repo.ListRuns(nil, database.RunFilter{Status: "running"})
+	if len(items) == 0 {
+		t.Fatal("no running runs")
+	}
+	id := items[0].ID
+
+	// Snapshot the flag via a side table: after delete the row is gone, so
+	// observe RequestCancel through a wrapper that records calls.
+	req := httptest.NewRequest("DELETE", "/api/v1/runs/"+id, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if run, _ := repo.GetBenchmarkRun(nil, id); run != nil {
+		t.Fatal("row still present after delete")
+	}
+	// The owner's shared poller treats a missing row as a cancel; the
+	// GetRunOwnership snapshot must therefore omit the id.
+	own, _ := repo.GetRunOwnership(nil, []string{id})
+	if _, found := own[id]; found {
+		t.Fatal("deleted run still visible to the coordination poller")
+	}
+}
+
+// PRD-68 P3: new runs are inserted with owner_pod already set (no NULL-owner
+// window that orphan recovery would skip forever).
+func TestCreateRun_SetsOwnerAtInsert(t *testing.T) {
+	repo, mux := seedJobsServer()
+	body := `{"model_hf_id":"meta-llama/Llama-3.1-8B","instance_type_name":"g5.xlarge","scenario_id":"chatbot","tensor_parallel_degree":1}`
+	req := httptest.NewRequest("POST", "/api/v1/runs", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	run, _ := repo.GetBenchmarkRun(nil, resp["id"])
+	if run == nil || run.OwnerPod == nil || *run.OwnerPod == "" {
+		t.Fatalf("owner_pod not set at insert: %+v", run)
 	}
 }

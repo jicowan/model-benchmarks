@@ -69,6 +69,11 @@ type Repo interface {
 	// goroutine polls IsCancelRequested and self-cancels.
 	RequestCancel(ctx context.Context, runID string) error
 	IsCancelRequested(ctx context.Context, runID string) (bool, error)
+	// PRD-68 P3: batched coordination snapshot for the shared cancel poller
+	// (missing id ⇒ deleted ⇒ cancel; foreign owner ⇒ fenced ⇒ cancel).
+	GetRunOwnership(ctx context.Context, ids []string) (map[string]RunOwnership, error)
+	// PRD-68 P3: singleton background jobs run under a session advisory lock.
+	WithAdvisoryLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (ran bool, err error)
 	Heartbeat(ctx context.Context, pod string) error
 	LiveAPIPods(ctx context.Context, ttl time.Duration) ([]string, error)
 	DeleteStaleHeartbeats(ctx context.Context, olderThan time.Duration) error

@@ -17,6 +17,10 @@ spec:
         {{- include "accelbench.api.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "accelbench.api.serviceAccountName" . }}
+      # PRD-68 P3: give in-flight orchestrations time to finish on SIGTERM.
+      # The API drains for api.shutdownGrace (default 10m) then exits; this
+      # must be longer than that or the kubelet SIGKILLs mid-drain.
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds | default 660 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -61,6 +65,19 @@ spec:
             {{- end }}
             - name: TOOLS_IMAGE
               value: "{{ .Values.image.tools.repository }}:{{ .Values.image.tools.tag }}"
+            # PRD-68 P3: admission + drain knobs.
+            - name: MAX_CONCURRENT_RUNS
+              value: {{ .Values.api.maxConcurrentRuns | default 4 | quote }}
+            - name: SHUTDOWN_GRACE
+              value: {{ .Values.api.shutdownGrace | default "10m" | quote }}
+            {{- with .Values.api.distributedLockWait }}
+            - name: DISTRIBUTED_LOCK_WAIT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.dbMaxConns }}
+            - name: DB_MAX_CONNS
+              value: {{ . | quote }}
+            {{- end }}
             {{- if or .Values.huggingface.token .Values.huggingface.existingSecret }}
             - name: HF_SECRET_NAME
               value: "{{ include "accelbench.hfSecretName" . }}"
@@ -100,12 +117,21 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 15
+          # PRD-68 P3: readiness reflects "can serve" (DB reachable, not
+          # draining); liveness stays DB-independent on purpose.
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Let endpoint controllers observe Terminating before the
+                # listener closes, so no request lands on a closed socket.
+                command: ["sh", "-c", "sleep 5"]
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
       {{- with .Values.api.nodeSelector }}

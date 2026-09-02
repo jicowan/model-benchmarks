@@ -189,7 +189,15 @@ func (m *MockRepo) UpdateRunStatus(_ context.Context, runID, status string) erro
 	defer m.mu.Unlock()
 	run, ok := m.runs[runID]
 	if !ok {
-		return fmt.Errorf("run %s not found", runID)
+		return ErrRunNotActive
+	}
+	// Mirror the real repo's PRD-68 P3 fencing.
+	active := run.Status == "pending" || run.Status == "running"
+	if (status == "completed" || status == "failed") && !active {
+		return ErrRunNotActive
+	}
+	if status == "running" && run.Status != "pending" {
+		return ErrRunNotActive
 	}
 	run.Status = status
 	now := time.Now()
@@ -207,7 +215,10 @@ func (m *MockRepo) UpdateRunFailed(_ context.Context, runID, reason string) erro
 	defer m.mu.Unlock()
 	run, ok := m.runs[runID]
 	if !ok {
-		return fmt.Errorf("run %s not found", runID)
+		return ErrRunNotActive
+	}
+	if run.Status != "pending" && run.Status != "running" {
+		return ErrRunNotActive
 	}
 	run.Status = "failed"
 	run.ErrorMessage = &reason
@@ -1561,6 +1572,27 @@ func (m *MockRepo) IsCancelRequested(_ context.Context, runID string) (bool, err
 		return s.CancelRequested, nil
 	}
 	return false, nil
+}
+
+func (m *MockRepo) GetRunOwnership(_ context.Context, ids []string) (map[string]RunOwnership, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]RunOwnership, len(ids))
+	for _, id := range ids {
+		if r, ok := m.runs[id]; ok {
+			out[id] = RunOwnership{ID: id, Status: r.Status, OwnerPod: r.OwnerPod, CancelRequested: r.CancelRequested}
+			continue
+		}
+		if s, ok := m.suiteRuns[id]; ok {
+			out[id] = RunOwnership{ID: id, Status: s.Status, OwnerPod: s.OwnerPod, CancelRequested: s.CancelRequested}
+		}
+	}
+	return out, nil
+}
+
+// WithAdvisoryLock always runs fn in the mock (single process ⇒ no contention).
+func (m *MockRepo) WithAdvisoryLock(ctx context.Context, _ int64, fn func(ctx context.Context) error) (bool, error) {
+	return true, fn(ctx)
 }
 
 func (m *MockRepo) Heartbeat(_ context.Context, pod string) error {

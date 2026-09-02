@@ -8,11 +8,9 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 )
 
-// catalogRefreshInterval is how often each API pod asks Postgres to
-// refresh the `catalog_rows` materialized view. With two replicas both
-// pods tick independently; REFRESH CONCURRENTLY serializes at the DB
-// so overlap is safe. At current view size the doubled cost is
-// negligible.
+// catalogRefreshInterval is how often the `catalog_rows` materialized view
+// is refreshed. Every replica ticks, but PRD-68 P3 gates the refresh behind
+// a Postgres advisory lock so only one replica does the work per tick.
 const catalogRefreshInterval = 5 * time.Minute
 
 // StartCatalogRefreshLoop runs one synchronous REFRESH before returning,
@@ -36,11 +34,15 @@ func StartCatalogRefreshLoop(ctx context.Context, repo database.Repo) {
 				return
 			case <-t.C:
 				start := time.Now()
-				if err := repo.RefreshCatalogRows(ctx); err != nil {
+				// PRD-68 P3: one replica refreshes per tick; the others skip.
+				ran, err := repo.WithAdvisoryLock(ctx, database.LockKeyCatalogRefresh, repo.RefreshCatalogRows)
+				if err != nil {
 					log.Printf("[catalog-refresh] failed: %v", err)
 					continue
 				}
-				log.Printf("[catalog-refresh] ok in %v", time.Since(start))
+				if ran {
+					log.Printf("[catalog-refresh] ok in %v", time.Since(start))
+				}
 			}
 		}
 	}()

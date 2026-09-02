@@ -22,21 +22,29 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Register the cancel function so CancelRun can stop this suite.
-	o.mu.Lock()
-	o.cancels[suiteRunID] = cancel
-	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		delete(o.cancels, suiteRunID)
-		o.mu.Unlock()
-	}()
+	// Register the cancel function so CancelRun / the shared coordination
+	// poller can stop this suite, and count it for Drain (PRD-68 P3).
+	if !o.beginRun(suiteRunID, cancel) {
+		log.Printf("[suite %s] pod draining; not starting", suiteRunID[:8])
+		_ = o.repo.UpdateSuiteRunStatus(context.Background(), suiteRunID, "failed", nil)
+		return
+	}
+	defer o.endRun(suiteRunID)
 
-	// PRD-40: claim ownership + start cross-pod cancel poller.
+	// PRD-40: claim ownership (normally a no-op re-stamp; the row is inserted
+	// with owner_pod set).
 	if err := o.repo.ClaimSuiteRun(ctx, suiteRunID, o.hostname); err != nil {
 		log.Printf("[suite %s] claim: %v", suiteRunID[:8], err)
 	}
-	o.startCancelPoller(ctx, suiteRunID, cancel)
+
+	// PRD-68 P3 admission: one slot per suite (it holds one model node).
+	release, err := o.acquireSlot(ctx, suiteRunID)
+	if err != nil {
+		log.Printf("[suite %s] cancelled while waiting for a run slot", suiteRunID[:8])
+		_ = o.repo.UpdateSuiteRunStatus(context.Background(), suiteRunID, "failed", nil)
+		return
+	}
+	defer release()
 
 	suite := testsuite.Get(req.SuiteID)
 	if suite == nil {

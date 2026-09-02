@@ -224,3 +224,77 @@ func (r *Repository) GetOrphanedSeeds(ctx context.Context, livePods []string) ([
 	}
 	return out, rows.Err()
 }
+
+// RunOwnership is the per-run coordination snapshot the shared cancel poller
+// reads (PRD-68 P3). One row per id found in benchmark_runs OR test_suite_runs.
+type RunOwnership struct {
+	ID              string
+	Status          string
+	OwnerPod        *string
+	CancelRequested bool
+}
+
+// GetRunOwnership returns the coordination columns for every id in ids that
+// still exists in either run table. Ids missing from the result were deleted
+// — the owning goroutine should treat that as a cancel. One query replaces
+// the previous one-query-per-run-per-5s cancel pollers.
+func (r *Repository) GetRunOwnership(ctx context.Context, ids []string) (map[string]RunOwnership, error) {
+	out := make(map[string]RunOwnership, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, status, owner_pod, cancel_requested FROM benchmark_runs WHERE id = ANY($1)
+		UNION ALL
+		SELECT id, status, owner_pod, cancel_requested FROM test_suite_runs WHERE id = ANY($1)`,
+		ids)
+	if err != nil {
+		return nil, fmt.Errorf("get run ownership: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ro RunOwnership
+		if err := rows.Scan(&ro.ID, &ro.Status, &ro.OwnerPod, &ro.CancelRequested); err != nil {
+			return nil, err
+		}
+		out[ro.ID] = ro
+	}
+	return out, rows.Err()
+}
+
+// Advisory-lock keys for the singleton background jobs (PRD-68 P3). Any
+// stable int64 works; these are arbitrary but must not collide.
+const (
+	LockKeyOrphanRecovery int64 = 68_001
+	LockKeyCatalogRefresh int64 = 68_002
+	LockKeyRetention      int64 = 68_003
+	LockKeyReconciler     int64 = 68_004
+)
+
+// WithAdvisoryLock runs fn while holding the Postgres session-level advisory
+// lock `key`, so exactly one API replica performs a given background job per
+// pass (orphan recovery, catalog MV refresh, ...). Returns ran=false without
+// calling fn when another session holds the lock. The lock is bound to a
+// dedicated pooled connection for the duration of fn and released on return.
+func (r *Repository) WithAdvisoryLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (ran bool, err error) {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return false, fmt.Errorf("acquire conn for advisory lock: %w", err)
+	}
+	defer conn.Release()
+
+	var got bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
+		return false, fmt.Errorf("pg_try_advisory_lock(%d): %w", key, err)
+	}
+	if !got {
+		return false, nil
+	}
+	defer func() {
+		// Unlock with a fresh short context: the caller's ctx may be done.
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1)`, key)
+	}()
+	return true, fn(ctx)
+}

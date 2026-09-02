@@ -878,6 +878,9 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		PDLRUCapacityPerServer: pdLRUCapacityPtr,
 		PDDeciderStrategy:      pdDeciderStrategyPtr,
 		Status:                 "pending",
+		// PRD-68 P3: owned from the INSERT so there is no window in which a
+		// crash leaves a NULL-owner pending row that recovery skips forever.
+		OwnerPod: &s.hostname,
 	}
 
 	runID, err := s.repo.CreateBenchmarkRun(ctx, run)
@@ -1190,7 +1193,8 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 
 	// Set the DB flag — the owning pod's poller will see it and cancel.
 	if err := s.repo.RequestCancel(ctx, runID); err != nil {
-		writeError(w, http.StatusInternalServerError, "request cancel: "+err.Error())
+		log.Printf("cancel run %s: request cancel: %v", runID, err)
+		writeError(w, http.StatusInternalServerError, "request cancel failed")
 		return
 	}
 	// Fast-path: if we happen to be the owning pod, short-circuit the 5s poll.
@@ -1214,10 +1218,20 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if run != nil {
-		// Cancel if still active
+		// Cancel if still active. PRD-68 P3: the old code only called the
+		// in-memory CancelRun, which is a no-op on the non-owning replica, so
+		// a cross-pod delete left the model Deployment + loadgen running to
+		// completion with no row to attribute them to. Now: set the DB cancel
+		// flag (any replica), fast-path cancel locally, and rely on the owning
+		// pod's coordination poller — which also treats a MISSING row as a
+		// cancel — to drive the normal teardown path.
 		if run.Status == "pending" || run.Status == "running" {
+			if err := s.repo.RequestCancel(ctx, runID); err != nil {
+				log.Printf("delete run %s: request cancel: %v", runID, err)
+				writeError(w, http.StatusInternalServerError, "delete failed")
+				return
+			}
 			s.orch.CancelRun(runID)
-			_ = s.repo.UpdateRunStatus(ctx, runID, "failed")
 		}
 		if err := s.repo.DeleteRun(ctx, runID); err != nil {
 			writeError(w, http.StatusInternalServerError, "delete failed")
@@ -1238,10 +1252,14 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cancel if still active
+	// Cancel if still active (same cross-pod semantics as single runs above).
 	if suiteRun.Status == "pending" || suiteRun.Status == "running" {
+		if err := s.repo.RequestCancel(ctx, runID); err != nil {
+			log.Printf("delete suite %s: request cancel: %v", runID, err)
+			writeError(w, http.StatusInternalServerError, "delete failed")
+			return
+		}
 		s.orch.CancelRun(runID)
-		_ = s.repo.UpdateSuiteRunStatus(ctx, runID, "failed", nil)
 	}
 	if err := s.repo.DeleteSuiteRun(ctx, runID); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
@@ -1749,6 +1767,7 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		StreamerConcurrency:    suiteStreamerConcurrencyPtr,
 		StreamerMemoryLimitGiB: suiteStreamerMemLimitPtr,
 		Status:                 "pending",
+		OwnerPod:               &s.hostname, // PRD-68 P3
 	}
 	if req.Framework != "" {
 		fw := req.Framework

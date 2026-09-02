@@ -2,8 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
+
+	"github.com/accelbench/accelbench/internal/database"
 )
 
 // PRD-40: heartbeat + ownership-aware orphan recovery.
@@ -92,24 +95,36 @@ func (o *Orchestrator) StartOrphanRecoveryLoop(ctx context.Context) {
 // and clean up its Kubernetes resources. Called from the loop; also safe to
 // call ad-hoc from tests.
 func (o *Orchestrator) recoverOrphans(ctx context.Context) {
+	// PRD-68 P3: exactly one replica runs a recovery pass at a time. Without
+	// the lock every replica scanned and acted on the same orphans (idempotent
+	// deletes, but duplicated cost computation and log noise, and a real race
+	// on which pod's "failed" message lands).
+	ran, err := o.repo.WithAdvisoryLock(ctx, database.LockKeyOrphanRecovery, o.recoverOrphansLocked)
+	if err != nil {
+		log.Printf("[recovery] pass failed: %v", err)
+	}
+	_ = ran
+}
+
+func (o *Orchestrator) recoverOrphansLocked(ctx context.Context) error {
 	live, err := o.repo.LiveAPIPods(ctx, heartbeatTTL)
 	if err != nil {
-		log.Printf("[recovery] query live pods: %v", err)
-		return
+		return fmt.Errorf("query live pods: %w", err)
 	}
 
-	// Benchmark runs — reuse the same markFailed + cleanupResources path
-	// used by single-run failures today.
+	// Benchmark runs. PRD-68 P3: try to salvage a finished loadgen's S3
+	// summary before declaring the run failed (the owner may have died in the
+	// persist step).
 	if orphans, err := o.repo.GetOrphanedRuns(ctx, live); err == nil {
 		for _, r := range orphans {
 			owner := "unknown"
 			if r.OwnerPod != nil {
 				owner = *r.OwnerPod
 			}
-			log.Printf("[recovery] orphan run %s (owner=%s, status=%s) — marking failed",
+			log.Printf("[recovery] orphan run %s (owner=%s, status=%s) — salvaging or failing",
 				r.ID[:8], owner, r.Status)
-			o.markFailed(ctx, r.ID, orphanFailureMessage(owner))
-			o.cleanupResources(ctx, r.ID)
+			o.adm.recovered.Add(1)
+			o.salvageOrFail(ctx, r.ID, orphanFailureMessage(owner))
 		}
 	} else {
 		log.Printf("[recovery] query orphan runs: %v", err)
@@ -127,6 +142,7 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 			// log line above. Status flips to "failed"; currentScenario nil.
 			log.Printf("[recovery] orphan suite %s (owner=%s, status=%s) — %s",
 				s.ID[:8], owner, s.Status, orphanFailureMessage(owner))
+			o.adm.recovered.Add(1)
 			_ = o.repo.UpdateSuiteRunStatus(ctx, s.ID, "failed", nil)
 			o.CleanupSuiteResources(s.ID)
 		}
@@ -160,6 +176,7 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 	// thus its scale-in) died with it — the p5 nodes would leak real money.
 	// This runs on the surviving sibling.
 	o.reapLeakedDistributedPools(ctx, live)
+	return nil
 }
 
 // reapLeakedDistributedPools scales every static multinode NodePool back to 0

@@ -2,12 +2,14 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -227,9 +229,10 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		     prefill_max_num_batched_tokens, decode_max_num_batched_tokens,
 		     both_replicas, both_tp, both_max_num_batched_tokens,
 		     pd_noncached_tokens, pd_prefix_cache_weight, pd_queue_scorer_weight,
-		     pd_max_prefix_blocks, pd_lru_capacity_per_server, pd_decider_strategy)
+		     pd_max_prefix_blocks, pd_lru_capacity_per_server, pd_decider_strategy,
+		     owner_pod)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
-		         $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
+		         $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
@@ -267,6 +270,7 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		run.PDMaxPrefixBlocks,
 		run.PDLRUCapacityPerServer,
 		run.PDDeciderStrategy,
+		run.OwnerPod, // PRD-68 P3: owned from birth — no NULL-owner window for recovery to miss
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
@@ -282,33 +286,58 @@ func nullableInt(v int) *int {
 	return &v
 }
 
+// ErrRunNotActive is returned by the status writers when the row is no
+// longer in a state the transition is valid from — typically because orphan
+// recovery on a sibling pod already wrote a terminal status, or the row was
+// deleted. Callers treat it as "someone else owns the outcome" (PRD-68 P3).
+var ErrRunNotActive = errors.New("run is not in an active state")
+
 // UpdateRunStatus updates the status and optional timestamps of a benchmark run.
+//
+// PRD-68 P3 fencing: transitions are conditional on the current state so a
+// stale owner can never overwrite a terminal status written by recovery.
+//   pending → running   requires status = 'pending'
+//   * → completed/failed requires status IN ('pending','running')
+// A no-op (0 rows) returns ErrRunNotActive.
 func (r *Repository) UpdateRunStatus(ctx context.Context, runID, status string) error {
-	var query string
+	var (
+		tag pgconn.CommandTag
+		err error
+	)
 	switch status {
 	case "running":
-		query = `UPDATE benchmark_runs SET status = $1, started_at = $2 WHERE id = $3`
+		tag, err = r.pool.Exec(ctx,
+			`UPDATE benchmark_runs SET status = $1, started_at = $2 WHERE id = $3 AND status = 'pending'`,
+			status, time.Now(), runID)
 	case "completed", "failed":
-		query = `UPDATE benchmark_runs SET status = $1, completed_at = $2 WHERE id = $3`
+		tag, err = r.pool.Exec(ctx,
+			`UPDATE benchmark_runs SET status = $1, completed_at = $2 WHERE id = $3 AND status IN ('pending','running')`,
+			status, time.Now(), runID)
 	default:
-		query = `UPDATE benchmark_runs SET status = $1 WHERE id = $2`
-		_, err := r.pool.Exec(ctx, query, status, runID)
-		return err
+		tag, err = r.pool.Exec(ctx, `UPDATE benchmark_runs SET status = $1 WHERE id = $2`, status, runID)
 	}
-	_, err := r.pool.Exec(ctx, query, status, time.Now(), runID)
 	if err != nil {
 		return fmt.Errorf("update run status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotActive
 	}
 	return nil
 }
 
-// UpdateRunFailed sets a run's status to "failed" with an error message explaining why.
+// UpdateRunFailed sets a run's status to "failed" with an error message
+// explaining why. Conditional on the run still being active (see
+// UpdateRunStatus); returns ErrRunNotActive when another writer got there first.
 func (r *Repository) UpdateRunFailed(ctx context.Context, runID, reason string) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE benchmark_runs SET status = 'failed', error_message = $1, completed_at = $2 WHERE id = $3`,
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE benchmark_runs SET status = 'failed', error_message = $1, completed_at = $2
+		  WHERE id = $3 AND status IN ('pending','running')`,
 		reason, time.Now(), runID)
 	if err != nil {
 		return fmt.Errorf("update run failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotActive
 	}
 	return nil
 }
@@ -507,13 +536,17 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		return fmt.Errorf("metrics verification failed: expected run_id %s, got %s", runID, verifyRunID)
 	}
 
-	// Mark run as completed.
-	_, err = tx.Exec(ctx,
-		`UPDATE benchmark_runs SET status = 'completed', completed_at = $1 WHERE id = $2`,
+	// Mark run as completed — only if still active (PRD-68 P3 fencing).
+	tag, err := tx.Exec(ctx,
+		`UPDATE benchmark_runs SET status = 'completed', completed_at = $1
+		  WHERE id = $2 AND status IN ('pending','running')`,
 		time.Now(), runID,
 	)
 	if err != nil {
 		return fmt.Errorf("update run to completed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotActive
 	}
 
 	if err := tx.Commit(ctx); err != nil {

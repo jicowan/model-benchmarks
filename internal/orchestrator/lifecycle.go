@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -184,6 +185,8 @@ type Orchestrator struct {
 	// test_suite_runs.owner_pod when Execute starts so orphan recovery on
 	// sibling pods can attribute ownership.
 	hostname string
+	// PRD-68 P3: admission semaphore, shared poller state, drain flag.
+	adm *admission
 }
 
 // New creates a new Orchestrator.
@@ -195,6 +198,7 @@ func New(client kubernetes.Interface, repo database.Repo, hostname string) *Orch
 		cancels:     make(map[string]context.CancelFunc),
 		distributed: make(map[string]*distributedState),
 		hostname:    hostname,
+		adm:         newAdmission(maxConcurrentRunsFromEnv()),
 	}
 }
 
@@ -282,30 +286,39 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Register the cancel function so CancelRun can stop this goroutine.
-	o.mu.Lock()
-	o.cancels[cfg.RunID] = cancel
-	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		delete(o.cancels, cfg.RunID)
-		o.mu.Unlock()
-	}()
+	// Register the cancel function so CancelRun (and the shared coordination
+	// poller) can stop this goroutine, and count it for Drain. A draining pod
+	// admits nothing: fail fast so the row doesn't sit pending forever.
+	if !o.beginRun(cfg.RunID, cancel) {
+		o.markFailed(ctx, cfg.RunID, "API pod was shutting down when the run was submitted — re-submit to retry")
+		return ErrDraining
+	}
+	defer o.endRun(cfg.RunID)
 
 	// PRD-40: claim ownership so orphan recovery on sibling pods leaves this
-	// run alone, and start a background poller that watches for cross-pod
-	// cancel requests via the cancel_requested DB flag.
+	// run alone. (The row is normally inserted with owner_pod already set —
+	// PRD-68 P3 — so this is a no-op re-stamp; it stays for hand-built runs.)
 	if err := o.repo.ClaimRun(ctx, cfg.RunID, o.hostname); err != nil {
 		log.Printf("[%s] claim run: %v", cfg.RunID[:8], err)
 	}
-	o.startCancelPoller(ctx, cfg.RunID, cancel)
+
+	// PRD-68 P3 admission: wait for a concurrency slot BEFORE touching the
+	// cluster. The run stays "pending" and cancellable while queued.
+	release, err := o.acquireSlot(ctx, cfg.RunID)
+	if err != nil {
+		o.markFailed(ctx, cfg.RunID, "cancelled while waiting for a run slot")
+		return fmt.Errorf("acquire run slot: %w", err)
+	}
+	defer release()
 
 	ns := defaultNamespace
 	modelName := fmt.Sprintf("bench-%s", cfg.RunID[:8])
 	loadgenName := fmt.Sprintf("loadgen-%s", cfg.RunID[:8])
 	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
 
-	// Phase 1: Mark run as running.
+	// Phase 1: Mark run as running. ErrRunNotActive here means recovery on
+	// a sibling already failed the row (or it was deleted) while we queued —
+	// nothing has been deployed yet, so just stop.
 	if err := o.repo.UpdateRunStatus(ctx, cfg.RunID, "running"); err != nil {
 		return fmt.Errorf("update status to running: %w", err)
 	}
@@ -1086,6 +1099,12 @@ func (o *Orchestrator) markFailed(ctx context.Context, runID, reason string) {
 	defer cancel()
 
 	if err := o.repo.UpdateRunFailed(bgCtx, runID, reason); err != nil {
+		if errors.Is(err, database.ErrRunNotActive) {
+			// PRD-68 P3: another writer (orphan recovery, delete) already
+			// finalized this row. Their outcome wins; ours is just logged.
+			log.Printf("[%s] not marking failed (%s): row already terminal or deleted", shortID(runID), reason)
+			return
+		}
 		log.Printf("failed to mark run %s as failed: %v", runID, err)
 		return
 	}
@@ -1276,7 +1295,29 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 		return
 	}
 
+	// PersistMetrics flips the row to completed; freeze cost like the
+	// normal completion path does (PRD-35).
+	totalUSD, loadgenUSD := o.computeRunCost(ctx, runID)
+	if err := o.repo.UpdateRunCost(ctx, runID, totalUSD, loadgenUSD); err != nil {
+		log.Printf("[recovery] %s: update run cost: %v", shortID, err)
+	}
 	log.Printf("[recovery] %s: successfully recovered and completed", shortID)
+	o.cleanupResources(ctx, runID)
+}
+
+// salvageOrFail is the PRD-68 P3 recovery action for an orphaned single run:
+// if the loadgen already wrote a summary to S3 before the owner died, finish
+// the run from it (metrics persisted, status completed, GPU telemetry lost);
+// otherwise mark it failed. Either way the K8s resources are torn down.
+func (o *Orchestrator) salvageOrFail(ctx context.Context, runID, failMsg string) {
+	if bucket := os.Getenv("RESULTS_S3_BUCKET"); bucket != "" {
+		prefix := fmt.Sprintf("results/%s/", runID)
+		if _, err := o.readResultsFromS3Prefix(ctx, bucket, prefix, runID); err == nil {
+			o.recoverRun(ctx, bucket, runID)
+			return
+		}
+	}
+	o.markFailed(ctx, runID, failMsg)
 	o.cleanupResources(ctx, runID)
 }
 
