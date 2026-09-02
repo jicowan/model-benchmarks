@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,8 +25,32 @@ type Repository struct {
 }
 
 // NewRepository creates a new Repository with a connection pool.
+//
+// PRD-68 P2: the pool is sized explicitly instead of pgx's default of
+// max(4, NumCPU) — inside a container Go reports the HOST CPU count, so the
+// default could open dozens of Aurora connections per pod under burst while
+// a 2-vCPU node would get just 4. A server-side statement_timeout bounds any
+// runaway list/aggregate query. Both are overridable via env for operators
+// tuning against their Aurora ACU budget.
 func NewRepository(ctx context.Context, connString string) (*Repository, error) {
-	pool, err := pgxpool.New(ctx, connString)
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, fmt.Errorf("parse database url: %w", err)
+	}
+	cfg.MaxConns = int32(envIntDefault("DB_MAX_CONNS", 10))
+	cfg.MinConns = int32(envIntDefault("DB_MIN_CONNS", 2))
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if _, set := cfg.ConnConfig.RuntimeParams["statement_timeout"]; !set {
+		cfg.ConnConfig.RuntimeParams["statement_timeout"] = fmt.Sprintf("%ds", envIntDefault("DB_STATEMENT_TIMEOUT_SECONDS", 30))
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = "accelbench-api"
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create connection pool: %w", err)
 	}
@@ -675,4 +701,14 @@ func (r *Repository) GetShardMetrics(ctx context.Context, runID string) ([]Shard
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// envIntDefault reads a positive integer env var or returns def.
+func envIntDefault(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }

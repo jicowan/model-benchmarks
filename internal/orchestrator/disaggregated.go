@@ -406,8 +406,8 @@ func (o *Orchestrator) waitForDisaggregatedReady(ctx context.Context, ns, name s
 		pods, _ := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", name),
 		})
-		for _, pod := range pods.Items {
-			events, err := o.oomDetector.CheckPod(ctx, pod.Name)
+		for i := range pods.Items {
+			events, err := o.oomDetector.CheckPodObject(ctx, &pods.Items[i])
 			if err == nil && len(events) > 0 {
 				for _, ev := range events {
 					o.recordOOMEvent(ctx, cfg, ev)

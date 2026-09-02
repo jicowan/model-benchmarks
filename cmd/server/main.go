@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/accelbench/accelbench/internal/api"
@@ -46,6 +47,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("load in-cluster config: %v", err)
 	}
+	// PRD-68 P2: client-go's default limiter is 5 QPS / burst 10 per process.
+	// Each active run polls the API server ~0.3-0.4 req/s (readiness, host-mem
+	// scraper, Job status), so a dozen concurrent runs would throttle — and
+	// teardown Deletes would queue behind readiness polls. Raise the ceiling;
+	// the API server's own priority-and-fairness still protects the cluster.
+	k8sCfg.QPS = envFloat("K8S_CLIENT_QPS", 50)
+	k8sCfg.Burst = envInt("K8S_CLIENT_BURST", 100)
 	k8sClient, err := kubernetes.NewForConfig(k8sCfg)
 	if err != nil {
 		log.Fatalf("create kubernetes client: %v", err)
@@ -160,4 +168,26 @@ func main() {
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
+}
+
+// envInt reads an integer env var, falling back to def when unset/invalid.
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+		log.Printf("warning: %s=%q is not a positive integer; using %d", name, v, def)
+	}
+	return def
+}
+
+// envFloat reads a float env var, falling back to def when unset/invalid.
+func envFloat(name string, def float32) float32 {
+	if v := os.Getenv(name); v != "" {
+		if f, err := strconv.ParseFloat(v, 32); err == nil && f > 0 {
+			return float32(f)
+		}
+		log.Printf("warning: %s=%q is not a positive number; using %v", name, v, def)
+	}
+	return def
 }

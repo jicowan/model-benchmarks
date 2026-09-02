@@ -770,12 +770,15 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 			return nil
 		}
 
-		// Check for OOM events on pods belonging to this deployment
+		// Check for OOM events on pods belonging to this deployment. The
+		// template labels pods app.kubernetes.io/name=<name>; the previous
+		// selector ("app=<name>") matched nothing, so OOMs were never caught
+		// here and every OOM burned the full readinessTimeout (PRD-68 P2).
 		pods, _ := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("app=%s", name),
+			LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", name),
 		})
-		for _, pod := range pods.Items {
-			events, err := o.oomDetector.CheckPod(ctx, pod.Name)
+		for i := range pods.Items {
+			events, err := o.oomDetector.CheckPodObject(ctx, &pods.Items[i])
 			if err == nil && len(events) > 0 {
 				// Record OOM event and fail immediately
 				for _, ev := range events {
