@@ -17,10 +17,24 @@ psql "$POSTGRES_URL" -tc "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}'
 
 # PRD-68 P6: migration ledger. Every file used to be replayed on every
 # deploy, relying on idempotent SQL; now each filename is recorded after it
-# applies and skipped next time. First run against an existing database
-# replays everything once (still idempotent) and back-fills the ledger.
+# applies and skipped next time.
+#
+# Bootstrap: an EXISTING database (benchmark_runs present) with an empty
+# ledger is a pre-ledger deployment. Not every historical file is strictly
+# idempotent (001_initial.sql has bare CREATE TABLE), so the very first pass
+# replays them the old lenient way (errors ignored, exactly as before) and
+# back-fills the ledger. From then on every run is strict: a failing
+# statement fails the Job instead of silently continuing.
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c \
   "CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+
+LEDGER_COUNT=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM schema_migrations")
+HAS_SCHEMA=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_name = 'benchmark_runs'")
+STRICT=1
+if [ "$LEDGER_COUNT" = "0" ] && [ "$HAS_SCHEMA" != "0" ]; then
+  echo "Existing schema with empty ledger: bootstrap pass (lenient replay, back-filling schema_migrations)."
+  STRICT=0
+fi
 
 echo "Running database migrations..."
 for f in /migrations/*.sql; do
@@ -30,9 +44,11 @@ for f in /migrations/*.sql; do
     continue
   fi
   echo "  Applying: ${name}"
-  # ON_ERROR_STOP so a failing statement fails the Job instead of silently
-  # continuing to the next file with a half-applied schema.
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+  if [ "$STRICT" = "1" ]; then
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+  else
+    psql "$DATABASE_URL" -f "$f"
+  fi
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c \
     "INSERT INTO schema_migrations (filename) VALUES ('${name}') ON CONFLICT DO NOTHING"
 done
