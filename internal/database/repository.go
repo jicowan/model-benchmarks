@@ -39,8 +39,10 @@ func NewRepository(ctx context.Context, connString string) (*Repository, error) 
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)
 	}
-	cfg.MaxConns = int32(envIntDefault("DB_MAX_CONNS", 10))
-	cfg.MinConns = int32(envIntDefault("DB_MIN_CONNS", 2))
+	// Bounded before the int32 conversion (CodeQL go/incorrect-integer-conversion);
+	// 1000 is far above any sane per-pod pool and below Aurora's max_connections.
+	cfg.MaxConns = int32(envIntBounded("DB_MAX_CONNS", 10, 1000))
+	cfg.MinConns = int32(envIntBounded("DB_MIN_CONNS", 2, 1000))
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	cfg.MaxConnLifetime = 30 * time.Minute
 	cfg.HealthCheckPeriod = 30 * time.Second
@@ -752,4 +754,14 @@ func envIntDefault(name string, def int) int {
 		}
 	}
 	return def
+}
+
+// envIntBounded is envIntDefault with an inclusive upper bound; values above
+// max fall back to def so the result is always safe to narrow to int32.
+func envIntBounded(name string, def, max int) int {
+	n := envIntDefault(name, def)
+	if n > max {
+		return def
+	}
+	return n
 }
