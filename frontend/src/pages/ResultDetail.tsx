@@ -102,8 +102,10 @@ export default function ResultDetail() {
     return <Navigate to={`/results/${run.id}/distributed`} replace />;
   }
 
-  const isNeuron = (instanceType?.accelerator_type ?? "").toLowerCase() === "neuron";
-  const acceleratorNoun = isNeuron ? "chip" : "GPU";
+  const acceleratorType = (instanceType?.accelerator_type ?? "").toLowerCase();
+  const isNeuron = acceleratorType === "neuron";
+  const isCPU = acceleratorType === "cpu";
+  const acceleratorNoun = isNeuron ? "chip" : isCPU ? "CPU" : "GPU";
   const acceleratorCount = instanceType?.accelerator_count ?? 0;
 
   const succeeded = metrics?.successful_requests ?? 0;

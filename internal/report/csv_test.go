@@ -184,3 +184,83 @@ func TestGenerateCompareCSV_SmokeTest(t *testing.T) {
 		t.Error("missing ttft header")
 	}
 }
+
+// TestGenerateCompareCSV_CPUvsGPU (PRD-67 §12): a CPU row (accelerator_count=0,
+// no DCGM metrics) compared against a GPU row. The cross-tier signals (cost,
+// aggregate throughput, TTFT) must populate for the CPU row, while the
+// GPU-centric columns (per-GPU throughput, DCGM sm/tensor/dram active) render
+// BLANK (not 0) — no divide-by-zero, and the CPU row isn't implied to have
+// "failed" those metrics.
+func TestGenerateCompareCSV_CPUvsGPU(t *testing.T) {
+	entries := []database.CatalogEntry{
+		{
+			RunID: "cpu-run", ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct",
+			InstanceTypeName: "r8g.16xlarge", AcceleratorCount: 0, // CPU: no discrete accelerator
+			Framework: "vllm-cpu", FrameworkVersion: "v0.27.0", TensorParallelDegree: 1,
+			Concurrency: 16, InputSequenceLength: 512, OutputSequenceLength: 256,
+			TTFTP50Ms: floatP(217.0), ThroughputAggregateTPS: floatP(586.0), RequestsPerSecond: floatP(5.0),
+			// DCGM fields intentionally nil (never scraped on CPU).
+		},
+		{
+			RunID: "gpu-run", ModelHfID: "Qwen/Qwen2.5-1.5B-Instruct",
+			InstanceTypeName: "g6.2xlarge", AcceleratorCount: 1,
+			Framework: "vllm", FrameworkVersion: "v0.19.0", TensorParallelDegree: 1,
+			Concurrency: 16, InputSequenceLength: 512, OutputSequenceLength: 256,
+			TTFTP50Ms: floatP(45.0), ThroughputAggregateTPS: floatP(632.0), RequestsPerSecond: floatP(5.0),
+			SMActiveAvgPct: floatP(88.0),
+		},
+	}
+	// Distinct hourly rates so cost columns are computable for both tiers.
+	hourly := func(name string) *float64 {
+		v := map[string]float64{"r8g.16xlarge": 3.85, "g6.2xlarge": 0.98}[name]
+		return &v
+	}
+	data, err := GenerateCompareCSV(entries, hourly, "on-demand", "us-east-2")
+	if err != nil {
+		t.Fatalf("GenerateCompareCSV: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// Find the CPU row (starts with cpu-run) and split its columns.
+	var cpuCols, hdr []string
+	for _, ln := range lines {
+		cols := strings.Split(ln, ",")
+		if len(cols) > 0 && cols[0] == "run_id" {
+			hdr = cols
+		}
+		if len(cols) > 0 && cols[0] == "cpu-run" {
+			cpuCols = cols
+		}
+	}
+	if hdr == nil || cpuCols == nil {
+		t.Fatalf("missing header or cpu-run row; got:\n%s", string(data))
+	}
+	col := func(name string) string {
+		for i, h := range hdr {
+			if h == name && i < len(cpuCols) {
+				return cpuCols[i]
+			}
+		}
+		t.Fatalf("no such column %q", name)
+		return ""
+	}
+	// Cross-tier signals populate for CPU.
+	if col("throughput_tps") != "586.00" {
+		t.Errorf("CPU throughput_tps = %q, want 586.00", col("throughput_tps"))
+	}
+	if col("cost_per_1m_tokens_usd") == "" {
+		t.Error("CPU cost_per_1m_tokens_usd must populate (has hourly + throughput)")
+	}
+	if col("ttft_p50_ms") != "217.00" {
+		t.Errorf("CPU ttft_p50_ms = %q, want 217.00", col("ttft_p50_ms"))
+	}
+	// GPU-centric columns render BLANK for the CPU row (not 0).
+	if col("throughput_per_gpu_tps") != "" {
+		t.Errorf("CPU throughput_per_gpu_tps = %q, want blank (count 0)", col("throughput_per_gpu_tps"))
+	}
+	if col("sm_active_avg_pct") != "" {
+		t.Errorf("CPU sm_active_avg_pct = %q, want blank (no DCGM on CPU)", col("sm_active_avg_pct"))
+	}
+	if col("accelerator_count") != "0" {
+		t.Errorf("CPU accelerator_count = %q, want 0", col("accelerator_count"))
+	}
+}

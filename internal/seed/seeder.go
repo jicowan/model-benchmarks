@@ -217,9 +217,12 @@ func (s *Seeder) run(id string, opts Options) {
 			}
 
 			var rec *recommend.Recommendation
-			if strings.EqualFold(inst.AcceleratorType, "neuron") {
+			switch {
+			case strings.EqualFold(inst.AcceleratorType, "neuron"):
 				rec = recommend.RecommendNeuron(*modelCfg, inst)
-			} else {
+			case strings.EqualFold(inst.AcceleratorType, "cpu"):
+				rec = recommend.RecommendCPU(*modelCfg, inst)
+			default:
 				// Tell the recommender whether this run will use the Run:ai
 				// streamer (for S3-cached models), so its host-memory check
 				// accounts for the lower host-RAM peak that path provides.

@@ -314,6 +314,61 @@ func TestDeployModel_NeuronInstance(t *testing.T) {
 	}
 }
 
+// TestDeployModel_CPUInstance (PRD-67 §3/§5/§7): a CPU run deploys the arm64
+// Deployment (VLLM_CPU_KVCACHE_SPACE env, no discrete-accelerator device
+// resource) and does NOT crash the orchestrator. The GPU DCGM scraper is
+// already gpu-gated (lifecycle.go), so a CPU run skips it by construction.
+func TestDeployModel_CPUInstance(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	repo := database.NewMockRepo()
+	o := New(client, repo, "test-pod")
+
+	cfg := testRunConfig("12345678-abcd-1234-abcd-1234567890ab")
+	cfg.InstanceType.Name = "r8g.16xlarge"
+	cfg.InstanceType.Family = "r8g"
+	cfg.InstanceType.AcceleratorType = "cpu"
+	cfg.InstanceType.AcceleratorName = "Graviton4"
+	cfg.InstanceType.AcceleratorCount = 0
+	cfg.InstanceType.AcceleratorMemoryGiB = 0
+	cfg.InstanceType.VCPUs = 64
+	cfg.InstanceType.MemoryGiB = 512
+	cfg.Request.InstanceTypeName = "r8g.16xlarge"
+	cfg.Request.Framework = "vllm-cpu"
+	cfg.Request.FrameworkVersion = "v0.27.0"
+
+	ctx := context.Background()
+	if err := o.deployModel(ctx, "default", "bench-cpu12345", cfg); err != nil {
+		t.Fatalf("deployModel: %v", err)
+	}
+
+	dep, err := client.AppsV1().Deployments("default").Get(ctx, "bench-cpu12345", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	c := dep.Spec.Template.Spec.Containers[0]
+	// No discrete-accelerator device resource on a CPU deployment.
+	for res := range c.Resources.Limits {
+		if res == "nvidia.com/gpu" || res == "aws.amazon.com/neuron" {
+			t.Errorf("CPU deployment must not request %s", res)
+		}
+	}
+	// VLLM_CPU_KVCACHE_SPACE env present.
+	var hasKV bool
+	for _, e := range c.Env {
+		if e.Name == "VLLM_CPU_KVCACHE_SPACE" {
+			hasKV = true
+		}
+	}
+	if !hasKV {
+		t.Error("CPU deployment missing VLLM_CPU_KVCACHE_SPACE env")
+	}
+	// arm64 nodeSelector.
+	if dep.Spec.Template.Spec.NodeSelector["kubernetes.io/arch"] != "arm64" {
+		t.Errorf("CPU deployment nodeSelector arch = %q, want arm64",
+			dep.Spec.Template.Spec.NodeSelector["kubernetes.io/arch"])
+	}
+}
+
 func TestCancelRun_Found(t *testing.T) {
 	repo := database.NewMockRepo()
 	client := fake.NewSimpleClientset()

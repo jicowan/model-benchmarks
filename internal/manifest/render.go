@@ -128,6 +128,12 @@ type ModelDeploymentParams struct {
 	// var, inheriting the upstream 40 GB default.
 	StreamerMemoryLimitGiB int
 
+	// CPUKVCacheSpaceGiB is the VLLM_CPU_KVCACHE_SPACE env value (absolute GiB)
+	// for a cpu run — an absolute KV-cache allocation, not a fraction. Resolved
+	// by recommend.CPUKVCacheSpaceGiB from host RAM. Only rendered when
+	// AcceleratorType == "cpu" (PRD-67 §2/§5).
+	CPUKVCacheSpaceGiB int
+
 	// Runtime interface fields: when Image is non-empty, the template uses
 	// these pre-computed values instead of the legacy framework conditionals.
 	RuntimeContainerName string   // k8s container name (e.g. "vllm", "sglang")

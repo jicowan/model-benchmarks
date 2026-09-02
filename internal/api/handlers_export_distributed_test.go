@@ -336,6 +336,45 @@ func TestGenerateManifest_SingleNode(t *testing.T) {
 	}
 }
 
+// TestGenerateManifest_CPU (PRD-67 §8): a CPU run exports the arm64/cpu branch —
+// vllm-openai-cpu image, arm64 nodeSelector, cpu/memory resources with NO device
+// resource, VLLM_CPU_KVCACHE_SPACE + OMP_THREADS_BIND, SYS_NICE, forced bfloat16
+// — NOT the neuron branch it would otherwise fall into.
+func TestGenerateManifest_CPU(t *testing.T) {
+	d := &database.RunExportDetails{
+		ModelHfID: "meta-llama/Llama-3.1-8B-Instruct", InstanceTypeName: "r8g.16xlarge",
+		Framework: "vllm-cpu", FrameworkVersion: "v0.27.0",
+		TensorParallelDegree: 1, AcceleratorType: "cpu", AcceleratorCount: 0,
+		VCPUs: 64, MemoryGiB: 512,
+	}
+	out, err := generateManifest(d)
+	if err != nil {
+		t.Fatalf("generateManifest: %v", err)
+	}
+	for _, want := range []string{
+		"vllm/vllm-openai-cpu:v0.27.0-arm64",
+		"kubernetes.io/arch: arm64",
+		"accelbench.io/cpu",
+		"VLLM_CPU_KVCACHE_SPACE",
+		"VLLM_CPU_OMP_THREADS_BIND",
+		"SYS_NICE",
+		"Unconfined",
+		"bfloat16",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("CPU export missing %q", want)
+		}
+	}
+	for _, notWant := range []string{
+		"nvidia.com/gpu", "aws.amazon.com/neuron", "pytorch-inference-vllm-neuronx",
+		"failureThreshold: 540", "--gpu-memory-utilization",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("CPU export must NOT contain %q", notWant)
+		}
+	}
+}
+
 // TestResolveExportStreamer (PRD-65 Layer 4): the export handler reproduces the
 // D/P cached-model auto-detect (orchestrator resolveS3Model), and NEVER does so
 // for PP (distributed) — llm-d-aws can't stream from S3.

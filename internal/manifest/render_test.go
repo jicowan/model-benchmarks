@@ -112,6 +112,69 @@ func TestRenderModelDeployment_Neuron(t *testing.T) {
 	}
 }
 
+func TestRenderModelDeployment_CPU(t *testing.T) {
+	// The orchestrator drives the CPU render via the runtime abstraction
+	// (RuntimeImage/RuntimeArgs), so build the params the way it would.
+	rt, _ := runtime.Get("vllm-cpu")
+	_, args := rt.BuildArgs(runtime.ContainerParams{
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		TensorParallelDegree: 1,
+	})
+	params := ModelDeploymentParams{
+		Name:                 "bench-cpu",
+		Namespace:            "accelbench",
+		ModelHfID:            "meta-llama/Llama-3.1-8B-Instruct",
+		Framework:            "vllm-cpu",
+		FrameworkVersion:     "v0.27.0",
+		TensorParallelDegree: 1,
+		AcceleratorType:      "cpu",
+		AcceleratorCount:     0,
+		AcceleratorMemoryGiB: 0,
+		InstanceTypeName:     "r8g.16xlarge",
+		InstanceFamily:       "r8g",
+		CPURequest:           "32",
+		MemoryRequest:        "256Gi",
+		CPUKVCacheSpaceGiB:   128,
+		RuntimeContainerName: "vllm",
+		RuntimeImage:         "vllm/vllm-openai-cpu:v0.27.0-arm64",
+		RuntimeArgs:          args,
+	}
+
+	out, err := RenderModelDeployment(params)
+	if err != nil {
+		t.Fatalf("RenderModelDeployment: %v", err)
+	}
+
+	for _, c := range []struct{ name, want string }{
+		{"cpu image", "vllm/vllm-openai-cpu:v0.27.0-arm64"},
+		{"arm64 nodeSelector", "kubernetes.io/arch: arm64"},
+		{"instance type", "node.kubernetes.io/instance-type: r8g.16xlarge"},
+		{"cpu taint toleration", "accelbench.io/cpu"},
+		{"kvcache env", "VLLM_CPU_KVCACHE_SPACE"},
+		{"kvcache value", `value: "128"`},
+		{"thread bind env", "VLLM_CPU_OMP_THREADS_BIND"},
+		{"sys_nice cap", "SYS_NICE"},
+		{"unconfined seccomp", "Unconfined"},
+		{"forced bfloat16", "bfloat16"},
+		{"shm volume", "name: shm"},
+	} {
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: CPU deployment missing %q", c.name, c.want)
+		}
+	}
+
+	// Must NOT contain any discrete-accelerator device resource, GPU/neuron
+	// tolerations, or the 540 neuron startup threshold.
+	for _, notWant := range []string{
+		"nvidia.com/gpu", "aws.amazon.com/neuron", "failureThreshold: 540",
+		"NCCL_DEBUG", "--gpu-memory-utilization", "--kv-cache-dtype",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("CPU deployment must NOT contain %q", notWant)
+		}
+	}
+}
+
 func TestRenderModelDeployment_NoQuantization(t *testing.T) {
 	params := ModelDeploymentParams{
 		Name:                 "bench-noq",

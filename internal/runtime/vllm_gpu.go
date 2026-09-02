@@ -153,15 +153,17 @@ func StreamerExtraConfig(p ContainerParams) string { return streamerExtraConfig(
 // streamed load. Keys, in fixed order for stable/testable output:
 //   - concurrency (always): explicit / AWS size-derived / standard default,
 //     resolved by StreamerConcurrency. Maps to RUNAI_STREAMER_CONCURRENCY.
-//   - distributed:true (only when TensorParallelDegree > 1): the multiple vLLM
-//     rank processes reading the same file list divide the work and broadcast
-//     their shard over torch-distributed instead of each reading the full files
-//     — a no-op (omitted) at TP=1. Requires vLLM V1 + a torch-distributed group.
+//   - distributed:true (only when TensorParallelDegree > 1 AND not CPU): the
+//     multiple vLLM rank processes reading the same file list divide the work and
+//     broadcast their shard over torch-distributed instead of each reading the
+//     full files — a no-op (omitted) at TP=1. Requires vLLM V1 + a torch-distributed
+//     group, which is CUDA/ROCm-only, so it is suppressed on cpu runs where the
+//     "TP" ranks are NUMA nodes with no NCCL group (PRD-67 §5b).
 //   - memory_limit BYTES (only when StreamerMemoryLimitGiB > 0): caps the CPU
 //     staging buffer (RUNAI_STREAMER_MEMORY_LIMIT); omitted ⇒ upstream default.
 func streamerExtraConfig(p ContainerParams) string {
 	parts := []string{fmt.Sprintf(`"concurrency":%d`, StreamerConcurrency(p.StreamerConcurrency, p.ModelSizeBytes, p.InstanceTypeName))}
-	if p.TensorParallelDegree > 1 {
+	if p.TensorParallelDegree > 1 && p.Accelerator != "cpu" {
 		parts = append(parts, `"distributed":true`)
 	}
 	if p.StreamerMemoryLimitGiB > 0 {

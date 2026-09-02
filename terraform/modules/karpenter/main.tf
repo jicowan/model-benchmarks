@@ -15,6 +15,15 @@ data "aws_ssm_parameter" "gpu_ami" {
   name = "/aws/service/eks/optimized-ami/${var.kubernetes_version}/amazon-linux-2023/x86_64/nvidia/recommended/image_id"
 }
 
+# PRD-67: the standard EKS-optimized AL2023 ARM64 AMI for the Graviton CPU pool
+# (no accelerator variant — CPU has no discrete device). Pinned via SSM for the
+# same reproducibility reason as the gpu AMI. This AMI ships containerd 2.2 + the
+# soci-snapshotter, so the FastImagePull feature gate (in soci_user_data) works.
+data "aws_ssm_parameter" "cpu_arm64_ami" {
+  count = var.install_cpu_nodepool ? 1 : 0
+  name  = "/aws/service/eks/optimized-ami/${var.kubernetes_version}/amazon-linux-2023/arm64/standard/recommended/image_id"
+}
+
 # PRD-65: SOCI PARALLEL-PULL mode, shared by the single-node gpu class AND the
 # multi-node classes (defined once, can't drift). Speeds large-image pulls (the
 # 8.9 GB llm-d-aws PP image took ~4m6s pre-SOCI); all GPU classes share the
@@ -391,6 +400,102 @@ resource "kubectl_manifest" "neuron_node_pool" {
         consolidateAfter: 1m
         # Override Karpenter's default 10% budget so multiple empty nodes
         # can drain in parallel instead of being serialized one at a time.
+        budgets:
+          - nodes: "100%"
+  YAML
+
+  depends_on = [time_sleep.wait_for_karpenter]
+}
+
+# ---------- PRD-67: ARM/Graviton CPU pool ----------
+# Gated behind install_cpu_nodepool (default off). arm64 AL2023 AMI, Graviton3/4/5
+# families, no device plugin (no discrete accelerator). Gets the same
+# soci_user_data (FastImagePull gate) as the gpu/multinode classes for fast image
+# pulls on cold Graviton nodes.
+resource "kubectl_manifest" "cpu_node_class" {
+  count     = var.install_cpu_nodepool ? 1 : 0
+  yaml_body = <<-YAML
+    apiVersion: karpenter.k8s.aws/v1
+    kind: EC2NodeClass
+    metadata:
+      name: cpu
+    spec:
+      # Standard AL2023 ARM64 AMI (no accelerator variant). amiFamily REQUIRED
+      # when amiSelectorTerms uses `id`.
+      amiFamily: AL2023
+      amiSelectorTerms:
+        - id: ${var.install_cpu_nodepool ? data.aws_ssm_parameter.cpu_arm64_ami[0].value : ""}
+      role: ${module.karpenter.node_iam_role_name}
+      subnetSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      securityGroupSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      blockDeviceMappings:
+        - deviceName: /dev/xvda
+          ebs:
+            # Large models (quantized MoE) can be 100s of GiB on disk; give the
+            # root volume room for the streamer cache + image layers.
+            volumeSize: 500Gi
+            volumeType: gp3
+            encrypted: true
+            throughput: 1000
+            iops: 16000
+      userData: ${jsonencode(local.soci_user_data)}
+  YAML
+
+  depends_on = [time_sleep.wait_for_karpenter]
+}
+
+resource "kubectl_manifest" "cpu_node_pool" {
+  count     = var.install_cpu_nodepool ? 1 : 0
+  yaml_body = <<-YAML
+    apiVersion: karpenter.sh/v1
+    kind: NodePool
+    metadata:
+      name: cpu
+    spec:
+      weight: 100
+      template:
+        spec:
+          requirements:
+            - key: kubernetes.io/arch
+              operator: In
+              values: ["arm64"]
+            - key: karpenter.k8s.aws/instance-family
+              operator: In
+              # Graviton3/4/5 only (SVE/I8MM/BF16). Exclude Graviton2 (*6g).
+              values: ["r8g", "m8g", "c8g", "r7g", "m7g", "c7g", "m9g", "c9g", "r9g"]
+            - key: karpenter.sh/capacity-type
+              operator: In
+              values: ["reserved", "on-demand"]
+          taints:
+            # PRD-67: dedicated CPU taint. Load-bearing beyond isolation — it is
+            # what keeps the GPU/Neuron DaemonSets OFF arm64 nodes: the
+            # nvidia-device-plugin, dcgm-exporter, and neuron-device-plugin
+            # tolerate nvidia.com/gpu / aws.amazon.com/neuron + accelbench.io/
+            # dedicated but NOT accelbench.io/cpu, so this taint blocks them (and
+            # their nodeAffinity requires accelerator labels a CPU node lacks).
+            # The critical system DaemonSets (aws-node, kube-proxy,
+            # eks-pod-identity-agent, ebs-csi-node) tolerate all taints and are
+            # multi-arch, so they still run. No NVIDIA driver / DCGM on CPU nodes.
+            - key: accelbench.io/cpu
+              effect: NoSchedule
+            - key: accelbench.io/dedicated
+              value: "true"
+              effect: NoSchedule
+          nodeClassRef:
+            group: karpenter.k8s.aws
+            kind: EC2NodeClass
+            name: cpu
+      limits:
+        cpu: "1000"
+      disruption:
+        consolidationPolicy: WhenEmpty
+        # Graviton is far cheaper than GPU, but still deprovision promptly once
+        # the benchmark's Deployment + loadgen are torn down.
+        consolidateAfter: 1m
         budgets:
           - nodes: "100%"
   YAML

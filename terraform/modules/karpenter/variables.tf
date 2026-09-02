@@ -47,6 +47,16 @@ variable "install_nvidia_device_plugin" {
   default     = true
 }
 
+# PRD-67: ARM/CPU (Graviton) inference tier. Default OFF (like the other
+# brownfield toggles) so existing installs are unchanged. When true, provisions
+# an arm64 EC2NodeClass + NodePool over Graviton3/4/5 families. No device plugin
+# needed (no discrete accelerator).
+variable "install_cpu_nodepool" {
+  description = "Provision the ARM/Graviton CPU EC2NodeClass + NodePool (PRD-67)."
+  type        = bool
+  default     = false
+}
+
 # PRD-55: DRA drivers for the multi-node pool. Both default OFF so the
 # single-instance install is unchanged; the multi-node NodePool slice
 # turns them on. They target ONLY nodes labeled accelbench.io/dra=true

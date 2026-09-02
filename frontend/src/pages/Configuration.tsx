@@ -1120,6 +1120,7 @@ function ToolVersionsCard() {
   const [inferencePerf, setInferencePerf] = useState("");
   const [llmd, setLLMD] = useState("");
   const [pdVllm, setPDVllm] = useState("");
+  const [vllmCpu, setVLLMCpu] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1135,6 +1136,7 @@ function ToolVersionsCard() {
       setInferencePerf(fresh.inference_perf_version);
       setLLMD(fresh.llmd_version);
       setPDVllm(fresh.pd_vllm_version);
+      setVLLMCpu(fresh.vllm_cpu_version);
     } catch (err: any) {
       setError(err.message || "Failed to load tool versions");
     } finally {
@@ -1154,6 +1156,7 @@ function ToolVersionsCard() {
         inference_perf_version: inferencePerf.trim(),
         llmd_version: llmd.trim(),
         pd_vllm_version: pdVllm.trim(),
+        vllm_cpu_version: vllmCpu.trim(),
       });
       setTV(fresh);
       setFramework(fresh.framework_version);
@@ -1161,6 +1164,7 @@ function ToolVersionsCard() {
       setInferencePerf(fresh.inference_perf_version);
       setLLMD(fresh.llmd_version);
       setPDVllm(fresh.pd_vllm_version);
+      setVLLMCpu(fresh.vllm_cpu_version);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
     } catch (err: any) {
@@ -1176,7 +1180,8 @@ function ToolVersionsCard() {
       sglang.trim() !== tv.sglang_version ||
       inferencePerf.trim() !== tv.inference_perf_version ||
       llmd.trim() !== tv.llmd_version ||
-      pdVllm.trim() !== tv.pd_vllm_version);
+      pdVllm.trim() !== tv.pd_vllm_version ||
+      vllmCpu.trim() !== tv.vllm_cpu_version);
 
   return (
     <CollapsibleSection
@@ -1188,7 +1193,7 @@ function ToolVersionsCard() {
           {error && <span className="font-mono text-[11.5px] text-danger">{error}</span>}
           <button
             onClick={handleSave}
-            disabled={saving || loading || !dirty || !framework.trim() || !sglang.trim() || !inferencePerf.trim() || !llmd.trim() || !pdVllm.trim()}
+            disabled={saving || loading || !dirty || !framework.trim() || !sglang.trim() || !inferencePerf.trim() || !llmd.trim() || !pdVllm.trim() || !vllmCpu.trim()}
             className="btn btn-primary"
           >
             {saving ? "SAVING…" : "SAVE"}
@@ -1227,6 +1232,11 @@ function ToolVersionsCard() {
               label="D/P vLLM Version (disaggregated)"
               value={pdVllm}
               onChange={setPDVllm}
+            />
+            <LabeledInput
+              label="vLLM CPU Version (ARM/Graviton)"
+              value={vllmCpu}
+              onChange={setVLLMCpu}
             />
           </div>
           <p className="meta">

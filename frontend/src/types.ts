@@ -777,6 +777,8 @@ export interface ToolVersions {
   // D/P image (vllm/vllm-openai) — distinct from framework_version.
   llmd_version: string;
   pd_vllm_version: string;
+  // PRD-67: ARM/CPU (Graviton) vLLM image tag (vllm/vllm-openai-cpu:<ver>-arm64).
+  vllm_cpu_version: string;
   updated_at: string;
   env_override_active: boolean;
   env_override_image?: string;
@@ -794,6 +796,9 @@ export interface ToolVersions {
   llmd_env_override_image?: string;
   pd_vllm_env_override_active: boolean;
   pd_vllm_env_override_image?: string;
+  // PRD-67: VLLM_CPU_IMAGE env var status.
+  vllm_cpu_env_override_active: boolean;
+  vllm_cpu_env_override_image?: string;
 }
 
 export interface CatalogModelEntry {

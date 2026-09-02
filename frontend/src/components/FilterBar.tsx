@@ -5,7 +5,7 @@ interface Props {
   onFilter: (filter: CatalogFilter) => void;
 }
 
-const ACCELERATORS = ["all", "gpu", "neuron"] as const;
+const ACCELERATORS = ["all", "gpu", "neuron", "cpu"] as const;
 
 export default function FilterBar({ onFilter }: Props) {
   const [model, setModel] = useState("");

@@ -23,6 +23,9 @@ type ToolVersions struct {
 	// independently of the bundled vLLM engine, so it's NOT FrameworkVersion
 	// (PRD-66 Part 2).
 	LLMDVersion string
+	// VLLMCPUVersion is the vllm-openai-cpu arm64 tag — a different repo (`-cpu`)
+	// with its own arm64 cadence, so NOT FrameworkVersion (PRD-67 §10a).
+	VLLMCPUVersion string
 }
 
 // ContainerParams carries the knobs that BuildArgs needs.
@@ -55,6 +58,12 @@ type ContainerParams struct {
 	// select GPU-architecture-appropriate launch flags such as the SGLang
 	// attention backend.
 	AcceleratorName string
+	// Accelerator is the accelerator TYPE ("gpu" | "neuron" | "cpu"). Empty is
+	// treated as gpu (all pre-PRD-67 callers). Used to gate accelerator-specific
+	// streamer behavior: distributed:true streaming is a GPU/NCCL feature, so it
+	// is suppressed on cpu (single-node NUMA, no torch-distributed group) — see
+	// streamerExtraConfig (PRD-67 §5b).
+	Accelerator string
 
 	// PRD-56 multi-node knobs. All zero-valued for single-container runtimes
 	// (vLLM/SGLang/Neuron), so their BuildArgs output is unchanged. Only the

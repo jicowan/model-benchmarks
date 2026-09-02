@@ -10,6 +10,7 @@ var registry = map[string]Runtime{}
 func init() {
 	Register(&VLLMgpu{})
 	Register(&VLLMneuron{})
+	Register(&VLLMcpu{}) // PRD-67: ARM/CPU (Graviton) runtime
 	Register(&SGLang{})
 	Register(&LLMD{}) // PRD-56: multi-node llm-d runtime
 }
@@ -56,10 +57,14 @@ func Names() []string {
 
 // ForAccelerator returns the default runtime for a given accelerator type.
 func ForAccelerator(accelType string) Runtime {
-	if accelType == "neuron" {
+	switch accelType {
+	case "neuron":
 		return registry["vllm-neuron"]
+	case "cpu":
+		return registry["vllm-cpu"]
+	default:
+		return registry["vllm"]
 	}
-	return registry["vllm"]
 }
 
 // SupportsAccelerator checks if a runtime supports the given accelerator type.

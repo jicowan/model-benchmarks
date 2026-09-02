@@ -582,6 +582,7 @@ export async function putToolVersions(payload: {
   inference_perf_version: string;
   llmd_version?: string;
   pd_vllm_version?: string;
+  vllm_cpu_version?: string;
 }): Promise<ToolVersions> {
   const res = await fetch(`${BASE}/config/tool-versions`, {
     method: "PUT",
