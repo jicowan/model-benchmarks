@@ -881,6 +881,9 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		// PRD-68 P3: owned from the INSERT so there is no window in which a
 		// crash leaves a NULL-owner pending row that recovery skips forever.
 		OwnerPod: &s.hostname,
+		// PRD-68 P4: attribute to the submitting user (nil for the seeder /
+		// auth-disabled synthetic principal).
+		CreatedBy: principalSub(ctx),
 	}
 
 	runID, err := s.repo.CreateBenchmarkRun(ctx, run)
@@ -1171,6 +1174,10 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run != nil {
+		if !canMutate(ctx, run.CreatedBy) { // PRD-68 P4
+			forbidNotOwner(w)
+			return
+		}
 		if run.Status != "pending" && run.Status != "running" {
 			writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel run with status %q", run.Status))
 			return
@@ -1183,6 +1190,10 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		}
 		if suiteRun == nil {
 			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		if !canMutate(ctx, suiteRun.CreatedBy) { // PRD-68 P4
+			forbidNotOwner(w)
 			return
 		}
 		if suiteRun.Status != "pending" && suiteRun.Status != "running" {
@@ -1218,6 +1229,10 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if run != nil {
+		if !canMutate(ctx, run.CreatedBy) { // PRD-68 P4
+			forbidNotOwner(w)
+			return
+		}
 		// Cancel if still active. PRD-68 P3: the old code only called the
 		// in-memory CancelRun, which is a no-op on the non-owning replica, so
 		// a cross-pod delete left the model Deployment + loadgen running to
@@ -1252,6 +1267,10 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !canMutate(ctx, suiteRun.CreatedBy) { // PRD-68 P4
+		forbidNotOwner(w)
+		return
+	}
 	// Cancel if still active (same cross-pod semantics as single runs above).
 	if suiteRun.Status == "pending" || suiteRun.Status == "running" {
 		if err := s.repo.RequestCancel(ctx, runID); err != nil {
@@ -1768,6 +1787,7 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		StreamerMemoryLimitGiB: suiteStreamerMemLimitPtr,
 		Status:                 "pending",
 		OwnerPod:               &s.hostname, // PRD-68 P3
+		CreatedBy:              principalSub(ctx), // PRD-68 P4
 	}
 	if req.Framework != "" {
 		fw := req.Framework

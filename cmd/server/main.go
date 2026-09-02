@@ -165,6 +165,8 @@ func main() {
 	srv.Orchestrator().StartOrphanRecoveryLoop(runCtx)
 	// PRD-68 P3: one cancel/ownership poll per pod for all owned runs.
 	srv.Orchestrator().StartCancelPollLoop(bgCtx)
+	// PRD-68 P4: adopt model-cache jobs whose watching pod died.
+	srv.StartModelCacheRecoveryLoop(runCtx)
 
 	// PRD-37: materialized Catalog view. Runs a synchronous refresh
 	// before the listener starts so the first Catalog request doesn't

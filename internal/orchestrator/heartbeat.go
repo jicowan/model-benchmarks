@@ -29,6 +29,9 @@ const (
 	// considered dead. 30s = 3 missed heartbeat intervals, which tolerates
 	// transient DB blips without prematurely marking siblings dead.
 	heartbeatTTL = 30 * time.Second
+	// HeartbeatTTL is heartbeatTTL for callers outside the package (the API
+	// server's model-cache recovery loop, PRD-68 P4).
+	HeartbeatTTL = heartbeatTTL
 
 	// recoveryGrace: wait this long after startup before running any
 	// recovery scan. Lets newly-started sibling pods establish their own

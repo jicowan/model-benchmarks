@@ -1139,6 +1139,32 @@ func (m *MockRepo) DeleteSuiteRun(_ context.Context, id string) error {
 
 // Model Cache methods
 
+func (m *MockRepo) ClaimModelCache(_ context.Context, id, pod string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mc, ok := m.modelCache[id]; ok {
+		p := pod
+		mc.OwnerPod = &p
+	}
+	return nil
+}
+
+func (m *MockRepo) GetOrphanedModelCaches(_ context.Context, livePods []string) ([]ModelCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []ModelCache
+	for _, mc := range m.modelCache {
+		if mc.Status != "caching" {
+			continue
+		}
+		if mc.OwnerPod != nil && containsPod(livePods, *mc.OwnerPod) {
+			continue
+		}
+		out = append(out, *mc)
+	}
+	return out, nil
+}
+
 func (m *MockRepo) CreateModelCache(_ context.Context, mc *ModelCache) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1173,6 +1199,9 @@ func (m *MockRepo) ListModelCache(_ context.Context, f ModelCacheFilter) ([]Mode
 	var items []ModelCache
 	for _, mc := range m.modelCache {
 		if f.Status != "" && mc.Status != f.Status {
+			continue
+		}
+		if f.HfID != "" && (mc.HfID == nil || *mc.HfID != f.HfID) {
 			continue
 		}
 		items = append(items, *mc)

@@ -18,15 +18,15 @@ func (r *Repository) CreateTestSuiteRun(ctx context.Context, run *TestSuiteRun) 
 		     framework, framework_version, model_s3_uri,
 		     max_num_batched_tokens, kv_cache_dtype,
 		     streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
-		     owner_pod)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		     owner_pod, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.SuiteID, run.TensorParallelDegree,
 		run.Quantization, nullableInt(run.MaxModelLen), run.Status,
 		run.Framework, run.FrameworkVersion, run.ModelS3URI,
 		run.MaxNumBatchedTokens, run.KVCacheDtype,
 		run.StreamerMode, run.StreamerConcurrency, run.StreamerMemoryLimitGiB,
-		run.OwnerPod,
+		run.OwnerPod, run.CreatedBy,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert test suite run: %w", err)
@@ -45,7 +45,8 @@ func (r *Repository) GetTestSuiteRun(ctx context.Context, id string) (*TestSuite
 		        framework, framework_version, model_s3_uri,
 		        max_num_batched_tokens, kv_cache_dtype,
 		        host_memory_peak_gib,
-		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib
+		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
+		        created_by
 		 FROM test_suite_runs WHERE id = $1`, id,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.SuiteID,
 		&run.TensorParallelDegree, &run.Quantization, &run.MaxModelLen,
@@ -54,7 +55,8 @@ func (r *Repository) GetTestSuiteRun(ctx context.Context, id string) (*TestSuite
 		&run.Framework, &run.FrameworkVersion, &run.ModelS3URI,
 		&run.MaxNumBatchedTokens, &run.KVCacheDtype,
 		&run.HostMemoryPeakGiB,
-		&run.StreamerMode, &run.StreamerConcurrency, &run.StreamerMemoryLimitGiB)
+		&run.StreamerMode, &run.StreamerConcurrency, &run.StreamerMemoryLimitGiB,
+		&run.CreatedBy)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

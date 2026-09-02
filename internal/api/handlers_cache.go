@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/accelbench/accelbench/internal/database"
+	"github.com/accelbench/accelbench/internal/orchestrator"
 	"github.com/accelbench/accelbench/internal/manifest"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -36,6 +37,7 @@ const (
 func (s *Server) handleListModelCache(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := database.ModelCacheFilter{
+		HfID:   q.Get("hf_id"), // PRD-68 P5: point lookup for the Run page
 		Status: q.Get("status"),
 		Sort:   q.Get("sort"),
 		Order:  q.Get("order"),
@@ -152,6 +154,7 @@ func (s *Server) handleCreateModelCache(w http.ResponseWriter, r *http.Request) 
 		S3URI:       s3URI,
 		DisplayName: displayName,
 		Status:      "pending",
+		OwnerPod:    &s.hostname, // PRD-68 P4: watched by this pod
 	}
 
 	id, err := s.repo.CreateModelCache(ctx, mc)
@@ -355,6 +358,14 @@ func (s *Server) handleRegisterCustomModel(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) watchCacheJob(cacheID, jobName string) {
+	s.watchCacheJobWithMode(cacheID, jobName, false)
+}
+
+// watchCacheJobWithMode is watchCacheJob with an `adopted` flag (PRD-68
+// P4). When this pod adopted the row from a dead sibling, a missing Job is
+// not a user cancel — it means the Job was garbage-collected (ttl) or never
+// created — so the row is failed instead of left 'caching' forever.
+func (s *Server) watchCacheJobWithMode(cacheID, jobName string, adopted bool) {
 	ctx := context.Background()
 	deadline := time.Now().Add(cacheJobTTL)
 
@@ -365,6 +376,12 @@ func (s *Server) watchCacheJob(cacheID, jobName string) {
 			// watching instead of looping until the 2h TTL. Only the
 			// row owner decides the terminal status.
 			if strings.Contains(err.Error(), "not found") {
+				if adopted {
+					errMsg := "cache job disappeared while its API pod was down; re-cache to retry"
+					_ = s.repo.UpdateModelCacheStatus(ctx, cacheID, "failed", &errMsg)
+					log.Printf("[cache %s] adopted job %s gone — marked failed", cacheID[:8], jobName)
+					return
+				}
 				log.Printf("[cache %s] job %s gone, stopping watch", cacheID[:8], jobName)
 				return
 			}
@@ -506,4 +523,71 @@ func modelPathFromHfID(hfID string) string {
 
 func int64Ptr(v int64) *int64 {
 	return &v
+}
+
+// StartModelCacheRecoveryLoop adopts model_cache rows stuck in 'caching'
+// whose watching pod stopped heartbeating (PRD-68 P4). Runs after the same
+// grace period as run recovery, every 30s, under an advisory lock so one
+// replica adopts. Adoption = re-stamp owner_pod + start a watcher; the
+// watcher then finalizes from the Job's real state.
+func (s *Server) StartModelCacheRecoveryLoop(ctx context.Context) {
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(60 * time.Second):
+		}
+		tick := time.NewTicker(30 * time.Second)
+		defer tick.Stop()
+		for {
+			s.recoverOrphanedModelCaches(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+}
+
+func (s *Server) recoverOrphanedModelCaches(ctx context.Context) {
+	_, err := s.repo.WithAdvisoryLock(ctx, database.LockKeyModelCacheRecovery, func(ctx context.Context) error {
+		live, err := s.repo.LiveAPIPods(ctx, orchestrator.HeartbeatTTL)
+		if err != nil {
+			return err
+		}
+		orphans, err := s.repo.GetOrphanedModelCaches(ctx, live)
+		if err != nil {
+			return err
+		}
+		for _, mc := range orphans {
+			owner := "<none>"
+			if mc.OwnerPod != nil {
+				owner = *mc.OwnerPod
+			}
+			if err := s.repo.ClaimModelCache(ctx, mc.ID, s.hostname); err != nil {
+				log.Printf("[cache %s] adopt from %s: claim: %v", shortCacheID(mc.ID), owner, err)
+				continue
+			}
+			if mc.JobName == nil || *mc.JobName == "" {
+				errMsg := "cache job was never recorded; re-cache to retry"
+				_ = s.repo.UpdateModelCacheStatus(ctx, mc.ID, "failed", &errMsg)
+				log.Printf("[cache %s] adopted from %s with no job name — marked failed", shortCacheID(mc.ID), owner)
+				continue
+			}
+			log.Printf("[cache %s] adopting cache job %s from dead pod %s", shortCacheID(mc.ID), *mc.JobName, owner)
+			go s.watchCacheJobWithMode(mc.ID, *mc.JobName, true)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("[cache-recovery] pass failed: %v", err)
+	}
+}
+
+func shortCacheID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

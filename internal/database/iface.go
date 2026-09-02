@@ -192,6 +192,9 @@ type ModelCacheRepo interface {
 	UpdateModelCacheStatus(ctx context.Context, id, status string, errMsg *string) error
 	UpdateModelCacheComplete(ctx context.Context, id string, sizeBytes int64) error
 	DeleteModelCache(ctx context.Context, id string) error
+	// PRD-68 P4: cache-job ownership + orphan scan.
+	ClaimModelCache(ctx context.Context, id, pod string) error
+	GetOrphanedModelCaches(ctx context.Context, livePods []string) ([]ModelCache, error)
 }
 
 // Compile-time check that *Repository implements Repo.

@@ -265,10 +265,11 @@ func (r *Repository) GetRunOwnership(ctx context.Context, ids []string) (map[str
 // Advisory-lock keys for the singleton background jobs (PRD-68 P3). Any
 // stable int64 works; these are arbitrary but must not collide.
 const (
-	LockKeyOrphanRecovery int64 = 68_001
-	LockKeyCatalogRefresh int64 = 68_002
-	LockKeyRetention      int64 = 68_003
-	LockKeyReconciler     int64 = 68_004
+	LockKeyOrphanRecovery     int64 = 68_001
+	LockKeyCatalogRefresh     int64 = 68_002
+	LockKeyRetention          int64 = 68_003
+	LockKeyReconciler         int64 = 68_004
+	LockKeyModelCacheRecovery int64 = 68_005
 )
 
 // WithAdvisoryLock runs fn while holding the Postgres session-level advisory
