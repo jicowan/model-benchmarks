@@ -420,6 +420,8 @@ export interface CatalogFilter {
 
 // PRD-36: ModelCache list filter for server-side pagination + sort.
 export interface ModelCacheFilter {
+  /** PRD-68 P5: exact hf_id point lookup. */
+  hf_id?: string;
   status?: string;
   sort?: string;
   order?: "asc" | "desc";
@@ -908,7 +910,9 @@ export interface DashboardStats {
   success_rate: number;    // completed / (completed + failed) × 100
   cached_models: number;
   total_cost_usd: number;  // lifetime
-  cost_per_day: { day: string; cost_usd: number }[]; // 14 days, zero-filled
+  // 14 days, zero-filled. PRD-68 P5: runs/suites created per day ride along
+  // so the activity chart needs no list fetch.
+  cost_per_day: { day: string; cost_usd: number; runs: number; suites: number }[];
 }
 
 // PRD-35: ModelCache aggregates for the stat cards on the Models page.

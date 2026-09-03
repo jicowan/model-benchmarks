@@ -12,6 +12,8 @@ import (
 // ModelCacheFilter controls pagination and sort for ListModelCache (PRD-36).
 // Autocomplete callers pass the zero value and get every row.
 type ModelCacheFilter struct {
+	// PRD-68 P5: exact hf_id point lookup (replaces the UI fetching every row).
+	HfID   string
 	Status string // ""|"pending"|"downloading"|"cached"|"failed" etc.
 	Sort   string // see modelCacheAllowedSortColumns
 	Order  string // "asc" | "desc" (default desc)
@@ -30,10 +32,10 @@ var modelCacheAllowedSortColumns = map[string]string{
 func (r *Repository) CreateModelCache(ctx context.Context, m *ModelCache) (string, error) {
 	var id string
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO model_cache (hf_id, hf_revision, s3_uri, display_name, status)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO model_cache (hf_id, hf_revision, s3_uri, display_name, status, owner_pod)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id`,
-		m.HfID, m.HfRevision, m.S3URI, m.DisplayName, m.Status,
+		m.HfID, m.HfRevision, m.S3URI, m.DisplayName, m.Status, m.OwnerPod,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert model cache: %w", err)
@@ -45,10 +47,10 @@ func (r *Repository) GetModelCache(ctx context.Context, id string) (*ModelCache,
 	var m ModelCache
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, hf_id, hf_revision, s3_uri, display_name, size_bytes,
-		        status, error_message, job_name, cached_at, created_at
+		        status, error_message, job_name, cached_at, created_at, owner_pod
 		 FROM model_cache WHERE id = $1`, id,
 	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.S3URI, &m.DisplayName, &m.SizeBytes,
-		&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt)
+		&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt, &m.OwnerPod)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -62,10 +64,10 @@ func (r *Repository) GetModelCacheByHfID(ctx context.Context, hfID, revision str
 	var m ModelCache
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, hf_id, hf_revision, s3_uri, display_name, size_bytes,
-		        status, error_message, job_name, cached_at, created_at
+		        status, error_message, job_name, cached_at, created_at, owner_pod
 		 FROM model_cache WHERE hf_id = $1 AND hf_revision = $2`, hfID, revision,
 	).Scan(&m.ID, &m.HfID, &m.HfRevision, &m.S3URI, &m.DisplayName, &m.SizeBytes,
-		&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt)
+		&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt, &m.OwnerPod)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -89,6 +91,11 @@ func (r *Repository) ListModelCache(ctx context.Context, f ModelCacheFilter) ([]
 		argIdx++
 		conditions = append(conditions, fmt.Sprintf("status = $%d", argIdx))
 		args = append(args, f.Status)
+	}
+	if f.HfID != "" {
+		argIdx++
+		conditions = append(conditions, fmt.Sprintf("hf_id = $%d", argIdx))
+		args = append(args, f.HfID)
 	}
 
 	where := ""
@@ -119,7 +126,7 @@ func (r *Repository) ListModelCache(ctx context.Context, f ModelCacheFilter) ([]
 
 	query := fmt.Sprintf(`
 		SELECT id, hf_id, hf_revision, s3_uri, display_name, size_bytes,
-		       status, error_message, job_name, cached_at, created_at,
+		       status, error_message, job_name, cached_at, created_at, owner_pod,
 		       COUNT(*) OVER () AS total_count
 		FROM model_cache
 		%s
@@ -140,7 +147,7 @@ func (r *Repository) ListModelCache(ctx context.Context, f ModelCacheFilter) ([]
 	for rows.Next() {
 		var m ModelCache
 		if err := rows.Scan(&m.ID, &m.HfID, &m.HfRevision, &m.S3URI, &m.DisplayName, &m.SizeBytes,
-			&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt, &total); err != nil {
+			&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt, &m.OwnerPod, &total); err != nil {
 			return nil, 0, fmt.Errorf("scan model cache row: %w", err)
 		}
 		items = append(items, m)
@@ -205,4 +212,42 @@ func (r *Repository) ModelCacheStats(ctx context.Context) (*ModelCacheStats, err
 		return nil, fmt.Errorf("model cache stats: %w", err)
 	}
 	return &s, nil
+}
+
+// ClaimModelCache stamps owner_pod on a model_cache row (PRD-68 P4). Used
+// when a sibling adopts an orphaned cache job.
+func (r *Repository) ClaimModelCache(ctx context.Context, id, pod string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE model_cache SET owner_pod = $1 WHERE id = $2`, pod, id)
+	if err != nil {
+		return fmt.Errorf("claim model cache: %w", err)
+	}
+	return nil
+}
+
+// GetOrphanedModelCaches returns 'caching' rows whose watching pod is not in
+// livePods (PRD-68 P4). Rows with a NULL owner (pre-045) are included too:
+// unlike runs there is no cost to adopting them, and leaving them stuck
+// blocks re-caching via the 409 in handleCreateModelCache.
+func (r *Repository) GetOrphanedModelCaches(ctx context.Context, livePods []string) ([]ModelCache, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, hf_id, hf_revision, s3_uri, display_name, size_bytes,
+		       status, error_message, job_name, cached_at, created_at, owner_pod
+		  FROM model_cache
+		 WHERE status = 'caching'
+		   AND (owner_pod IS NULL OR NOT (owner_pod = ANY($1)))`,
+		livePods)
+	if err != nil {
+		return nil, fmt.Errorf("get orphaned model caches: %w", err)
+	}
+	defer rows.Close()
+	var out []ModelCache
+	for rows.Next() {
+		var m ModelCache
+		if err := rows.Scan(&m.ID, &m.HfID, &m.HfRevision, &m.S3URI, &m.DisplayName, &m.SizeBytes,
+			&m.Status, &m.ErrorMessage, &m.JobName, &m.CachedAt, &m.CreatedAt, &m.OwnerPod); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }

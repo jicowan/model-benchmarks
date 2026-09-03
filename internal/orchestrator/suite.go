@@ -22,21 +22,29 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Register the cancel function so CancelRun can stop this suite.
-	o.mu.Lock()
-	o.cancels[suiteRunID] = cancel
-	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		delete(o.cancels, suiteRunID)
-		o.mu.Unlock()
-	}()
+	// Register the cancel function so CancelRun / the shared coordination
+	// poller can stop this suite, and count it for Drain (PRD-68 P3).
+	if !o.beginRun(suiteRunID, cancel) {
+		log.Printf("[suite %s] pod draining; not starting", suiteRunID[:8])
+		_ = o.repo.UpdateSuiteRunStatus(context.Background(), suiteRunID, "failed", nil)
+		return
+	}
+	defer o.endRun(suiteRunID)
 
-	// PRD-40: claim ownership + start cross-pod cancel poller.
+	// PRD-40: claim ownership (normally a no-op re-stamp; the row is inserted
+	// with owner_pod set).
 	if err := o.repo.ClaimSuiteRun(ctx, suiteRunID, o.hostname); err != nil {
 		log.Printf("[suite %s] claim: %v", suiteRunID[:8], err)
 	}
-	o.startCancelPoller(ctx, suiteRunID, cancel)
+
+	// PRD-68 P3 admission: one slot per suite (it holds one model node).
+	release, err := o.acquireSlot(ctx, suiteRunID)
+	if err != nil {
+		log.Printf("[suite %s] cancelled while waiting for a run slot", suiteRunID[:8])
+		_ = o.repo.UpdateSuiteRunStatus(context.Background(), suiteRunID, "failed", nil)
+		return
+	}
+	defer release()
 
 	suite := testsuite.Get(req.SuiteID)
 	if suite == nil {
@@ -76,7 +84,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	}
 
 	ns := defaultNamespace
-	modelName := fmt.Sprintf("suite-%s", suiteRunID[:8])
+	modelName := suiteModelNameFor(suiteRunID)
 
 	// Build config for model deployment
 	model, _ := o.repo.GetModelByHfID(ctx, req.ModelHfID, req.ModelHfRevision)
@@ -281,8 +289,8 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 		return nil, "", fmt.Errorf("unknown scenario: %s", scenarioID)
 	}
 
-	loadgenName := fmt.Sprintf("loadgen-%s-%s", suiteRunID[:8], scenarioID[:4])
-	configMapName := fmt.Sprintf("loadgen-config-%s-%s", suiteRunID[:8], scenarioID[:4])
+	loadgenName := suiteLoadgenNameFor(suiteRunID, scenarioID)
+	configMapName := suiteLoadgenCMNameFor(suiteRunID, scenarioID)
 
 	// Generate inference-perf config from scenario
 	inferencePerfConfig := s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
@@ -322,7 +330,7 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 	}
 
 	// Create ConfigMap
-	if err := o.createConfigMap(ctx, ns, configMapName, "config.yml", configYAML); err != nil {
+	if err := o.createConfigMap(ctx, ns, configMapName, suiteRunID, "config.yml", configYAML); err != nil {
 		return nil, "", fmt.Errorf("create configmap: %w", err)
 	}
 	defer o.client.CoreV1().ConfigMaps(ns).Delete(ctx, configMapName, metav1.DeleteOptions{})
@@ -339,6 +347,8 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               loadgenName,
+		RunID:               suiteRunID, // PRD-68 P6
+		SuiteRunID: resourceSuffix(suiteRunID),
 		Namespace:          ns,
 		InferencePerfImage: inferencePerfImage,
 		ConfigMapName:      configMapName,
@@ -386,14 +396,14 @@ func (o *Orchestrator) teardownSuite(ctx context.Context, ns, modelName, suiteRu
 // the goroutine is stuck.
 func (o *Orchestrator) CleanupSuiteResources(suiteRunID string) {
 	ns := defaultNamespace
-	modelName := fmt.Sprintf("suite-%s", suiteRunID[:8])
+	modelName := suiteModelNameFor(suiteRunID)
 	ctx := context.Background()
 
 	log.Printf("[suite %s] force cleanup: deleting resources", suiteRunID[:8])
 
 	// Delete any loadgen jobs for this suite
 	jobs, err := o.client.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("suite-run-id=%s", suiteRunID[:8]),
+		LabelSelector: fmt.Sprintf("%s=%s", labelSuiteRunID, resourceSuffix(suiteRunID)),
 	})
 	if err == nil {
 		for _, job := range jobs.Items {

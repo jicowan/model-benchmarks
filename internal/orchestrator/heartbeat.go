@@ -2,8 +2,14 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
+
+	"github.com/accelbench/accelbench/internal/database"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PRD-40: heartbeat + ownership-aware orphan recovery.
@@ -26,6 +32,9 @@ const (
 	// considered dead. 30s = 3 missed heartbeat intervals, which tolerates
 	// transient DB blips without prematurely marking siblings dead.
 	heartbeatTTL = 30 * time.Second
+	// HeartbeatTTL is heartbeatTTL for callers outside the package (the API
+	// server's model-cache recovery loop, PRD-68 P4).
+	HeartbeatTTL = heartbeatTTL
 
 	// recoveryGrace: wait this long after startup before running any
 	// recovery scan. Lets newly-started sibling pods establish their own
@@ -92,24 +101,36 @@ func (o *Orchestrator) StartOrphanRecoveryLoop(ctx context.Context) {
 // and clean up its Kubernetes resources. Called from the loop; also safe to
 // call ad-hoc from tests.
 func (o *Orchestrator) recoverOrphans(ctx context.Context) {
+	// PRD-68 P3: exactly one replica runs a recovery pass at a time. Without
+	// the lock every replica scanned and acted on the same orphans (idempotent
+	// deletes, but duplicated cost computation and log noise, and a real race
+	// on which pod's "failed" message lands).
+	ran, err := o.repo.WithAdvisoryLock(ctx, database.LockKeyOrphanRecovery, o.recoverOrphansLocked)
+	if err != nil {
+		log.Printf("[recovery] pass failed: %v", err)
+	}
+	_ = ran
+}
+
+func (o *Orchestrator) recoverOrphansLocked(ctx context.Context) error {
 	live, err := o.repo.LiveAPIPods(ctx, heartbeatTTL)
 	if err != nil {
-		log.Printf("[recovery] query live pods: %v", err)
-		return
+		return fmt.Errorf("query live pods: %w", err)
 	}
 
-	// Benchmark runs — reuse the same markFailed + cleanupResources path
-	// used by single-run failures today.
+	// Benchmark runs. PRD-68 P3: try to salvage a finished loadgen's S3
+	// summary before declaring the run failed (the owner may have died in the
+	// persist step).
 	if orphans, err := o.repo.GetOrphanedRuns(ctx, live); err == nil {
 		for _, r := range orphans {
 			owner := "unknown"
 			if r.OwnerPod != nil {
 				owner = *r.OwnerPod
 			}
-			log.Printf("[recovery] orphan run %s (owner=%s, status=%s) — marking failed",
+			log.Printf("[recovery] orphan run %s (owner=%s, status=%s) — salvaging or failing",
 				r.ID[:8], owner, r.Status)
-			o.markFailed(ctx, r.ID, orphanFailureMessage(owner))
-			o.cleanupResources(ctx, r.ID)
+			o.adm.recovered.Add(1)
+			o.salvageOrFail(ctx, r.ID, orphanFailureMessage(owner))
 		}
 	} else {
 		log.Printf("[recovery] query orphan runs: %v", err)
@@ -127,6 +148,7 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 			// log line above. Status flips to "failed"; currentScenario nil.
 			log.Printf("[recovery] orphan suite %s (owner=%s, status=%s) — %s",
 				s.ID[:8], owner, s.Status, orphanFailureMessage(owner))
+			o.adm.recovered.Add(1)
 			_ = o.repo.UpdateSuiteRunStatus(ctx, s.ID, "failed", nil)
 			o.CleanupSuiteResources(s.ID)
 		}
@@ -160,6 +182,7 @@ func (o *Orchestrator) recoverOrphans(ctx context.Context) {
 	// thus its scale-in) died with it — the p5 nodes would leak real money.
 	// This runs on the surviving sibling.
 	o.reapLeakedDistributedPools(ctx, live)
+	return nil
 }
 
 // reapLeakedDistributedPools scales every static multinode NodePool back to 0
@@ -183,6 +206,12 @@ func (o *Orchestrator) reapLeakedDistributedPools(ctx context.Context, livePods 
 		// next run isn't blocked by a ghost holder.
 		log.Printf("[recovery] distributed lock owner %q is dead — releasing stale lock", owner)
 		o.releaseDistributedLock(ctx, defaultNamespace)
+	}
+	// PRD-68 P5: one cheap Nodes.List answers "is there anything to reap?"
+	// before the NodePools.List + per-pool EC2NodeClass.Get + per-pool
+	// Nodes.List discovery that used to run every 30s forever.
+	if !o.anyMultinodeNodes(ctx) {
+		return
 	}
 	pools, err := o.selectMultinodePool(ctx, "")
 	if err != nil {
@@ -212,4 +241,20 @@ func (o *Orchestrator) reapLeakedDistributedPools(ctx context.Context, livePods 
 // and re-submitting is the fix.
 func orphanFailureMessage(ownerPod string) string {
 	return "API pod " + ownerPod + " stopped responding before the run finished — re-submit to retry"
+}
+
+// anyMultinodeNodes reports whether any node currently belongs to a
+// multinode-* Karpenter pool. Errors are treated as "maybe" (true) so the
+// full reap path still runs when the cheap check itself fails.
+func (o *Orchestrator) anyMultinodeNodes(ctx context.Context) bool {
+	nodes, err := o.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: nodePoolLabel})
+	if err != nil {
+		return true
+	}
+	for _, n := range nodes.Items {
+		if strings.HasPrefix(n.Labels[nodePoolLabel], "multinode") {
+			return true
+		}
+	}
+	return false
 }

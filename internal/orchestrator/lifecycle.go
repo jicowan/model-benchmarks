@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +21,6 @@ import (
 	"github.com/accelbench/accelbench/internal/runtime"
 	"github.com/accelbench/accelbench/internal/scenario"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -184,6 +184,8 @@ type Orchestrator struct {
 	// test_suite_runs.owner_pod when Execute starts so orphan recovery on
 	// sibling pods can attribute ownership.
 	hostname string
+	// PRD-68 P3: admission semaphore, shared poller state, drain flag.
+	adm *admission
 }
 
 // New creates a new Orchestrator.
@@ -195,6 +197,7 @@ func New(client kubernetes.Interface, repo database.Repo, hostname string) *Orch
 		cancels:     make(map[string]context.CancelFunc),
 		distributed: make(map[string]*distributedState),
 		hostname:    hostname,
+		adm:         newAdmission(maxConcurrentRunsFromEnv()),
 	}
 }
 
@@ -282,30 +285,39 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Register the cancel function so CancelRun can stop this goroutine.
-	o.mu.Lock()
-	o.cancels[cfg.RunID] = cancel
-	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		delete(o.cancels, cfg.RunID)
-		o.mu.Unlock()
-	}()
+	// Register the cancel function so CancelRun (and the shared coordination
+	// poller) can stop this goroutine, and count it for Drain. A draining pod
+	// admits nothing: fail fast so the row doesn't sit pending forever.
+	if !o.beginRun(cfg.RunID, cancel) {
+		o.markFailed(ctx, cfg.RunID, "API pod was shutting down when the run was submitted — re-submit to retry")
+		return ErrDraining
+	}
+	defer o.endRun(cfg.RunID)
 
 	// PRD-40: claim ownership so orphan recovery on sibling pods leaves this
-	// run alone, and start a background poller that watches for cross-pod
-	// cancel requests via the cancel_requested DB flag.
+	// run alone. (The row is normally inserted with owner_pod already set —
+	// PRD-68 P3 — so this is a no-op re-stamp; it stays for hand-built runs.)
 	if err := o.repo.ClaimRun(ctx, cfg.RunID, o.hostname); err != nil {
 		log.Printf("[%s] claim run: %v", cfg.RunID[:8], err)
 	}
-	o.startCancelPoller(ctx, cfg.RunID, cancel)
+
+	// PRD-68 P3 admission: wait for a concurrency slot BEFORE touching the
+	// cluster. The run stays "pending" and cancellable while queued.
+	release, err := o.acquireSlot(ctx, cfg.RunID)
+	if err != nil {
+		o.markFailed(ctx, cfg.RunID, "cancelled while waiting for a run slot")
+		return fmt.Errorf("acquire run slot: %w", err)
+	}
+	defer release()
 
 	ns := defaultNamespace
-	modelName := fmt.Sprintf("bench-%s", cfg.RunID[:8])
-	loadgenName := fmt.Sprintf("loadgen-%s", cfg.RunID[:8])
-	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
+	modelName := modelNameFor(cfg.RunID)
+	loadgenName := loadgenNameFor(cfg.RunID)
+	configMapName := loadgenCMNameFor(cfg.RunID)
 
-	// Phase 1: Mark run as running.
+	// Phase 1: Mark run as running. ErrRunNotActive here means recovery on
+	// a sibling already failed the row (or it was deleted) while we queued —
+	// nothing has been deployed yet, so just stop.
 	if err := o.repo.UpdateRunStatus(ctx, cfg.RunID, "running"); err != nil {
 		return fmt.Errorf("update status to running: %w", err)
 	}
@@ -709,6 +721,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 
 	yamlStr, err := manifest.RenderModelDeployment(manifest.ModelDeploymentParams{
 		Name:                 name,
+		RunID:                cfg.RunID, // PRD-68 P6: accelbench/run-id label
 		Namespace:            ns,
 		ModelHfID:            cfg.Request.ModelHfID,
 		HfToken:              o.resolveHFToken(ctx, cfg.Request.HfToken),
@@ -770,12 +783,15 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 			return nil
 		}
 
-		// Check for OOM events on pods belonging to this deployment
+		// Check for OOM events on pods belonging to this deployment. The
+		// template labels pods app.kubernetes.io/name=<name>; the previous
+		// selector ("app=<name>") matched nothing, so OOMs were never caught
+		// here and every OOM burned the full readinessTimeout (PRD-68 P2).
 		pods, _ := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("app=%s", name),
+			LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", name),
 		})
-		for _, pod := range pods.Items {
-			events, err := o.oomDetector.CheckPod(ctx, pod.Name)
+		for i := range pods.Items {
+			events, err := o.oomDetector.CheckPodObject(ctx, &pods.Items[i])
 			if err == nil && len(events) > 0 {
 				// Record OOM event and fail immediately
 				for _, ev := range events {
@@ -795,7 +811,7 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 }
 
 func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc string, cfg RunConfig) error {
-	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
+	configMapName := loadgenCMNameFor(cfg.RunID)
 
 	// PRD-42: every run must reference a scenario. The API rejects
 	// scenario-less submissions at create time, so this is the only
@@ -877,7 +893,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 	}
 
 	// Create ConfigMap with inference-perf config
-	if err := o.createConfigMap(ctx, ns, configMapName, "config.yml", configYAML); err != nil {
+	if err := o.createConfigMap(ctx, ns, configMapName, cfg.RunID, "config.yml", configYAML); err != nil {
 		return fmt.Errorf("create configmap: %w", err)
 	}
 
@@ -895,6 +911,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:               name,
+		RunID:              cfg.RunID, // PRD-68 P6
 		Namespace:          ns,
 		InferencePerfImage: inferencePerfImage,
 		ConfigMapName:      configMapName,
@@ -958,11 +975,10 @@ func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName, runID st
 // fall back to the first .json file found if nothing matches.
 func (o *Orchestrator) readResultsFromS3Prefix(ctx context.Context, bucket, prefix, runID string) ([]byte, error) {
 	_ = runID // reserved for future exact-match probing
-	cfg, err := config.LoadDefaultConfig(ctx)
+	client, err := recommend.SharedS3Client(ctx) // PRD-68 P5: one client per process
 	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
+		return nil, err
 	}
-	client := s3.NewFromConfig(cfg)
 
 	listOut, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: &bucket,
@@ -1055,15 +1071,17 @@ func (o *Orchestrator) teardown(ctx context.Context, ns, modelName, loadgenName,
 	o.teardownDistributed(ctx, ns, modelName)
 }
 
-// createConfigMap creates a ConfigMap with the given data.
-func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, key, data string) error {
+// createConfigMap creates a ConfigMap with the given data, labelled with the
+// owning run id so the leak reconciler can attribute it (PRD-68 P6).
+func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, runID, key, data string) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 			Labels: map[string]string{
 				"app.kubernetes.io/component": "loadgen-config",
-				"accelbench/role":             "loadgen-config",
+				LabelRole:                     "loadgen-config",
+				LabelRunID:                    runID,
 			},
 		},
 		Data: map[string]string{
@@ -1083,6 +1101,12 @@ func (o *Orchestrator) markFailed(ctx context.Context, runID, reason string) {
 	defer cancel()
 
 	if err := o.repo.UpdateRunFailed(bgCtx, runID, reason); err != nil {
+		if errors.Is(err, database.ErrRunNotActive) {
+			// PRD-68 P3: another writer (orphan recovery, delete) already
+			// finalized this row. Their outcome wins; ours is just logged.
+			log.Printf("[%s] not marking failed (%s): row already terminal or deleted", shortID(runID), reason)
+			return
+		}
 		log.Printf("failed to mark run %s as failed: %v", runID, err)
 		return
 	}
@@ -1142,7 +1166,7 @@ func (o *Orchestrator) applyYAML(ctx context.Context, ns, yamlStr string) error 
 
 func (o *Orchestrator) createDeployment(ctx context.Context, ns, docJSON string) error {
 	var dep appsv1.Deployment
-	if err := json.Unmarshal([]byte(docJSON), &dep); err != nil {
+	if err := strictUnmarshal([]byte(docJSON), &dep); err != nil {
 		return fmt.Errorf("decode deployment: %w", err)
 	}
 	_, err := o.client.AppsV1().Deployments(ns).Create(ctx, &dep, metav1.CreateOptions{})
@@ -1151,7 +1175,7 @@ func (o *Orchestrator) createDeployment(ctx context.Context, ns, docJSON string)
 
 func (o *Orchestrator) createService(ctx context.Context, ns, docJSON string) error {
 	var svc corev1.Service
-	if err := json.Unmarshal([]byte(docJSON), &svc); err != nil {
+	if err := strictUnmarshal([]byte(docJSON), &svc); err != nil {
 		return fmt.Errorf("decode service: %w", err)
 	}
 	_, err := o.client.CoreV1().Services(ns).Create(ctx, &svc, metav1.CreateOptions{})
@@ -1160,11 +1184,21 @@ func (o *Orchestrator) createService(ctx context.Context, ns, docJSON string) er
 
 func (o *Orchestrator) createJob(ctx context.Context, ns, docJSON string) error {
 	var job batchv1.Job
-	if err := json.Unmarshal([]byte(docJSON), &job); err != nil {
+	if err := strictUnmarshal([]byte(docJSON), &job); err != nil {
 		return fmt.Errorf("decode job: %w", err)
 	}
 	_, err := o.client.BatchV1().Jobs(ns).Create(ctx, &job, metav1.CreateOptions{})
 	return err
+}
+
+// strictUnmarshal is json.Unmarshal with DisallowUnknownFields (PRD-68 P1).
+// A rendered manifest carrying a field the typed object doesn't know about
+// is either a template bug or an attempt to smuggle pod-spec fields through a
+// user-controlled value; neither should reach the API server.
+func strictUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 func derefStr(s *string) string {
@@ -1263,7 +1297,29 @@ func (o *Orchestrator) recoverRun(ctx context.Context, bucket, runID string) {
 		return
 	}
 
+	// PersistMetrics flips the row to completed; freeze cost like the
+	// normal completion path does (PRD-35).
+	totalUSD, loadgenUSD := o.computeRunCost(ctx, runID)
+	if err := o.repo.UpdateRunCost(ctx, runID, totalUSD, loadgenUSD); err != nil {
+		log.Printf("[recovery] %s: update run cost: %v", shortID, err)
+	}
 	log.Printf("[recovery] %s: successfully recovered and completed", shortID)
+	o.cleanupResources(ctx, runID)
+}
+
+// salvageOrFail is the PRD-68 P3 recovery action for an orphaned single run:
+// if the loadgen already wrote a summary to S3 before the owner died, finish
+// the run from it (metrics persisted, status completed, GPU telemetry lost);
+// otherwise mark it failed. Either way the K8s resources are torn down.
+func (o *Orchestrator) salvageOrFail(ctx context.Context, runID, failMsg string) {
+	if bucket := os.Getenv("RESULTS_S3_BUCKET"); bucket != "" {
+		prefix := fmt.Sprintf("results/%s/", runID)
+		if _, err := o.readResultsFromS3Prefix(ctx, bucket, prefix, runID); err == nil {
+			o.recoverRun(ctx, bucket, runID)
+			return
+		}
+	}
+	o.markFailed(ctx, runID, failMsg)
 	o.cleanupResources(ctx, runID)
 }
 
@@ -1276,10 +1332,7 @@ func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ns := defaultNamespace
-	modelName := fmt.Sprintf("bench-%s", runID[:8])
-	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
-	configMapName := fmt.Sprintf("loadgen-config-%s", runID[:8])
-	o.teardown(bgCtx, ns, modelName, loadgenName, configMapName)
+	o.teardown(bgCtx, ns, modelNameFor(runID), loadgenNameFor(runID), loadgenCMNameFor(runID))
 }
 
 // getModelPodNodeIP returns the node IP where the model pod is running.

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"bytes"
 	"context"
 	"fmt"
@@ -1108,7 +1109,8 @@ func (s *Server) handleExportSuiteCSV(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.repo.GetScenarioResults(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get scenario results: "+err.Error())
+		log.Printf("get scenario results: %v", err)
+		writeError(w, http.StatusInternalServerError, "get scenario results failed")
 		return
 	}
 

@@ -3,6 +3,7 @@ package manifest
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/template"
@@ -32,7 +33,8 @@ func init() {
 		// RUNAI_STREAMER_MEMORY_LIMIT that expect a raw byte count.
 		"gibBytes":   func(gib int) int64 { return int64(gib) * 1024 * 1024 * 1024 },
 		// toYAMLStringList renders a Go []string as an inline YAML list
-		// e.g. ["python3"] → '["python3"]'
+		// e.g. ["python3"] → '["python3"]'. Elements are JSON-encoded, which
+		// is a valid YAML flow-sequence scalar and escapes quotes/newlines.
 		"toYAMLStringList": func(ss []string) string {
 			if len(ss) == 0 {
 				return "[]"
@@ -43,22 +45,23 @@ func init() {
 				if i > 0 {
 					b.WriteString(", ")
 				}
-				b.WriteString("\"")
-				b.WriteString(s)
-				b.WriteString("\"")
+				b.WriteString(jsonQuote(s))
 			}
 			b.WriteString("]")
 			return b.String()
 		},
-		// yamlQuote quotes a string for use as a YAML scalar value.
-		// Uses single quotes for values containing double quotes (e.g. JSON),
-		// double quotes for everything else.
-		"yamlQuote": func(s string) string {
-			if strings.Contains(s, "\"") {
-				return "'" + s + "'"
-			}
-			return "\"" + s + "\""
-		},
+		// yamlQuote renders s as a SAFE YAML scalar. Every user-derived string
+		// in the templates (HF token, model id, S3 URI, image refs, args) goes
+		// through here so a value containing quotes, newlines or control
+		// characters can never break out of its scalar and inject pod-spec
+		// fields (PRD-68 P1).
+		//
+		// Rendering rules:
+		//   * contains a double quote but nothing else awkward → single-quoted
+		//     (keeps the inline-JSON extra-config readable in exports);
+		//   * otherwise → JSON-encoded, which is a valid YAML double-quoted
+		//     scalar with every special character escaped.
+		"yamlQuote": YAMLQuote,
 		// dict builds a map from alternating key/value args, so a nested
 		// template can receive the outer params plus extra fields (PRD-56
 		// uses this to pass the LWS pod role — leader vs worker — into the
@@ -86,6 +89,7 @@ func init() {
 // ModelDeploymentParams holds values for rendering the model Deployment + Service.
 type ModelDeploymentParams struct {
 	Name                 string
+	RunID                string // PRD-68 P6: full run id, stamped as the accelbench/run-id label
 	Namespace            string
 	ModelHfID            string
 	HfToken              string
@@ -148,6 +152,8 @@ type ModelDeploymentParams struct {
 // natively via boto3, so there's no upload sidecar here.
 type LoadgenJobParams struct {
 	Name               string
+	RunID              string // PRD-68 P6: full run/suite id → accelbench/run-id label
+	SuiteRunID         string // PRD-68 P6: suite name suffix → suite-run-id label (suites only)
 	Namespace          string
 	InferencePerfImage string // inference-perf container image
 	ConfigMapName      string // ConfigMap containing inference-perf config
@@ -400,4 +406,37 @@ func renderTemplate(name string, data any) (string, error) {
 		return "", fmt.Errorf("render template %s: %w", name, err)
 	}
 	return buf.String(), nil
+}
+
+// YAMLQuote is the yamlQuote template helper (exported for tests and for
+// callers that build YAML outside the templates). See the FuncMap comment.
+func YAMLQuote(s string) string {
+	if strings.ContainsRune(s, '"') && !strings.ContainsRune(s, '\'') && isPlainPrintable(s) {
+		return "'" + s + "'"
+	}
+	return jsonQuote(s)
+}
+
+// jsonQuote returns s as a JSON string literal. JSON string syntax is a
+// strict subset of YAML double-quoted scalars, so the result is always a
+// single, fully-escaped YAML scalar regardless of content.
+func jsonQuote(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// json.Marshal of a string cannot fail; keep the compiler honest.
+		return `""`
+	}
+	return string(b)
+}
+
+// isPlainPrintable reports whether s has no control characters (including
+// newlines) and no non-ASCII bytes — i.e. it is safe to wrap in YAML single
+// quotes without escaping.
+func isPlainPrintable(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r > 0x7E {
+			return false
+		}
+	}
+	return true
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -22,11 +23,10 @@ func FetchModelConfigFromS3(ctx context.Context, s3URI string) (*ModelConfig, er
 		return nil, fmt.Errorf("invalid s3 URI: %s", s3URI)
 	}
 
-	awsCfg, err := config.LoadDefaultConfig(ctx)
+	client, err := SharedS3Client(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
+		return nil, err
 	}
-	client := s3.NewFromConfig(awsCfg)
 
 	configKey := strings.TrimSuffix(prefix, "/") + "/config.json"
 	raw, err := getS3Object(ctx, client, bucket, configKey)
@@ -99,7 +99,7 @@ func FetchModelConfigFromS3(ctx context.Context, s3URI string) (*ModelConfig, er
 func parseSafetensorsIndex(raw []byte) (int64, int64) {
 	var idx struct {
 		Metadata struct {
-			TotalSize      int64 `json:"total_size"`
+			TotalSize       int64 `json:"total_size"`
 			TotalParameters int64 `json:"total_parameters"`
 		} `json:"metadata"`
 	}
@@ -127,4 +127,27 @@ func getS3Object(ctx context.Context, client *s3.Client, bucket, key string) ([]
 	}
 	defer out.Body.Close()
 	return io.ReadAll(out.Body)
+}
+
+var (
+	s3Once   sync.Once
+	s3Shared *s3.Client
+	s3Err    error
+)
+
+// SharedS3Client returns a process-wide S3 client (PRD-68 P5). The AWS SDK
+// client is safe for concurrent use and expensive to build (credential
+// provider chain + IMDS/Pod Identity discovery), so the previous
+// LoadDefaultConfig-per-call in the recommender and the orchestrator's
+// results reader is replaced with one lazily-built instance.
+func SharedS3Client(ctx context.Context) (*s3.Client, error) {
+	s3Once.Do(func() {
+		awsCfg, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			s3Err = fmt.Errorf("load AWS config: %w", err)
+			return
+		}
+		s3Shared = s3.NewFromConfig(awsCfg)
+	})
+	return s3Shared, s3Err
 }

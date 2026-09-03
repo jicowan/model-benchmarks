@@ -38,10 +38,21 @@ export function useStatus(intervalMs = 15000): UseStatusResult {
     }
 
     tick();
-    const id = setInterval(tick, intervalMs);
+    // PRD-68 P5: a background tab keeps its interval but skips the request,
+    // so N idle tabs don't each ping the DB every 15s. A fresh tick fires
+    // when the tab becomes visible again.
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      tick();
+    }, intervalMs);
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [intervalMs]);
 

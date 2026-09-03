@@ -1,0 +1,17 @@
+{{- if and .Values.api.pdbMinAvailable (gt (int .Values.api.replicaCount) 1) }}
+# PRD-68 P6: voluntary disruptions (node drain, cluster upgrade) keep at least
+# one API pod up. Combined with graceful drain (P3) this means a node rotation
+# never kills every in-flight run at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "accelbench.fullname" . }}-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "accelbench.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.api.pdbMinAvailable }}
+  selector:
+    matchLabels:
+      {{- include "accelbench.api.selectorLabels" . | nindent 6 }}
+{{- end }}

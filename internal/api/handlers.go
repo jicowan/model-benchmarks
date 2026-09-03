@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,8 @@ type Server struct {
 	cognitoIDP CognitoIDP    // PRD-43 — Cognito InitiateAuth / GlobalSignOut
 	authConfig auth.Config   // PRD-43 — user pool + client ID + AUTH_DISABLED flag
 	authVerifier *auth.Verifier // PRD-43 — JWT verifier (for middleware + /auth/me fallback)
+	hot          *hotCaches     // PRD-68 P5 — model-config + calibration TTL caches
+	authLimiter  *ipLimiter     // PRD-68 P6 — per-IP limiter for the public /auth/* routes
 }
 
 // NewServer creates a new API server. hostname is the running pod's name
@@ -59,6 +62,10 @@ func NewServer(repo database.Repo, client kubernetes.Interface, hostname string)
 		// Cognito config. cmd/server/main.go calls SetAuth to flip this off
 		// in production, with AUTH_DISABLED as an explicit escape hatch.
 		authConfig: auth.Config{Disabled: true},
+		hot:        newHotCaches(),
+		// 30 attempts/min sustained, burst 10 — generous for humans, fatal
+		// for a stuffing loop. Cognito's own throttling sits behind this.
+		authLimiter: newIPLimiter(30, 10),
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -74,6 +81,10 @@ func NewServerWithHFClient(repo database.Repo, client kubernetes.Interface, hfCl
 		hostname:   hostname,
 		cache:      cache.NopCache{},
 		authConfig: auth.Config{Disabled: true},
+		hot:        newHotCaches(),
+		// 30 attempts/min sustained, burst 10 — generous for humans, fatal
+		// for a stuffing loop. Cognito's own throttling sits behind this.
+		authLimiter: newIPLimiter(30, 10),
 	}
 	s.seeder = seed.New(repo, s, hostname)
 	return s
@@ -161,6 +172,21 @@ func (s *Server) RecoverOrphanedRuns(ctx context.Context) {
 //
 // Exported for use by internal/seed.
 func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
+	// PRD-68 P5: configs are immutable per (model, revision="main" here), so
+	// serve repeats from a 10-minute cache. Only successful fetches are
+	// cached; a gated-model 401 is retried (the user may add a token).
+	if cfg, ok := s.hot.modelConfig.get(modelID); ok {
+		return cfg, nil
+	}
+	cfg, err := s.fetchModelConfigUncached(ctx, modelID, hfToken)
+	if err != nil {
+		return nil, err
+	}
+	s.hot.modelConfig.set(modelID, cfg)
+	return cfg, nil
+}
+
+func (s *Server) fetchModelConfigUncached(ctx context.Context, modelID, hfToken string) (*recommend.ModelConfig, error) {
 	if mc, _ := s.repo.GetModelCacheByHfID(ctx, modelID, "main"); mc != nil && mc.Status == "cached" {
 		if cfg, err := recommend.FetchModelConfigFromS3(ctx, mc.S3URI); err == nil {
 			return cfg, nil
@@ -191,9 +217,10 @@ func (s *Server) FetchModelConfig(ctx context.Context, modelID, hfToken string) 
 //     public POSTs above take precedence over the /api/v1/ fallback.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// --- Public: auth endpoints that must work before the user has a token ---
-	mux.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)
-	mux.HandleFunc("POST /api/v1/auth/respond-challenge", s.handleAuthRespondChallenge)
-	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleAuthRefresh)
+	// PRD-68 P6: per-client rate limit in front of the credential endpoints.
+	mux.Handle("POST /api/v1/auth/login", s.authLimiter.middleware(http.HandlerFunc(s.handleAuthLogin)))
+	mux.Handle("POST /api/v1/auth/respond-challenge", s.authLimiter.middleware(http.HandlerFunc(s.handleAuthRespondChallenge)))
+	mux.Handle("POST /api/v1/auth/refresh", s.authLimiter.middleware(http.HandlerFunc(s.handleAuthRefresh)))
 
 	// --- Protected: wrapped in auth.Middleware ---
 	// PRD-44: admin is an inner middleware for the Configuration-page
@@ -416,6 +443,11 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 
 	if req.ModelHfID == "" {
 		return "", &createRunError{http.StatusBadRequest, "model_hf_id or model_s3_uri is required"}
+	}
+	// PRD-68 P1: reject malformed free-text fields before anything is
+	// persisted or rendered into a manifest.
+	if err := validateRunRequest(req); err != nil {
+		return "", &createRunError{http.StatusBadRequest, err.Error()}
 	}
 
 	// Look up or auto-register model.
@@ -873,6 +905,12 @@ func (s *Server) CreateRun(ctx context.Context, req *database.RunRequest) (strin
 		PDLRUCapacityPerServer: pdLRUCapacityPtr,
 		PDDeciderStrategy:      pdDeciderStrategyPtr,
 		Status:                 "pending",
+		// PRD-68 P3: owned from the INSERT so there is no window in which a
+		// crash leaves a NULL-owner pending row that recovery skips forever.
+		OwnerPod: &s.hostname,
+		// PRD-68 P4: attribute to the submitting user (nil for the seeder /
+		// auth-disabled synthetic principal).
+		CreatedBy: principalSub(ctx),
 	}
 
 	runID, err := s.repo.CreateBenchmarkRun(ctx, run)
@@ -957,11 +995,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := runDetailResponse{BenchmarkRun: run}
-	if details, _ := s.repo.GetRunExportDetails(r.Context(), runID); details != nil {
-		resp.ModelHfID = details.ModelHfID
-		resp.InstanceTypeName = details.InstanceTypeName
-	}
+	// PRD-68 P5: GetBenchmarkRun now joins the model + instance names, so the
+	// second 3-table query (GetRunExportDetails) is gone from this hot path —
+	// ResultDetail polls it every 5s while a run is in flight.
+	resp := runDetailResponse{BenchmarkRun: run, ModelHfID: run.ModelHfID, InstanceTypeName: run.InstanceTypeName}
 
 	includes := parseIncludes(r.URL.Query().Get("include"))
 	if includes != nil {
@@ -1163,6 +1200,10 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run != nil {
+		if !canMutate(ctx, run.CreatedBy) { // PRD-68 P4
+			forbidNotOwner(w)
+			return
+		}
 		if run.Status != "pending" && run.Status != "running" {
 			writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel run with status %q", run.Status))
 			return
@@ -1177,6 +1218,10 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "run not found")
 			return
 		}
+		if !canMutate(ctx, suiteRun.CreatedBy) { // PRD-68 P4
+			forbidNotOwner(w)
+			return
+		}
 		if suiteRun.Status != "pending" && suiteRun.Status != "running" {
 			writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel suite run with status %q", suiteRun.Status))
 			return
@@ -1185,7 +1230,8 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 
 	// Set the DB flag — the owning pod's poller will see it and cancel.
 	if err := s.repo.RequestCancel(ctx, runID); err != nil {
-		writeError(w, http.StatusInternalServerError, "request cancel: "+err.Error())
+		log.Printf("cancel run %s: request cancel: %v", runID, err)
+		writeError(w, http.StatusInternalServerError, "request cancel failed")
 		return
 	}
 	// Fast-path: if we happen to be the owning pod, short-circuit the 5s poll.
@@ -1209,10 +1255,24 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if run != nil {
-		// Cancel if still active
+		if !canMutate(ctx, run.CreatedBy) { // PRD-68 P4
+			forbidNotOwner(w)
+			return
+		}
+		// Cancel if still active. PRD-68 P3: the old code only called the
+		// in-memory CancelRun, which is a no-op on the non-owning replica, so
+		// a cross-pod delete left the model Deployment + loadgen running to
+		// completion with no row to attribute them to. Now: set the DB cancel
+		// flag (any replica), fast-path cancel locally, and rely on the owning
+		// pod's coordination poller — which also treats a MISSING row as a
+		// cancel — to drive the normal teardown path.
 		if run.Status == "pending" || run.Status == "running" {
+			if err := s.repo.RequestCancel(ctx, runID); err != nil {
+				log.Printf("delete run %s: request cancel: %v", runID, err)
+				writeError(w, http.StatusInternalServerError, "delete failed")
+				return
+			}
 			s.orch.CancelRun(runID)
-			_ = s.repo.UpdateRunStatus(ctx, runID, "failed")
 		}
 		if err := s.repo.DeleteRun(ctx, runID); err != nil {
 			writeError(w, http.StatusInternalServerError, "delete failed")
@@ -1233,10 +1293,18 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cancel if still active
+	if !canMutate(ctx, suiteRun.CreatedBy) { // PRD-68 P4
+		forbidNotOwner(w)
+		return
+	}
+	// Cancel if still active (same cross-pod semantics as single runs above).
 	if suiteRun.Status == "pending" || suiteRun.Status == "running" {
+		if err := s.repo.RequestCancel(ctx, runID); err != nil {
+			log.Printf("delete suite %s: request cancel: %v", runID, err)
+			writeError(w, http.StatusInternalServerError, "delete failed")
+			return
+		}
 		s.orch.CancelRun(runID)
-		_ = s.repo.UpdateSuiteRunStatus(ctx, runID, "failed", nil)
 	}
 	if err := s.repo.DeleteSuiteRun(ctx, runID); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
@@ -1294,7 +1362,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	// the recommender so the host-memory check uses empirical data
 	// when available. Unseen families keep the conservative default.
 	// Non-fatal on query failure.
-	if calib, err := s.repo.GetHostMemCalibration(r.Context()); err == nil {
+	if calib, err := s.hostMemCalibration(r.Context()); err == nil {
 		opts.HostMemCalibration = calib
 	} else {
 		log.Printf("recommend: host mem calibration query failed: %v", err)
@@ -1416,6 +1484,13 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	if region == "" {
 		region = "us-east-2"
+	}
+	// PRD-68 P5: the region is part of a cache key; refuse anything that
+	// isn't shaped like an AWS region so a caller can't grow the cache with
+	// ?region=<random> (Perf M3).
+	if !awsRegionRe.MatchString(region) {
+		writeError(w, http.StatusBadRequest, "region must look like us-east-2")
+		return
 	}
 	cacheKey := "pricing:" + region
 	if data := s.cache.Get(cacheKey); data != nil {
@@ -1596,7 +1671,22 @@ func (s *Server) handleListTestSuites(w http.ResponseWriter, r *http.Request) {
 
 // handleListSuiteRuns returns a list of test suite runs.
 func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
-	items, err := s.repo.ListSuiteRunsWithNames(r.Context())
+	// PRD-68 P5: paginated {rows,total} like every other list endpoint
+	// (PRD-36). The previous bare array was hard-capped at 100 rows, so the
+	// UI silently lost suites beyond that.
+	q := r.URL.Query()
+	limit, offset := 25, 0
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	items, total, err := s.repo.ListSuiteRunsWithNames(r.Context(), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list suite runs failed")
 		return
@@ -1604,7 +1694,7 @@ func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []database.SuiteRunListItem{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": total})
 }
 
 // handleCreateSuiteRun creates a new test suite run.
@@ -1623,6 +1713,11 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	// Validate required fields
 	if req.ModelHfID == "" || req.InstanceTypeName == "" {
 		writeError(w, http.StatusBadRequest, "model_hf_id (or model_s3_uri) and instance_type_name are required")
+		return
+	}
+	// PRD-68 P1: free-text field validation (see validate.go).
+	if err := validateSuiteRunRequest(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1663,14 +1758,16 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	// Ensure model exists
 	model, err := s.repo.EnsureModel(ctx, req.ModelHfID, req.ModelHfRevision)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ensure model: "+err.Error())
+		log.Printf("ensure model: %v", err)
+		writeError(w, http.StatusInternalServerError, "ensure model failed")
 		return
 	}
 
 	// Get instance type
 	instType, err := s.repo.GetInstanceTypeByName(ctx, req.InstanceTypeName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get instance type: "+err.Error())
+		log.Printf("get instance type: %v", err)
+		writeError(w, http.StatusInternalServerError, "get instance type failed")
 		return
 	}
 	if instType == nil {
@@ -1739,6 +1836,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 		StreamerConcurrency:    suiteStreamerConcurrencyPtr,
 		StreamerMemoryLimitGiB: suiteStreamerMemLimitPtr,
 		Status:                 "pending",
+		OwnerPod:               &s.hostname, // PRD-68 P3
+		CreatedBy:              principalSub(ctx), // PRD-68 P4
 	}
 	if req.Framework != "" {
 		fw := req.Framework
@@ -1755,7 +1854,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	suiteRunID, err := s.repo.CreateTestSuiteRun(ctx, suiteRun)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create suite run: "+err.Error())
+		log.Printf("create suite run: %v", err)
+		writeError(w, http.StatusInternalServerError, "create suite run failed")
 		return
 	}
 
@@ -1767,7 +1867,8 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 			Status:     "pending",
 		}
 		if _, err := s.repo.CreateScenarioResult(ctx, result); err != nil {
-			writeError(w, http.StatusInternalServerError, "create scenario result: "+err.Error())
+			log.Printf("create scenario result: %v", err)
+			writeError(w, http.StatusInternalServerError, "create scenario result failed")
 			return
 		}
 	}
@@ -1831,7 +1932,8 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	suiteRun, err := s.repo.GetTestSuiteRun(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get suite run: "+err.Error())
+		log.Printf("get suite run: %v", err)
+		writeError(w, http.StatusInternalServerError, "get suite run failed")
 		return
 	}
 	if suiteRun == nil {
@@ -1841,7 +1943,8 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.repo.GetScenarioResults(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get scenario results: "+err.Error())
+		log.Printf("get scenario results: %v", err)
+		writeError(w, http.StatusInternalServerError, "get scenario results failed")
 		return
 	}
 
@@ -1854,11 +1957,19 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// PRD-68 P5: one overrides query instead of one per scenario (N+1 on a
+	// 5s-polled endpoint).
+	overrides := map[string]*database.ScenarioOverride{}
+	if all, err := s.repo.ListScenarioOverrides(ctx); err == nil {
+		for i := range all {
+			overrides[all[i].ScenarioID] = &all[i]
+		}
+	}
 	scenarioDefs := make([]suiteScenarioDefinition, 0, len(results))
 	maxNumSeqs := 0
 	for _, r := range results {
 		if sc := scenario.Get(r.ScenarioID); sc != nil {
-			if ov, _ := s.repo.GetScenarioOverride(ctx, r.ScenarioID); ov != nil {
+			if ov := overrides[r.ScenarioID]; ov != nil {
 				sc = sc.Merge(&scenario.Override{
 					NumWorkers: ov.NumWorkers,
 					Streaming:  ov.Streaming,
@@ -1986,3 +2097,6 @@ func (s *Server) fetchSuiteIncludes(ctx context.Context, resp *suiteRunResponse,
 }
 
 
+
+// awsRegionRe matches AWS region ids (us-east-2, eu-central-1, ap-southeast-3).
+var awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-\d$`)

@@ -17,14 +17,16 @@ func (r *Repository) CreateTestSuiteRun(ctx context.Context, run *TestSuiteRun) 
 		     quantization, max_model_len, status,
 		     framework, framework_version, model_s3_uri,
 		     max_num_batched_tokens, kv_cache_dtype,
-		     streamer_mode, streamer_concurrency, streamer_memory_limit_gib)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		     streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
+		     owner_pod, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.SuiteID, run.TensorParallelDegree,
 		run.Quantization, nullableInt(run.MaxModelLen), run.Status,
 		run.Framework, run.FrameworkVersion, run.ModelS3URI,
 		run.MaxNumBatchedTokens, run.KVCacheDtype,
 		run.StreamerMode, run.StreamerConcurrency, run.StreamerMemoryLimitGiB,
+		run.OwnerPod, run.CreatedBy,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert test suite run: %w", err)
@@ -43,7 +45,8 @@ func (r *Repository) GetTestSuiteRun(ctx context.Context, id string) (*TestSuite
 		        framework, framework_version, model_s3_uri,
 		        max_num_batched_tokens, kv_cache_dtype,
 		        host_memory_peak_gib,
-		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib
+		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
+		        created_by
 		 FROM test_suite_runs WHERE id = $1`, id,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.SuiteID,
 		&run.TensorParallelDegree, &run.Quantization, &run.MaxModelLen,
@@ -52,7 +55,8 @@ func (r *Repository) GetTestSuiteRun(ctx context.Context, id string) (*TestSuite
 		&run.Framework, &run.FrameworkVersion, &run.ModelS3URI,
 		&run.MaxNumBatchedTokens, &run.KVCacheDtype,
 		&run.HostMemoryPeakGiB,
-		&run.StreamerMode, &run.StreamerConcurrency, &run.StreamerMemoryLimitGiB)
+		&run.StreamerMode, &run.StreamerConcurrency, &run.StreamerMemoryLimitGiB,
+		&run.CreatedBy)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -72,7 +76,10 @@ func (r *Repository) UpdateSuiteRunStatus(ctx context.Context, id, status string
 		query = `UPDATE test_suite_runs SET status = $1, current_scenario = $2, started_at = $3 WHERE id = $4`
 		args = []any{status, currentScenario, time.Now(), id}
 	case "completed", "failed":
-		query = `UPDATE test_suite_runs SET status = $1, current_scenario = $2, completed_at = $3 WHERE id = $4`
+		// PRD-68 P3 fencing: never overwrite a terminal status written by
+		// orphan recovery on a sibling pod.
+		query = `UPDATE test_suite_runs SET status = $1, current_scenario = $2, completed_at = $3
+		          WHERE id = $4 AND status IN ('pending','running')`
 		args = []any{status, currentScenario, time.Now(), id}
 	default:
 		query = `UPDATE test_suite_runs SET status = $1, current_scenario = $2 WHERE id = $3`
@@ -268,9 +275,18 @@ type SuiteRunListItem struct {
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 }
 
-// ListSuiteRunsWithNames returns suite runs with model and instance names joined.
-func (r *Repository) ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error) {
-	rows, err := r.pool.Query(ctx, `
+// ListSuiteRunsWithNames returns a page of suite runs (newest first) with
+// model and instance names joined, plus the total row count (PRD-68 P5;
+// previously a hard LIMIT 100 with no total).
+func (r *Repository) ListSuiteRunsWithNames(ctx context.Context, limit, offset int) ([]SuiteRunListItem, int, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 25
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	batch := &pgx.Batch{}
+	batch.Queue(`
 		SELECT
 			tsr.id, m.hf_id, it.name, tsr.suite_id, tsr.status,
 			tsr.created_at, tsr.started_at, tsr.completed_at
@@ -278,26 +294,38 @@ func (r *Repository) ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunList
 		JOIN models m ON tsr.model_id = m.id
 		JOIN instance_types it ON tsr.instance_type_id = it.id
 		ORDER BY tsr.created_at DESC
-		LIMIT 100
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("query suite runs: %w", err)
-	}
-	defer rows.Close()
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	batch.Queue(`SELECT COUNT(*) FROM test_suite_runs`)
+	br := r.pool.SendBatch(ctx, batch)
+	defer br.Close()
 
+	rows, err := br.Query()
+	if err != nil {
+		return nil, 0, fmt.Errorf("query suite runs: %w", err)
+	}
 	var items []SuiteRunListItem
 	for rows.Next() {
 		var item SuiteRunListItem
-		err := rows.Scan(
+		if err := rows.Scan(
 			&item.ID, &item.ModelHfID, &item.InstanceTypeName, &item.SuiteID,
 			&item.Status, &item.CreatedAt, &item.StartedAt, &item.CompletedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scan suite run: %w", err)
+		); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("scan suite run: %w", err)
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, err
+	}
+	rows.Close()
+	var total int
+	if err := br.QueryRow().Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count suite runs: %w", err)
+	}
+	return items, total, nil
 }
 
 // DeleteSuiteRun removes a test suite run and its associated scenario results.

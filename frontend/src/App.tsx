@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import { AuthProvider } from "./components/AuthProvider";
@@ -6,23 +7,33 @@ import AdminRoute from "./components/AdminRoute";
 import NonViewerRoute from "./components/NonViewerRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import Catalog from "./pages/Catalog";
-import Compare from "./pages/Compare";
-import Estimate from "./pages/Estimate";
-import Run from "./pages/Run";
-import Distributed from "./pages/Distributed";
-import ResultDetail from "./pages/ResultDetail";
-import DistributedReport from "./pages/DistributedReport";
-import SuiteResults from "./pages/SuiteResults";
-import Runs from "./pages/Runs";
-import ModelCachePage from "./pages/ModelCache";
-import Configuration from "./pages/Configuration";
-import Users from "./pages/Users";
+
+// PRD-68 P5: route-level code splitting. Login + Dashboard stay in the
+// initial chunk (every session lands on one of them); everything else —
+// notably the Recharts-heavy report pages and the admin surface — loads on
+// first navigation. Cuts the initial bundle roughly in half.
+const Catalog = lazy(() => import("./pages/Catalog"));
+const Compare = lazy(() => import("./pages/Compare"));
+const Estimate = lazy(() => import("./pages/Estimate"));
+const Run = lazy(() => import("./pages/Run"));
+const Distributed = lazy(() => import("./pages/Distributed"));
+const ResultDetail = lazy(() => import("./pages/ResultDetail"));
+const DistributedReport = lazy(() => import("./pages/DistributedReport"));
+const SuiteResults = lazy(() => import("./pages/SuiteResults"));
+const Runs = lazy(() => import("./pages/Runs"));
+const ModelCachePage = lazy(() => import("./pages/ModelCache"));
+const Configuration = lazy(() => import("./pages/Configuration"));
+const Users = lazy(() => import("./pages/Users"));
+
+function RouteFallback() {
+  return <div className="p-6 caption">Loading…</div>;
+}
 
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <Suspense fallback={<RouteFallback />}>
         <Routes>
           {/* PRD-43: /login is the only unauthenticated route. */}
           <Route path="/login" element={<Login />} />
@@ -101,6 +112,7 @@ export default function App() {
             <Route path="/model-cache" element={<Navigate to="/models" replace />} />
           </Route>
         </Routes>
+        </Suspense>
       </AuthProvider>
     </BrowserRouter>
   );

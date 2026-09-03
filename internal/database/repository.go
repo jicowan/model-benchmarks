@@ -2,10 +2,14 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,8 +27,32 @@ type Repository struct {
 }
 
 // NewRepository creates a new Repository with a connection pool.
+//
+// PRD-68 P2: the pool is sized explicitly instead of pgx's default of
+// max(4, NumCPU) — inside a container Go reports the HOST CPU count, so the
+// default could open dozens of Aurora connections per pod under burst while
+// a 2-vCPU node would get just 4. A server-side statement_timeout bounds any
+// runaway list/aggregate query. Both are overridable via env for operators
+// tuning against their Aurora ACU budget.
 func NewRepository(ctx context.Context, connString string) (*Repository, error) {
-	pool, err := pgxpool.New(ctx, connString)
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, fmt.Errorf("parse database url: %w", err)
+	}
+	cfg.MaxConns = envInt32("DB_MAX_CONNS", 10)
+	cfg.MinConns = envInt32("DB_MIN_CONNS", 2)
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if _, set := cfg.ConnConfig.RuntimeParams["statement_timeout"]; !set {
+		cfg.ConnConfig.RuntimeParams["statement_timeout"] = fmt.Sprintf("%ds", envIntDefault("DB_STATEMENT_TIMEOUT_SECONDS", 30))
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = "accelbench-api"
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create connection pool: %w", err)
 	}
@@ -201,9 +229,10 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		     prefill_max_num_batched_tokens, decode_max_num_batched_tokens,
 		     both_replicas, both_tp, both_max_num_batched_tokens,
 		     pd_noncached_tokens, pd_prefix_cache_weight, pd_queue_scorer_weight,
-		     pd_max_prefix_blocks, pd_lru_capacity_per_server, pd_decider_strategy)
+		     pd_max_prefix_blocks, pd_lru_capacity_per_server, pd_decider_strategy,
+		     owner_pod, created_by)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
-		         $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
+		         $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)
 		 RETURNING id`,
 		run.ModelID, run.InstanceTypeID, run.Framework, run.FrameworkVersion,
 		run.TensorParallelDegree, run.Quantization, run.Concurrency,
@@ -241,6 +270,8 @@ func (r *Repository) CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) 
 		run.PDMaxPrefixBlocks,
 		run.PDLRUCapacityPerServer,
 		run.PDDeciderStrategy,
+		run.OwnerPod, // PRD-68 P3: owned from birth — no NULL-owner window for recovery to miss
+		run.CreatedBy, // PRD-68 P4
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert benchmark run: %w", err)
@@ -256,33 +287,58 @@ func nullableInt(v int) *int {
 	return &v
 }
 
+// ErrRunNotActive is returned by the status writers when the row is no
+// longer in a state the transition is valid from — typically because orphan
+// recovery on a sibling pod already wrote a terminal status, or the row was
+// deleted. Callers treat it as "someone else owns the outcome" (PRD-68 P3).
+var ErrRunNotActive = errors.New("run is not in an active state")
+
 // UpdateRunStatus updates the status and optional timestamps of a benchmark run.
+//
+// PRD-68 P3 fencing: transitions are conditional on the current state so a
+// stale owner can never overwrite a terminal status written by recovery.
+//   pending → running   requires status = 'pending'
+//   * → completed/failed requires status IN ('pending','running')
+// A no-op (0 rows) returns ErrRunNotActive.
 func (r *Repository) UpdateRunStatus(ctx context.Context, runID, status string) error {
-	var query string
+	var (
+		tag pgconn.CommandTag
+		err error
+	)
 	switch status {
 	case "running":
-		query = `UPDATE benchmark_runs SET status = $1, started_at = $2 WHERE id = $3`
+		tag, err = r.pool.Exec(ctx,
+			`UPDATE benchmark_runs SET status = $1, started_at = $2 WHERE id = $3 AND status = 'pending'`,
+			status, time.Now(), runID)
 	case "completed", "failed":
-		query = `UPDATE benchmark_runs SET status = $1, completed_at = $2 WHERE id = $3`
+		tag, err = r.pool.Exec(ctx,
+			`UPDATE benchmark_runs SET status = $1, completed_at = $2 WHERE id = $3 AND status IN ('pending','running')`,
+			status, time.Now(), runID)
 	default:
-		query = `UPDATE benchmark_runs SET status = $1 WHERE id = $2`
-		_, err := r.pool.Exec(ctx, query, status, runID)
-		return err
+		tag, err = r.pool.Exec(ctx, `UPDATE benchmark_runs SET status = $1 WHERE id = $2`, status, runID)
 	}
-	_, err := r.pool.Exec(ctx, query, status, time.Now(), runID)
 	if err != nil {
 		return fmt.Errorf("update run status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotActive
 	}
 	return nil
 }
 
-// UpdateRunFailed sets a run's status to "failed" with an error message explaining why.
+// UpdateRunFailed sets a run's status to "failed" with an error message
+// explaining why. Conditional on the run still being active (see
+// UpdateRunStatus); returns ErrRunNotActive when another writer got there first.
 func (r *Repository) UpdateRunFailed(ctx context.Context, runID, reason string) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE benchmark_runs SET status = 'failed', error_message = $1, completed_at = $2 WHERE id = $3`,
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE benchmark_runs SET status = 'failed', error_message = $1, completed_at = $2
+		  WHERE id = $3 AND status IN ('pending','running')`,
 		reason, time.Now(), runID)
 	if err != nil {
 		return fmt.Errorf("update run failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotActive
 	}
 	return nil
 }
@@ -481,13 +537,17 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		return fmt.Errorf("metrics verification failed: expected run_id %s, got %s", runID, verifyRunID)
 	}
 
-	// Mark run as completed.
-	_, err = tx.Exec(ctx,
-		`UPDATE benchmark_runs SET status = 'completed', completed_at = $1 WHERE id = $2`,
+	// Mark run as completed — only if still active (PRD-68 P3 fencing).
+	tag, err := tx.Exec(ctx,
+		`UPDATE benchmark_runs SET status = 'completed', completed_at = $1
+		  WHERE id = $2 AND status IN ('pending','running')`,
 		time.Now(), runID,
 	)
 	if err != nil {
 		return fmt.Errorf("update run to completed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotActive
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -501,24 +561,29 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 	var run BenchmarkRun
 	var maxModelLen *int
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, model_id, instance_type_id, framework, framework_version,
-		        tensor_parallel_degree, quantization, concurrency,
-		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, max_model_len, status, error_message, superseded,
-		        started_at, loadgen_started_at, completed_at, created_at, model_s3_uri,
-		        total_cost_usd, loadgen_cost_usd, owner_pod, cancel_requested,
-		        max_num_batched_tokens, scenario_id, kv_cache_dtype,
-		        host_memory_peak_gib,
-		        streamer_mode, streamer_concurrency, streamer_memory_limit_gib,
-		        deployment_mode, node_count, pipeline_parallel_degree, network_mode,
-		        prefill_replicas, prefill_tp, prefill_pp,
-		        decode_replicas, decode_tp, decode_pp,
-		        kv_connector, kv_transfer_backend,
-		        prefill_max_num_batched_tokens, decode_max_num_batched_tokens,
-		        both_replicas, both_tp, both_max_num_batched_tokens,
-		        pd_noncached_tokens, pd_prefix_cache_weight, pd_queue_scorer_weight,
-		        pd_max_prefix_blocks, pd_lru_capacity_per_server, pd_decider_strategy
-		 FROM benchmark_runs WHERE id = $1`, runID,
+		`SELECT br.id, br.model_id, br.instance_type_id, br.framework, br.framework_version,
+		        br.tensor_parallel_degree, br.quantization, br.concurrency,
+		        br.input_sequence_length, br.output_sequence_length, br.dataset_name,
+		        br.run_type, br.max_model_len, br.status, br.error_message, br.superseded,
+		        br.started_at, br.loadgen_started_at, br.completed_at, br.created_at, model_s3_uri,
+		        br.total_cost_usd, br.loadgen_cost_usd, br.owner_pod, br.cancel_requested,
+		        br.max_num_batched_tokens, br.scenario_id, br.kv_cache_dtype,
+		        br.host_memory_peak_gib,
+		        br.streamer_mode, br.streamer_concurrency, br.streamer_memory_limit_gib,
+		        br.deployment_mode, br.node_count, br.pipeline_parallel_degree, br.network_mode,
+		        br.prefill_replicas, br.prefill_tp, br.prefill_pp,
+		        br.decode_replicas, br.decode_tp, br.decode_pp,
+		        br.kv_connector, br.kv_transfer_backend,
+		        br.prefill_max_num_batched_tokens, br.decode_max_num_batched_tokens,
+		        br.both_replicas, br.both_tp, br.both_max_num_batched_tokens,
+		        br.pd_noncached_tokens, br.pd_prefix_cache_weight, br.pd_queue_scorer_weight,
+		        br.pd_max_prefix_blocks, br.pd_lru_capacity_per_server, br.pd_decider_strategy,
+		        br.created_by,
+		        COALESCE(m.hf_id, ''), COALESCE(it.name, '')
+		 FROM benchmark_runs br
+		 LEFT JOIN models m ON m.id = br.model_id
+		 LEFT JOIN instance_types it ON it.id = br.instance_type_id
+		 WHERE br.id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
@@ -535,7 +600,9 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		&run.PrefillMaxNumBatchedTokens, &run.DecodeMaxNumBatchedTokens,
 		&run.BothReplicas, &run.BothTP, &run.BothMaxNumBatchedTokens,
 		&run.PDNonCachedTokens, &run.PDPrefixCacheWeight, &run.PDQueueScorerWeight,
-		&run.PDMaxPrefixBlocks, &run.PDLRUCapacityPerServer, &run.PDDeciderStrategy)
+		&run.PDMaxPrefixBlocks, &run.PDLRUCapacityPerServer, &run.PDDeciderStrategy,
+		&run.CreatedBy,
+		&run.ModelHfID, &run.InstanceTypeName)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -675,4 +742,26 @@ func (r *Repository) GetShardMetrics(ctx context.Context, runID string) ([]Shard
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// envIntDefault reads a positive integer env var or returns def.
+func envIntDefault(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// envInt32 reads a positive int32 env var or returns def. Parsed with a
+// 32-bit size so the value can never overflow the pgxpool int32 fields
+// (CodeQL go/incorrect-integer-conversion).
+func envInt32(name string, def int32) int32 {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
+			return int32(n)
+		}
+	}
+	return def
 }

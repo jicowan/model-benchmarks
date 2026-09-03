@@ -22,10 +22,14 @@ type DashboardStats struct {
 	CostPerDay     []DayCost `json:"cost_per_day"`    // last 14 UTC days, zero-filled
 }
 
-// DayCost is one bucket of the 14-day cost series.
+// DayCost is one bucket of the 14-day series. PRD-68 P5 added the run and
+// suite counts so the Dashboard activity chart no longer needs to fetch 100
+// runs + every suite just to bucket their timestamps client-side.
 type DayCost struct {
 	Day     string  `json:"day"`      // "YYYY-MM-DD"
 	CostUSD float64 `json:"cost_usd"` // 0.0 on days with no cost-stamped runs
+	Runs    int     `json:"runs"`     // benchmark_runs created that day
+	Suites  int     `json:"suites"`   // test_suite_runs created that day
 }
 
 // DashboardStats runs three aggregate queries: union-count per status,
@@ -36,11 +40,13 @@ func (r *Repository) DashboardStats(ctx context.Context) (*DashboardStats, error
 
 	// Per-status counts, split by source table so we can expose total_single
 	// and total_suites separately on the same round-trip.
+	// PRD-68 P5: counts AND lifetime cost from a single pass over the union
+	// (was two separate full scans).
 	err := r.pool.QueryRow(ctx, `
 		WITH combined AS (
-			SELECT 'run'   AS kind, status FROM benchmark_runs
+			SELECT 'run'   AS kind, status, total_cost_usd FROM benchmark_runs
 			UNION ALL
-			SELECT 'suite' AS kind, status FROM test_suite_runs
+			SELECT 'suite' AS kind, status, total_cost_usd FROM test_suite_runs
 		)
 		SELECT
 			COUNT(*)                                                   AS total_runs,
@@ -48,10 +54,11 @@ func (r *Repository) DashboardStats(ctx context.Context) (*DashboardStats, error
 			COUNT(*) FILTER (WHERE kind = 'suite')                     AS total_suites,
 			COUNT(*) FILTER (WHERE status IN ('pending','running'))    AS active_count,
 			COUNT(*) FILTER (WHERE status = 'completed')               AS completed_count,
-			COUNT(*) FILTER (WHERE status = 'failed')                  AS failed_count
+			COUNT(*) FILTER (WHERE status = 'failed')                  AS failed_count,
+			COALESCE(SUM(total_cost_usd), 0)::float8                   AS total_cost_usd
 		FROM combined
 	`).Scan(&stats.TotalRuns, &stats.TotalSingle, &stats.TotalSuites,
-		&stats.ActiveCount, &stats.CompletedCount, &stats.FailedCount)
+		&stats.ActiveCount, &stats.CompletedCount, &stats.FailedCount, &stats.TotalCostUSD)
 	if err != nil {
 		return nil, fmt.Errorf("dashboard status counts: %w", err)
 	}
@@ -64,18 +71,6 @@ func (r *Repository) DashboardStats(ctx context.Context) (*DashboardStats, error
 		return nil, fmt.Errorf("dashboard cached models: %w", err)
 	}
 
-	// Lifetime cost — benchmark_runs + test_suite_runs both hold their own
-	// total_cost_usd (suite cost isn't a sum of children because scenarios
-	// aren't stored as benchmark_runs).
-	err = r.pool.QueryRow(ctx, `
-		SELECT
-			COALESCE((SELECT SUM(total_cost_usd) FROM benchmark_runs),  0) +
-			COALESCE((SELECT SUM(total_cost_usd) FROM test_suite_runs), 0)
-	`).Scan(&stats.TotalCostUSD)
-	if err != nil {
-		return nil, fmt.Errorf("dashboard cost sum: %w", err)
-	}
-
 	// Per-day cost for the last 14 days, zero-filled. generate_series builds
 	// the calendar; LEFT JOIN ensures days with no runs produce a 0.00 row.
 	rows, err := r.pool.Query(ctx, `
@@ -83,16 +78,19 @@ func (r *Repository) DashboardStats(ctx context.Context) (*DashboardStats, error
 			SELECT (CURRENT_DATE - INTERVAL '13 days' + (n || ' days')::INTERVAL)::date AS day
 			FROM generate_series(0, 13) AS g(n)
 		),
-		run_costs AS (
-			SELECT DATE(created_at) AS day, total_cost_usd
-			FROM benchmark_runs WHERE total_cost_usd IS NOT NULL
+		recent AS (
+			SELECT DATE(created_at) AS day, 'run' AS kind, total_cost_usd
+			FROM benchmark_runs WHERE created_at >= CURRENT_DATE - INTERVAL '13 days'
 			UNION ALL
-			SELECT DATE(created_at) AS day, total_cost_usd
-			FROM test_suite_runs WHERE total_cost_usd IS NOT NULL
+			SELECT DATE(created_at) AS day, 'suite' AS kind, total_cost_usd
+			FROM test_suite_runs WHERE created_at >= CURRENT_DATE - INTERVAL '13 days'
 		)
-		SELECT d.day::text, COALESCE(SUM(rc.total_cost_usd), 0)::float8
+		SELECT d.day::text,
+		       COALESCE(SUM(rc.total_cost_usd), 0)::float8,
+		       COUNT(rc.kind) FILTER (WHERE rc.kind = 'run'),
+		       COUNT(rc.kind) FILTER (WHERE rc.kind = 'suite')
 		FROM days d
-		LEFT JOIN run_costs rc ON rc.day = d.day
+		LEFT JOIN recent rc ON rc.day = d.day
 		GROUP BY d.day
 		ORDER BY d.day ASC
 	`)
@@ -104,7 +102,7 @@ func (r *Repository) DashboardStats(ctx context.Context) (*DashboardStats, error
 	stats.CostPerDay = make([]DayCost, 0, 14)
 	for rows.Next() {
 		var dc DayCost
-		if err := rows.Scan(&dc.Day, &dc.CostUSD); err != nil {
+		if err := rows.Scan(&dc.Day, &dc.CostUSD, &dc.Runs, &dc.Suites); err != nil {
 			return nil, fmt.Errorf("scan day cost: %w", err)
 		}
 		stats.CostPerDay = append(stats.CostPerDay, dc)

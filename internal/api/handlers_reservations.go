@@ -7,6 +7,7 @@
 package api
 
 import (
+	"log"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -206,7 +207,8 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 		if len(ids) > 0 {
 			live, err := s.describeReservations(ctx, ids)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "describe capacity reservations: "+err.Error())
+				log.Printf("describe capacity reservations: %v", err)
+				writeError(w, http.StatusInternalServerError, "describe capacity reservations failed")
 				return
 			}
 			foundByID := make(map[string]*ec2types.CapacityReservation, len(live))
@@ -273,7 +275,8 @@ func (s *Server) handlePostReservation(w http.ResponseWriter, r *http.Request) {
 		CapacityReservationIds: []string{req.ReservationID},
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "describe reservation: "+err.Error())
+		log.Printf("describe reservation: %v", err)
+		writeError(w, http.StatusBadRequest, "capacity reservation lookup failed")
 		return
 	}
 	if len(live.CapacityReservations) == 0 {
@@ -295,7 +298,8 @@ func (s *Server) handlePostReservation(w http.ResponseWriter, r *http.Request) {
 	// Load NodeClass + NodePool for further validation and eventual patching.
 	nc, err := s.dynClient.Resource(gvrEC2NodeClass).Get(ctx, np.NodeClass, metav1.GetOptions{})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get EC2NodeClass: "+err.Error())
+		log.Printf("get EC2NodeClass: %v", err)
+		writeError(w, http.StatusInternalServerError, "get EC2NodeClass failed")
 		return
 	}
 	azs := subnetAZsFromNodeClass(nc)
@@ -310,7 +314,8 @@ func (s *Server) handlePostReservation(w http.ResponseWriter, r *http.Request) {
 	family := instanceFamilyOf(instType)
 	pool, err := s.dynClient.Resource(gvrNodePool).Get(ctx, np.NodePool, metav1.GetOptions{})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get NodePool: "+err.Error())
+		log.Printf("get NodePool: %v", err)
+		writeError(w, http.StatusInternalServerError, "get NodePool failed")
 		return
 	}
 	// A NodePool constrains instances EITHER by instance-family (single-node
@@ -348,14 +353,16 @@ func (s *Server) handlePostReservation(w http.ResponseWriter, r *http.Request) {
 
 	// Patch NodeClass: append to capacityReservationSelectorTerms.
 	if err := s.patchNodeClassAddReservation(ctx, np.NodeClass, req.ReservationID, existing); err != nil {
-		writeError(w, http.StatusInternalServerError, "patch EC2NodeClass: "+err.Error())
+		log.Printf("patch EC2NodeClass: %v", err)
+		writeError(w, http.StatusInternalServerError, "patch EC2NodeClass failed")
 		return
 	}
 
 	// Patch NodePool if capacity-type doesn't yet include "reserved".
 	if !capacityTypeIncludesReserved(pool) {
 		if err := s.patchNodePoolIncludeReserved(ctx, np.NodePool, pool); err != nil {
-			writeError(w, http.StatusInternalServerError, "patch NodePool capacity-type: "+err.Error())
+			log.Printf("patch NodePool capacity-type: %v", err)
+			writeError(w, http.StatusInternalServerError, "patch NodePool capacity-type failed")
 			return
 		}
 	}
@@ -388,7 +395,8 @@ func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request)
 
 	nc, err := s.dynClient.Resource(gvrEC2NodeClass).Get(ctx, nodeClass, metav1.GetOptions{})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get EC2NodeClass: "+err.Error())
+		log.Printf("get EC2NodeClass: %v", err)
+		writeError(w, http.StatusInternalServerError, "get EC2NodeClass failed")
 		return
 	}
 	existing := reservationIDsFromNodeClass(nc)
@@ -403,7 +411,8 @@ func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err := s.replaceReservationSelector(ctx, nodeClass, remaining); err != nil {
-		writeError(w, http.StatusInternalServerError, "patch EC2NodeClass: "+err.Error())
+		log.Printf("patch EC2NodeClass: %v", err)
+		writeError(w, http.StatusInternalServerError, "patch EC2NodeClass failed")
 		return
 	}
 

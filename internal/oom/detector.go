@@ -25,39 +25,53 @@ func NewDetector(client kubernetes.Interface, namespace string) *Detector {
 	}
 }
 
-// CheckPod examines a pod for OOM indicators.
-// Returns detected events (may be empty if no OOM detected).
+// CheckPod examines a pod for OOM indicators. Returns detected events (may
+// be empty if no OOM detected). Fetches the pod by name; callers that
+// already hold the Pod object (readiness loops that just listed pods)
+// should use CheckPodObject to save an API round-trip per pod per tick.
 func (d *Detector) CheckPod(ctx context.Context, podName string) ([]Event, error) {
 	pod, err := d.client.CoreV1().Pods(d.namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("get pod %s: %w", podName, err)
 	}
+	return d.CheckPodObject(ctx, pod)
+}
 
+// CheckPodObject is CheckPod on an already-fetched Pod (PRD-68 P2). The
+// Events list — the expensive call — is only issued when some container
+// has actually terminated or restarted; a pod that is still pulling or
+// starting has no OOM to find in Events.
+func (d *Detector) CheckPodObject(ctx context.Context, pod *corev1.Pod) ([]Event, error) {
 	var events []Event
+	suspicious := false
 
-	// Check container statuses for OOM indicators
-	for _, cs := range pod.Status.ContainerStatuses {
+	check := func(cs corev1.ContainerStatus) {
+		if cs.RestartCount > 0 || cs.State.Terminated != nil || cs.LastTerminationState.Terminated != nil {
+			suspicious = true
+		}
 		if ev := d.checkContainerStatus(pod, cs); ev != nil {
 			events = append(events, *ev)
 		}
 	}
-
-	// Check init container statuses
+	for _, cs := range pod.Status.ContainerStatuses {
+		check(cs)
+	}
 	for _, cs := range pod.Status.InitContainerStatuses {
-		if ev := d.checkContainerStatus(pod, cs); ev != nil {
-			events = append(events, *ev)
-		}
+		check(cs)
+	}
+	if !suspicious {
+		return events, nil
 	}
 
 	// Check Kubernetes events for OOMKilling
 	evList, err := d.client.CoreV1().Events(d.namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("involvedObject.name=%s,involvedObject.kind=Pod", podName),
+		FieldSelector: fmt.Sprintf("involvedObject.name=%s,involvedObject.kind=Pod", pod.Name),
 	})
 	if err == nil {
 		for _, ev := range evList.Items {
 			if ev.Reason == "OOMKilling" || ev.Reason == "OOMKilled" {
 				events = append(events, Event{
-					PodName:         podName,
+					PodName:         pod.Name,
 					ContainerName:   "", // Event may not specify container
 					DetectionMethod: DetectionKubeEvent,
 					Message:         ev.Message,

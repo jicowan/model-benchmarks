@@ -40,7 +40,19 @@ type HostMemScraper struct {
 	peakByte int64
 	cancel   context.CancelFunc
 	done     chan struct{}
+
+	// wantNames caches the pod names matching podLabel so the per-tick
+	// Pods.List is skipped once the pod set is known. Re-resolved when the
+	// kubelet summary stops reporting any cached name (pod rolled).
+	wantNames map[string]bool
 }
+
+// hostMemScrapeInterval is the host-RSS sampling period. The weight-load
+// spike the recommender calibrates against lasts minutes, so 15s resolution
+// loses nothing while cutting the per-run apiserver proxy traffic (a full
+// kubelet /stats/summary payload per sample) by 3x versus the 5s GPU-metrics
+// cadence (PRD-68 P2).
+const hostMemScrapeInterval = 15 * time.Second
 
 // NewHostMemScraper returns a scraper for the given model pod. The pod
 // is identified by its `app.kubernetes.io/name` label rather than a
@@ -82,7 +94,7 @@ func (s *HostMemScraper) Stop() float64 {
 
 func (s *HostMemScraper) loop(ctx context.Context) {
 	defer close(s.done)
-	ticker := time.NewTicker(scrapeInterval)
+	ticker := time.NewTicker(hostMemScrapeInterval)
 	defer ticker.Stop()
 
 	for {
@@ -165,21 +177,19 @@ func (s *HostMemScraper) sampleOnce(ctx context.Context) (int64, error) {
 	defer cancel()
 
 	// Resolve which pod names match (kubelet's summary uses concrete
-	// names, not labels). One HTTP list + one HTTP GET per scrape is
-	// cheap and keeps the scraper resilient across pod rolls.
-	pods, err := s.client.CoreV1().Pods(s.namespace).List(reqCtx, metav1.ListOptions{
-		LabelSelector: s.podLabel,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("list pods: %w", err)
+	// names, not labels). Cached after the first successful resolution;
+	// re-listed only when the summary no longer contains any cached name
+	// (see below), which keeps the scraper resilient across pod rolls
+	// without a List per sample.
+	if len(s.wantNames) == 0 {
+		if err := s.refreshPodNames(reqCtx); err != nil {
+			return 0, err
+		}
+		if len(s.wantNames) == 0 {
+			return 0, nil
+		}
 	}
-	wantNames := make(map[string]bool, len(pods.Items))
-	for _, p := range pods.Items {
-		wantNames[p.Name] = true
-	}
-	if len(wantNames) == 0 {
-		return 0, nil
-	}
+	wantNames := s.wantNames
 
 	raw, err := s.client.CoreV1().RESTClient().Get().
 		AbsPath("api", "v1", "nodes", s.nodeName, "proxy", "stats", "summary").
@@ -194,10 +204,12 @@ func (s *HostMemScraper) sampleOnce(ctx context.Context) (int64, error) {
 	}
 
 	var peak int64
+	seen := false
 	for _, p := range summary.Pods {
 		if p.PodRef.Namespace != s.namespace || !wantNames[p.PodRef.Name] {
 			continue
 		}
+		seen = true
 		for _, c := range p.Containers {
 			if c.Name != s.containerName {
 				continue
@@ -207,5 +219,27 @@ func (s *HostMemScraper) sampleOnce(ctx context.Context) (int64, error) {
 			}
 		}
 	}
+	if !seen {
+		// None of the cached pods is on this node any more — the Deployment
+		// rolled. Drop the cache (and node) so the next tick re-resolves.
+		s.wantNames = nil
+		s.nodeName = ""
+	}
 	return peak, nil
+}
+
+// refreshPodNames re-lists pods matching podLabel into wantNames.
+func (s *HostMemScraper) refreshPodNames(ctx context.Context) error {
+	pods, err := s.client.CoreV1().Pods(s.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: s.podLabel,
+	})
+	if err != nil {
+		return fmt.Errorf("list pods: %w", err)
+	}
+	names := make(map[string]bool, len(pods.Items))
+	for _, p := range pods.Items {
+		names[p.Name] = true
+	}
+	s.wantNames = names
+	return nil
 }

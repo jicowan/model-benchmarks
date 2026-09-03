@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"strings"
 	"context"
 	"fmt"
 	"log"
@@ -170,11 +171,12 @@ func (o *Orchestrator) acquireDistributedPool(ctx context.Context, ns, modelName
 	// ConfigMap is held for the WHOLE run (created before the first scale-out),
 	// so the provisioning window — nodes up but no LWS yet — is covered. A
 	// stale lock (owner pod dead) is taken over.
-	live, err := o.repo.LiveAPIPods(ctx, heartbeatTTL)
-	if err != nil {
-		log.Printf("[%s] distributed lock: live-pods lookup failed, treating existing lock as held: %v", cfg.RunID[:8], err)
-	}
-	if err := o.acquireDistributedLock(ctx, ns, modelName, live); err != nil {
+	// PRD-68 P3: queue behind the lock instead of failing. A second
+	// distributed run used to fail instantly with "pool held"; now it waits
+	// (bounded by DISTRIBUTED_LOCK_WAIT, default 30m) while remaining
+	// cancellable. The run is still "running" from the UI's perspective; the
+	// log line below says why nothing is being deployed yet.
+	if err := o.acquireDistributedLockWithWait(ctx, ns, modelName, cfg.RunID); err != nil {
 		return err
 	}
 
@@ -414,8 +416,8 @@ func (o *Orchestrator) waitForLWSReady(ctx context.Context, ns, name string, cfg
 		pods, _ := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", name),
 		})
-		for _, pod := range pods.Items {
-			events, err := o.oomDetector.CheckPod(ctx, pod.Name)
+		for i := range pods.Items {
+			events, err := o.oomDetector.CheckPodObject(ctx, &pods.Items[i])
 			if err == nil && len(events) > 0 {
 				for _, ev := range events {
 					o.recordOOMEvent(ctx, cfg, ev)
@@ -633,6 +635,51 @@ func (o *Orchestrator) teardownDistributed(ctx context.Context, ns, modelName st
 		// provisioning-scope wart, not a cost leak, so it never blocks teardown.
 		if err := o.resetNodePoolInstanceType(ctx, st.poolName); err != nil {
 			log.Printf("[distributed] reset %s instance-category: %v", st.poolName, err)
+		}
+	}
+}
+
+// distributedLockWait bounds how long a distributed run waits for the shared
+// pool lock before failing (PRD-68 P3). Env DISTRIBUTED_LOCK_WAIT (Go
+// duration) overrides the 30m default.
+func distributedLockWait() time.Duration {
+	if v := os.Getenv("DISTRIBUTED_LOCK_WAIT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		log.Printf("warning: DISTRIBUTED_LOCK_WAIT=%q invalid; using 30m", v)
+	}
+	return 30 * time.Minute
+}
+
+// acquireDistributedLockWithWait retries acquireDistributedLock every 30s
+// until it succeeds, ctx is cancelled, or distributedLockWait elapses.
+func (o *Orchestrator) acquireDistributedLockWithWait(ctx context.Context, ns, modelName, runID string) error {
+	deadline := time.Now().Add(distributedLockWait())
+	logged := false
+	for {
+		live, err := o.repo.LiveAPIPods(ctx, heartbeatTTL)
+		if err != nil {
+			log.Printf("[%s] distributed lock: live-pods lookup failed, treating existing lock as held: %v", runID[:8], err)
+		}
+		err = o.acquireDistributedLock(ctx, ns, modelName, live)
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "distributed pool held") && !strings.Contains(err.Error(), "contended") {
+			return err // a real API error, not contention
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%w (waited %v)", err, distributedLockWait())
+		}
+		if !logged {
+			log.Printf("[%s] %v — queued until the pool is free (max %v)", runID[:8], err, distributedLockWait())
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
 		}
 	}
 }

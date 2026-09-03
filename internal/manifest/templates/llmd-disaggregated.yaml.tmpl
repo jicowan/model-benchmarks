@@ -663,7 +663,7 @@ spec:
 {{- end }}
             env:
               - name: HF_TOKEN
-                value: "{{ $p.HfToken }}"
+                value: {{ $p.HfToken | yamlQuote }}
 {{- /* Run:ai streamer tuning, mirroring the single-node model-deployment
        template. Only emitted for a streamed (S3) load. */ -}}
 {{- if $p.UseRunaiStreamer }}

@@ -122,6 +122,14 @@ type BenchmarkRun struct {
 	// owning pod's goroutine.
 	OwnerPod        *string `json:"owner_pod,omitempty"`
 	CancelRequested bool    `json:"cancel_requested"`
+	// PRD-68 P4: Cognito sub of the submitting user; NULL on legacy rows.
+	// Cancel/delete are owner-or-admin.
+	CreatedBy *string `json:"created_by,omitempty"`
+	// PRD-68 P5: joined display names, populated by GetBenchmarkRun so the
+	// detail handler needs one query. Not serialized here — the detail
+	// response carries them at the top level.
+	ModelHfID        string `json:"-"`
+	InstanceTypeName string `json:"-"`
 	// PRD-47: peak container workingSetBytes observed during the load
 	// phase, in GiB. Powers per-family host-memory calibration. Null on
 	// historical rows and on runs where the kubelet scrape failed.
@@ -363,6 +371,8 @@ type TestSuiteRun struct {
 	// PRD-40: replica coordination (see BenchmarkRun).
 	OwnerPod        *string `json:"owner_pod,omitempty"`
 	CancelRequested bool    `json:"cancel_requested"`
+	// PRD-68 P4: see BenchmarkRun.CreatedBy.
+	CreatedBy *string `json:"created_by,omitempty"`
 	// PRD-47: peak container workingSetBytes observed during the shared
 	// model-load phase, in GiB. Suite-level because one model deployment
 	// is reused across all scenarios.
@@ -455,6 +465,9 @@ type ModelCache struct {
 	JobName      *string    `json:"job_name,omitempty"`
 	CachedAt     *time.Time `json:"cached_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
+	// PRD-68 P4: API pod watching the cache Job (PRD-40-style ownership) so
+	// a pod restart mid-cache can be recovered by a sibling.
+	OwnerPod *string `json:"owner_pod,omitempty"`
 }
 
 type CacheModelRequest struct {

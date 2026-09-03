@@ -36,8 +36,8 @@ export default function ModelCombobox({
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
-    listModelCache()
-      .then((resp) => setCachedModels(resp.rows.filter((m) => m.status === "cached")))
+    listModelCache({ status: "cached" })
+      .then((resp) => setCachedModels(resp.rows))
       .catch(() => {});
   }, []);
 

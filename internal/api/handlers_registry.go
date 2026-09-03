@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"context"
 	"net/http"
 	"os"
@@ -97,7 +98,8 @@ func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
 
 	client, err := getECRClient(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "aws config: "+err.Error())
+		log.Printf("aws config: %v", err)
+		writeError(w, http.StatusInternalServerError, "aws config failed")
 		return
 	}
 
@@ -113,7 +115,8 @@ func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
 			MaxResults: aws.Int32(100),
 		})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "describe repositories: "+err.Error())
+			log.Printf("describe repositories: %v", err)
+			writeError(w, http.StatusInternalServerError, "describe repositories failed")
 			return
 		}
 		for _, repo := range out.Repositories {

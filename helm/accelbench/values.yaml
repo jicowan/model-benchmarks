@@ -55,6 +55,26 @@ imagePullSecrets: []
 api:
   replicaCount: 2
   port: 8080
+  # PRD-68 P3: per-pod cap on concurrently executing benchmark runs. Runs
+  # beyond the cap wait in "pending" (cancellable) instead of each grabbing a
+  # Karpenter node at once. Raise with care: every slot is a GPU node.
+  maxConcurrentRuns: 4
+  # PRD-68 P3: how long a pod finishes in-flight runs after SIGTERM before
+  # exiting. terminationGracePeriodSeconds must exceed this.
+  shutdownGrace: "10m"
+  terminationGracePeriodSeconds: 660
+  # PRD-68 P3: how long a distributed run waits for the shared multi-node
+  # pool lock before failing (Go duration). Empty = 30m default.
+  distributedLockWait: ""
+  # PRD-68 P2: pgx pool ceiling per pod. Empty = 10.
+  dbMaxConns: ""
+  # PRD-68 P6: PodDisruptionBudget — keep one API pod serving during node
+  # drains / upgrades. Set to 0 to disable.
+  pdbMinAvailable: 1
+  # PRD-68 P6: opt-in retention. 0 = keep everything. N = one replica purges
+  # completed/failed runs + suites (and their metrics) older than N days,
+  # hourly, in batches of 500.
+  runRetentionDays: 0
   resources:
     requests:
       cpu: 250m
@@ -96,6 +116,11 @@ web:
 ingress:
   enabled: false
   host: ""
+  # ALB scheme: internet-facing (default) or internal. PRD-68 P6: the chart
+  # refuses to render when cognito.authDisabled=true AND the scheme is
+  # internet-facing unless allowAuthDisabled is set.
+  scheme: "internet-facing"
+  allowAuthDisabled: false
   tls:
     # One of: acm-route53, acm-existing, none.
     #   acm-route53:  Terraform creates + validates an ACM cert; populate

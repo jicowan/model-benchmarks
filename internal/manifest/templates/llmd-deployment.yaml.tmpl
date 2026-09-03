@@ -174,7 +174,7 @@ spec:
                 protocol: TCP
             env:
               - name: HF_TOKEN
-                value: "{{ $p.HfToken }}"
+                value: {{ $p.HfToken | yamlQuote }}
               - name: NCCL_DEBUG
                 value: "INFO"
               # Cross-node socket-interface pinning. GLOO is the CPU-side

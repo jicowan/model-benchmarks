@@ -25,6 +25,16 @@ resource "aws_cognito_user_pool" "accelbench" {
     require_uppercase = true
   }
 
+  # PRD-68 P6 (Sec L3): Cognito threat protection (compromised-credential
+  # detection + adaptive auth). Requires the Plus feature plan, so it is
+  # opt-in via var.cognito_advanced_security_mode ("AUDIT" | "ENFORCED").
+  dynamic "user_pool_add_ons" {
+    for_each = var.cognito_advanced_security_mode == "OFF" ? [] : [1]
+    content {
+      advanced_security_mode = var.cognito_advanced_security_mode
+    }
+  }
+
   schema {
     name                     = "email"
     attribute_data_type      = "String"

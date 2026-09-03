@@ -69,6 +69,13 @@ type Repo interface {
 	// goroutine polls IsCancelRequested and self-cancels.
 	RequestCancel(ctx context.Context, runID string) error
 	IsCancelRequested(ctx context.Context, runID string) (bool, error)
+	// PRD-68 P3: batched coordination snapshot for the shared cancel poller
+	// (missing id ⇒ deleted ⇒ cancel; foreign owner ⇒ fenced ⇒ cancel).
+	GetRunOwnership(ctx context.Context, ids []string) (map[string]RunOwnership, error)
+	// PRD-68 P3: singleton background jobs run under a session advisory lock.
+	WithAdvisoryLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (ran bool, err error)
+	// PRD-68 P6: opt-in retention (RUN_RETENTION_DAYS).
+	PurgeTerminalRunsOlderThan(ctx context.Context, days, batch int) (int64, error)
 	Heartbeat(ctx context.Context, pod string) error
 	LiveAPIPods(ctx context.Context, ttl time.Duration) ([]string, error)
 	DeleteStaleHeartbeats(ctx context.Context, olderThan time.Duration) error
@@ -174,7 +181,8 @@ type TestSuiteRepo interface {
 	UpdateScenarioResult(ctx context.Context, result *ScenarioResult) error
 	GetScenarioResults(ctx context.Context, suiteRunID string) ([]ScenarioResult, error)
 	ListTestSuiteRuns(ctx context.Context, modelID, instanceTypeID string) ([]TestSuiteRun, error)
-	ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error)
+	// PRD-68 P5: paginated (newest first) + total.
+	ListSuiteRunsWithNames(ctx context.Context, limit, offset int) ([]SuiteRunListItem, int, error)
 	DeleteSuiteRun(ctx context.Context, id string) error
 }
 
@@ -187,6 +195,9 @@ type ModelCacheRepo interface {
 	UpdateModelCacheStatus(ctx context.Context, id, status string, errMsg *string) error
 	UpdateModelCacheComplete(ctx context.Context, id string, sizeBytes int64) error
 	DeleteModelCache(ctx context.Context, id string) error
+	// PRD-68 P4: cache-job ownership + orphan scan.
+	ClaimModelCache(ctx context.Context, id, pod string) error
+	GetOrphanedModelCaches(ctx context.Context, livePods []string) ([]ModelCache, error)
 }
 
 // Compile-time check that *Repository implements Repo.

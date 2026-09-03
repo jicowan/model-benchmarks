@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -189,7 +190,15 @@ func (m *MockRepo) UpdateRunStatus(_ context.Context, runID, status string) erro
 	defer m.mu.Unlock()
 	run, ok := m.runs[runID]
 	if !ok {
-		return fmt.Errorf("run %s not found", runID)
+		return ErrRunNotActive
+	}
+	// Mirror the real repo's PRD-68 P3 fencing.
+	active := run.Status == "pending" || run.Status == "running"
+	if (status == "completed" || status == "failed") && !active {
+		return ErrRunNotActive
+	}
+	if status == "running" && run.Status != "pending" {
+		return ErrRunNotActive
 	}
 	run.Status = status
 	now := time.Now()
@@ -207,7 +216,10 @@ func (m *MockRepo) UpdateRunFailed(_ context.Context, runID, reason string) erro
 	defer m.mu.Unlock()
 	run, ok := m.runs[runID]
 	if !ok {
-		return fmt.Errorf("run %s not found", runID)
+		return ErrRunNotActive
+	}
+	if run.Status != "pending" && run.Status != "running" {
+		return ErrRunNotActive
 	}
 	run.Status = "failed"
 	run.ErrorMessage = &reason
@@ -316,7 +328,24 @@ func (m *MockRepo) GetShardMetrics(_ context.Context, runID string) ([]ShardMetr
 func (m *MockRepo) GetBenchmarkRun(_ context.Context, runID string) (*BenchmarkRun, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.runs[runID], nil
+	run := m.runs[runID]
+	if run == nil {
+		return nil, nil
+	}
+	// PRD-68 P5: mirror the real repo's joined display names.
+	for _, mdl := range m.models {
+		if mdl.ID == run.ModelID {
+			run.ModelHfID = mdl.HfID
+			break
+		}
+	}
+	for _, it := range m.instTypes {
+		if it.ID == run.InstanceTypeID {
+			run.InstanceTypeName = it.Name
+			break
+		}
+	}
+	return run, nil
 }
 
 func (m *MockRepo) GetRunsByStatus(_ context.Context, status string) ([]BenchmarkRun, error) {
@@ -1081,7 +1110,7 @@ func (m *MockRepo) ListTestSuiteRuns(_ context.Context, modelID, instanceTypeID 
 	return runs, nil
 }
 
-func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context) ([]SuiteRunListItem, error) {
+func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context, limit, offset int) ([]SuiteRunListItem, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var items []SuiteRunListItem
@@ -1110,7 +1139,20 @@ func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context) ([]SuiteRunListItem
 			CompletedAt:      run.CompletedAt,
 		})
 	}
-	return items, nil
+	// PRD-68 P5: newest first + page slice, mirroring the real repo.
+	sort.Slice(items, func(a, b int) bool { return items[a].CreatedAt.After(items[b].CreatedAt) })
+	total := len(items)
+	if limit <= 0 {
+		limit = 25
+	}
+	if offset >= len(items) {
+		return nil, total, nil
+	}
+	items = items[offset:]
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, total, nil
 }
 
 func (m *MockRepo) DeleteSuiteRun(_ context.Context, id string) error {
@@ -1127,6 +1169,32 @@ func (m *MockRepo) DeleteSuiteRun(_ context.Context, id string) error {
 }
 
 // Model Cache methods
+
+func (m *MockRepo) ClaimModelCache(_ context.Context, id, pod string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mc, ok := m.modelCache[id]; ok {
+		p := pod
+		mc.OwnerPod = &p
+	}
+	return nil
+}
+
+func (m *MockRepo) GetOrphanedModelCaches(_ context.Context, livePods []string) ([]ModelCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []ModelCache
+	for _, mc := range m.modelCache {
+		if mc.Status != "caching" {
+			continue
+		}
+		if mc.OwnerPod != nil && containsPod(livePods, *mc.OwnerPod) {
+			continue
+		}
+		out = append(out, *mc)
+	}
+	return out, nil
+}
 
 func (m *MockRepo) CreateModelCache(_ context.Context, mc *ModelCache) (string, error) {
 	m.mu.Lock()
@@ -1162,6 +1230,9 @@ func (m *MockRepo) ListModelCache(_ context.Context, f ModelCacheFilter) ([]Mode
 	var items []ModelCache
 	for _, mc := range m.modelCache {
 		if f.Status != "" && mc.Status != f.Status {
+			continue
+		}
+		if f.HfID != "" && (mc.HfID == nil || *mc.HfID != f.HfID) {
 			continue
 		}
 		items = append(items, *mc)
@@ -1561,6 +1632,55 @@ func (m *MockRepo) IsCancelRequested(_ context.Context, runID string) (bool, err
 		return s.CancelRequested, nil
 	}
 	return false, nil
+}
+
+func (m *MockRepo) GetRunOwnership(_ context.Context, ids []string) (map[string]RunOwnership, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]RunOwnership, len(ids))
+	for _, id := range ids {
+		if r, ok := m.runs[id]; ok {
+			out[id] = RunOwnership{ID: id, Status: r.Status, OwnerPod: r.OwnerPod, CancelRequested: r.CancelRequested}
+			continue
+		}
+		if s, ok := m.suiteRuns[id]; ok {
+			out[id] = RunOwnership{ID: id, Status: s.Status, OwnerPod: s.OwnerPod, CancelRequested: s.CancelRequested}
+		}
+	}
+	return out, nil
+}
+
+// PurgeTerminalRunsOlderThan mirrors the real repo on the in-memory maps.
+func (m *MockRepo) PurgeTerminalRunsOlderThan(_ context.Context, days, batch int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	var n int64
+	for id, r := range m.runs {
+		if (r.Status == "completed" || r.Status == "failed") && r.CompletedAt != nil && r.CompletedAt.Before(cutoff) {
+			delete(m.runs, id)
+			delete(m.metrics, id)
+			n++
+			if batch > 0 && n >= int64(batch) {
+				break
+			}
+		}
+	}
+	for id, sr := range m.suiteRuns {
+		if (sr.Status == "completed" || sr.Status == "failed") && sr.CompletedAt != nil && sr.CompletedAt.Before(cutoff) {
+			delete(m.suiteRuns, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+// WithAdvisoryLock always runs fn in the mock (single process ⇒ no contention).
+func (m *MockRepo) WithAdvisoryLock(ctx context.Context, _ int64, fn func(ctx context.Context) error) (bool, error) {
+	return true, fn(ctx)
 }
 
 func (m *MockRepo) Heartbeat(_ context.Context, pod string) error {
